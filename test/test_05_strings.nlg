@@ -1,0 +1,63 @@
+/*
+ * test_05_strings.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Test Category 5 - strings
+ *
+ */
+
+RegisterTestCategory("strings", [
+    [ "4+3;", "7" ],                                                         // generic first test
+
+
+    //
+    // string literals
+    //
+
+    [ '"abc";', '"abc"' ],
+    [ "'abc';", '"abc"' ],
+    [ '"abc" "def";', '"abcdef"' ],
+    [ '    "abc\ndef";', '"abc\\ndef"' ],
+    [ '    "abc\n    def";', '"abc\\ndef"' ],
+    [ '    "abc\n     def";', '"abc\\n def"' ],
+    [ "    'abc\ndef';", '"abc\\ndef"' ],
+    [ "    'abc\n    def';", '"abc\\n    def"' ],
+    [ "    'abc\n     def';", '"abc\\n     def"' ],
+
+
+    //
+    // string builtins
+    //
+
+    [ "\"abc\";", "\"abc\"" ],
+    [ "strcat(\"abc\", \"def\");", "\"abcdef\"" ],
+    [ "c=compress(\"abc\", \"def\");", "abcdef" ],
+    [ "typeof(c);", "symbol" ],
+    [ "explode(c);>", "(\"a\" \"b\" \"c\" \"d\" \"e\" \"f\")" ],
+    [ "c=compress(\"b\", 123);", "b123" ],
+
+
+    //
+    // string native functions
+    //
+    
+    [ "\"abc\".indexOf(\"b\");", "1" ],
+    [ "strcat(\"0x\", 33 .toString(16));", "\"0x21\"" ],
+    [ "$$=unicode(0x2748);", "\"❈\"" ],                                     // "heavy sparkle"
+    [ "strcat(\"0x\", unicode($$).toString(16));", "\"0x2748\"" ],
+    [ "\"abc\".toString();", "\"abc\"" ],
+    [ "xapply(String, toString, list(\"abc\"));", "\"abc\"" ],
+    [ "xcall(String, toString, \"abc\");", "\"abc\"" ],
+    [ "function(local match) { \"abc\".match(RegExp(\"abc\")) }();", "[Array abc]" ]
+
+]);

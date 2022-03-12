@@ -1,0 +1,151 @@
+/*
+ * running.nlg
+ * Naanlib/frameworks/running
+ *
+ *     Root compoment for running execution instances.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * rootproc
+ *
+ *     Return the root procdef of the specified procdef.
+ *
+ */
+
+function rootproc(procdef, local parent) {
+    loop {                                                                  // can only find out proc
+        parent = procdef.1@\.parent
+        if !parent
+            break
+        procdef = parent.proc
+    }
+    procdef
+};
+
+
+/*
+ * baseproc
+ *
+ *     Return the base procdef if a closure or macro, or the procedure symbol itself otherwise.
+ * The base is the original procedure from which a closure or macro is instantiated.
+ *
+ */
+
+function baseproc(procdef) {
+    if procdef.1@\.base.proc
+        { }
+    else
+        procdef
+};
+
+
+/*
+ * pathmatch
+ *
+ *     Given a parent symbol and a tuple of child procedure symbols within it, return the child 
+ * procedure named by the path in the tuple.
+ *
+ */
+
+function pathmatch(parent, path, local segment) {
+    if empty(path)
+        return (parent)
+    segment = tostring(pop(path))
+    for child in parent@\.children
+        if tostring(child) == segment
+            return (pathmatch(child, path))
+    false
+};
+
+
+/*
+ * procpath
+ *
+ *     Return a tuple of parent prcoedure symbols for the specified child procedure. Note that this
+ * path includes the parent but pathmatch above requires the parent as a separate argument.
+ *
+ */
+
+function procpath(procdef, local path) {
+    loop {
+        push(procdef.1, path)
+        parent = procdef.1@\.parent
+        if !parent
+            break
+        procdef = parent.proc
+    }
+    path
+};
+
+
+/*
+ * procname
+ *
+ *     Return the full name of possibly-nested procedure.
+ *
+ */
+
+function procname(name, local parent) {
+    parent = name@\.parent
+    name = tostring(name)
+    if parent
+        procname(parent).concat(".", name)
+    else
+        name
+};
+
+
+/*
+ * procstring
+ *
+ *     Return a string representing a procedure and its parameters.
+ * Options:
+ *  {
+ *      fullname: true                                                      // list name path for nested procedures
+ *      namespace: true                                                     // prepend name with namespace
+ *  }
+ *
+ */
+    
+function procstring(procdef, options, local name, output, parm) {
+    if options.fullname || !defined(options, `fullname)
+        name = procname(procdef.1)                                          // default is full name
+    else
+        name = procdef.1
+    if options.namespace || !defined(options, `namespace)                   // default includes namespace
+        name = procdef.1.namespace.tostring.concat("::", name)
+    if !procdef.2 || !car(procdef.2)
+        return (tostring(procdef.0).concat(" ", name, "()"))
+    if atom(procdef.2)
+        return (tostring(procdef.0).concat(" ", name, " ", procdef.2))
+    output = tostring(procdef.0).concat(" ", name, "(")
+    for parm in procdef.2 {
+        if !parm
+            break
+        output = output.concat(parm, ", ") }
+    output = output.slice(0,-2)
+    output.concat(")")
+}
+
+
+/*
+ * runnInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function runnInit(local manifest) {
+    manifest = `(rootproc, baseproc, pathmatch, procpath, procname, procstring, runnInit)
+
+    build(module.id, "running", closure(modobj, compobj) {
+        require("../common").LiveImport()
+        compobj.manifest = manifest
+    })
+} ();

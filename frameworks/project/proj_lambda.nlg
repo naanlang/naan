@@ -1,0 +1,137 @@
+/*
+ * proj_lambda.nlg
+ * Naanlib/frameworks/project/
+ *
+ * Controllers for lambda-based projects.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * proj_lambdaInstance
+ *
+ *     Create an instance of the lambda projects type. Lambda projects run on a clould platform that
+ * supports such functionality, which is initially AWS Lambda, and respond according to their cloud
+ * configuration.
+ *     Given a new project instance you can either load an existing project or create a new one.
+ * Unless other noted the methods all return standard (error, data) tuples.
+ *
+ */
+
+closure proj_lambdaInstance(projman, where, projID, local project) {
+    project = new(object, this)
+    project.name = where.name
+    project.where = where
+    project.projID = projID
+    project.config = projConfig(projman, where)
+    project.runPageDebug = true                                             // switch to Debug page on run
+
+    // create
+    //
+    // Create the project with the specified name, and leave it loaded if no error.
+    project.create = function create(name, local result) {
+        result = project.config.create(name)
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // load
+    //
+    // Load the project, which fails if it does not already exist.
+    project.load = closure load(local error, info) {
+        if project.loaded
+            return (list(false, { ok: true }))
+        result = project.config.load()
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // run
+    //
+    // Run the project by building and then launching.
+    project.run = closure run(buildonly) {
+        project.config.run(buildonly)
+    }
+
+    // close
+    //
+    // Close the project, releasing resources.
+    project.close = function close() {
+        project.config.close()
+        project.fm = false
+        project.loaded = false
+    }
+
+    // finis
+    project
+};
+
+
+/*
+ * proj_lambdaType
+ *
+ *     Create a project type object for folder objects.
+ *
+ */
+
+closure proj_lambdaType(projman, local lambdaProj) {
+    lambdaProj = new(object, this)
+    lambdaProj.classID = "lambda"
+    lambdaProj.classLabel = "lambda"
+    lambdaProj.connect = projConnector(projman, lambdaProj)
+    
+    // testActiveLocation
+    //
+    // Test if we can handle a project at the specified location.
+    
+    lambdaProj.testActiveLocation = function testActiveLocation(where, local error, config, proj) {
+        if !where.locationID || !where.path
+            return (false)
+        config = projConfig(projman, where)                                 // updates where.name and where.typeID
+        `(error, proj) = config.load()
+        if !error && proj["nide-type"] == lambdaProj.classID
+            20
+    }
+
+    // instantiate
+    //
+    // Instantiate a project object for the specified where data.
+    
+    lambdaProj.instantiate = function instantiate(where, projID) {
+        proj_lambdaInstance(projman, where, projID)
+    }
+
+    // finis
+    lambdaProj
+};
+
+
+/*
+ * proj_lambdaInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function proj_lambdaInit(local manifest) {
+
+    manifest = `(proj_lambdaInstance, proj_lambdaType, proj_lambdaInit)
+
+    Naan.module.build(module.id, "proj_lambda", function(modobj, compobj) {
+        require("./project.nlg")
+        storageFileManager = require("../storage/file_manager.nlg")
+        compobj.manifest = manifest
+    })
+}();

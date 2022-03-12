@@ -1,0 +1,572 @@
+/*
+ * psm_client.nlg
+ * Naanlib/frameworks/client
+ *
+ * PSM Connector for Browser data stores.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * psmcFsView
+ *
+ *     Filesystem services via the specified API to remote NodeJS functions.
+ *
+ */
+
+closure psmcFsView(api, rootpath, local view, pathmod) {
+    view = new(object, this)
+    view.api = api
+    view.rootpath = rootpath
+
+    // psmRemote
+    //
+    // Call the API to remote a PSM call.
+    
+    closure psmRemote(path, op, options, putdata, callback, local params, item) {
+        if !callback
+            return (syncAdapter(psmRemote, path, op, options, putdata))
+        if !string(path)
+            return (asyncResult(callback, Error("invalid path:", typeof(path))))
+        params = {
+            path: JSpath.resolve(rootpath, path)
+            op: op
+        }
+        for item in options
+            params[item] = options[item]
+        api.psmRemote(params, putdata, function(error, data) {
+            if !error && !data
+                debuglog("psmRemote: invalid result for op", op)
+            if error
+                callback(error)
+            else
+                callback(false, data)
+        })
+    }
+
+    // close
+    //
+    // Close the view
+    
+    view.close = function close() {
+        if api {
+            view.api = api = false }
+    }
+
+    // path
+    //
+    // The path sub-object remotes calls to the NodeJS path module.
+
+    view.path = new(object, this)
+    view.path[".undefined"] = closure path args {
+        closure (selector, arglist, local error, info) {
+            if !pathmod {
+                `(error, data) = view.data()
+                if error
+                    return (list(error))
+                if info.pathsep == "\\"
+                    pathmod = JSpath.win32
+                else
+                    pathmod = JSpath.posix
+            }
+            xapply(pathmod, selector, arglist)
+        } (args.0, args.-1)
+    }
+    
+    // data
+    //
+    // Return the filesystem data, i.e. the tree data field. The minimum information is:
+    //      platform    -- e.g. "darwin" or "win32"
+    //      semantics   -- e.g. "win32" or "posix"
+    //      pathsep     -- e.g. / or \
+
+    view.data = closure data(callback) {
+        if !callback
+            return (syncAdapter(data))
+        psmRemote("", "tree", { depthlimit: 0 }, false, function(error, tree) {
+            view.fsdata = tree.data
+            callback(error, tree.data)
+        })
+    }
+               
+    // readLines
+    //
+    // Read a lines of a file at the specified path with options:
+    //      matchRE:        -- JavaScript regex
+    //      ignoreCase:     -- ignore case during match
+    //      invert:         -- return lines that DO NOT match the regex
+    //      returnText:     -- return text of matched lines
+    // When using a matchRE, the return value is an array of [ lineNumber, text ] pairs if
+    // returnText is specified, or just an array of one-based line numbers otherwise.
+    //
+    
+    view.readLines = function readLines(path, options, callback) {
+        psmRemote(path, "readLines", options, false, callback)
+    }
+
+    // readFile
+    //
+    // Read a file at the specified path
+    
+    view.readFile = function readFile(path, options, callback) {
+        psmRemote(path, "readFile", options, false, callback)
+    }
+
+    // writeFile
+    //
+    // Write a file at the specified path
+    
+    view.writeFile = function writeFile(path, data, options, callback) {
+        psmRemote(path, "writeFile", options, data, callback)
+    }
+            
+    // delete
+    //
+    // Delete a file or directory at the specified path
+    
+    view.delete = function delete(path, options, callback) {
+        psmRemote(path, "delete", options, false, callback)
+    }
+
+    // info
+    //
+    // Get file info at the specified path
+    
+    view.info = function info(path, callback) {
+        psmRemote(path, "info", { }, false, callback)
+    }
+     
+    // setTimes
+    //
+    // Set file modify and access times at the specified path
+    
+    view.setTimes = function setTimes(path, atime, mtime, callback) {
+        psmRemote(path, "setTimes", {
+            atime: atime
+            mtime: mtime
+        }, false, callback)
+    }
+
+    // dirList
+    //
+    // Read a directory at the specified path
+    
+    view.dirList = function dirList(path, options, callback) {
+        psmRemote(path, "dirList", {
+            head: options.head
+        }, false, callback)
+    }
+
+    // readir
+    //
+    // Read a directory at the specified path
+    
+    view.readir = function readir(path, callback) {
+        psmRemote(path, "dirList", {
+            head: true
+        }, false, callback)
+    }
+
+    // mkdir
+    //
+    // Create a directory at the specified path
+    
+    view.mkdir = function mkdir(path, callback) {
+        psmRemote(path, "mkdir", { }, false, callback)
+    }
+
+    // tree
+    //
+    // Return a tree for the specified path, which is relative to the root of the view.
+    
+    view.tree = function tree(path, options, callback) {
+        psmRemote(path, "tree", {
+            depthlimit: options.depthlimit
+        }, false, callback)
+    }
+         
+    // dirSearch
+    //
+    // Search the specified file or recursive directory.
+    
+    view.dirSearch = function dirSearch(path, options, callback) {
+        psmRemote(path, "dirSearch", options, false, callback)
+    }
+
+    // copy
+    //
+    // Copy / move / rename a file or directory. The source is the full path of the item. The
+    // destination is:
+    //  - a new name if it has no embedded slashes, or
+    //  - a new location if it ends in a slash, otherwise
+    //  - a new pathname for the source if it does not end in a slash.
+    //     This works by creating a new file or directory of files in the new location and then
+    // optionally deleting the files in the existing location. If options.move is true then we
+    // delete the source after the copy.
+    
+    view.copy = closure copy(srcpath, dest, options, callback, local parameters) {
+        if !options
+            options = { }
+        options.destination = JSpath.resolve(rootpath, dest)
+        psmRemote(srcpath, "copy", options, false, callback)
+    }
+
+    // reveal
+    //
+    // Reveal the file at the specified path in the UI.
+    
+    view.reveal = function reveal(path, callback) {
+        psmRemote(path, "reveal", { }, false, callback)
+    }
+    
+    // minimize
+    //
+    // Minimize the JavaScript source and return as a string
+    
+    view.minimize = function minimize(data, callback) {
+        psmRemote("", "minimize", { }, data, callback)
+    }
+
+    // unzip
+    //
+    // Get file info at the specified path
+    
+    view.unzip = function unzip(path, dest, callback, local parameters) {
+        parameters = { destination: JSpath.resolve(rootpath, dest) }
+        psmRemote(path, "unzip", parameters, false, callback)
+    }
+
+    // touch
+    //
+    // Touch the file at the specified path
+    
+    view.touch = function touch(path, callback) {
+        psmRemote(path, "touch", { }, false, callback)
+    }
+
+    // shellOpen
+    //
+    // Tell the shell to open the specified file.
+    
+    view.shellOpen = function shellOpen(path, args, callback) {
+        psmRemote(path, "shellOpen", { args: args }, false, callback)
+    }
+
+    // grepLines
+    //
+    // Grep the specified file or recursive directory.
+    
+    view.grepLines = function grepLines(path, options, callback) {
+        psmRemote(path, "grepLines", options, false, callback)
+    }
+
+    // gitStatus
+    //
+    // Get git status. Optional pathspec is a path string or array of strings.
+    
+    view.gitStatus = function gitStatus(pathspec, callback, local options) {
+        if pathspec
+            options = { pathspec: pathspec }
+        else
+            options = { }
+        psmRemote("", "gitStatus", options, false, callback)
+    }
+
+    // gitLog
+    //
+    // Get git log for a file. Optional pathspec is a path string or array of strings.
+    
+    view.gitLog = function gitLog(pathspec, callback, local options) {
+        if pathspec
+            options = { pathspec: pathspec }
+        else
+            options = { }
+        psmRemote("", "gitLog", options, false, callback)
+    }
+    
+    // gitShowFile
+    //
+    // Get the content of a specified file and revision.
+    
+    view.gitShowFile = function gitShowFile(pathspec, hash, callback, local options) {
+        options = {
+            pathspec: pathspec
+            hash: hash
+        }
+        psmRemote("", "gitShowFile", options, false, callback)
+    }
+
+    // util
+    //
+    // Utility operations for the filesystem
+    
+    view.util = require("../storage/psm.nlg").MakePSMutil(view)
+
+    // finis
+
+    list(false, view)
+};
+
+
+/*
+ * psmcFsConnector
+ *
+ *     Make a PSM connector for the host filesystem.
+ *
+ */
+
+closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
+    connClassID = "NodeFS"
+    connector = new(object, this)
+    connector.psm = psm
+    connector.api = nicc.api
+    connector.vault = psm.vault(connClassID)
+    connector.label = "Naan IDE Server"
+    watch = psm.watchable(connector)
+
+    // uifields
+    //
+    // Report the UI fields we need to add a resource
+    connector.uifields = function uifields() {
+        [{
+            label:          "URL"
+            placeholder:    "http://host.com/endpoint"
+            key:            "urlName" },
+        {
+            label:          "Auth Name"
+            placeholder:    "account name"
+            key:            "authName" },
+        {
+            label:          "Auth Password"
+            placeholder:    "account password"
+            key:            "authPW"
+            type:           "password" },
+        ]
+    }
+        
+    // hashResourceID
+    //
+    // Make a stable hash based on the resource credentials that we can persist or share between
+    // different domains accessing the same resource.
+    connector.hashResourceID = function hashResourceID(resource, local ident) {
+        ident = resource.urlName
+        if resource.label
+            ident = ident.concat(resource.label)
+        HashSHA256(ident)
+    }
+
+    // findResource
+    //
+    // Find a resource with the specified contents, returning the resID or false. The loose criteria
+    // is: if added, would the specified contents be redundant to an existing resource?
+    connector.findResource = function findResource(resource, local resID, creds) {
+        for resID in listResources().1 {
+            creds = access(resID).1
+            if resource.urlName == creds.urlName
+                && (!resource.label || resource.label == creds.label)
+                && resource.authName == creds.authName
+                return (resID)
+        }
+        false
+    }
+
+    // addResource
+    //
+    // Add credentials for a named resource. The resource is a dictionary comprising these keys:
+    //      label       - [optional] label we use for this resource
+    //      urlName     - URL (e.g. "http://host.com/node/fsapi")
+    //      authName    - [optional] the authentication name for a URL
+    //      authPW      - [optional] the autentication password, required if authname is provided
+    //      hidden      - [optional] don't enumerate to user
+    //      locked      - [optional] don't allow user delete
+    //
+    // The return value is (error, resID) tuple. Error, if non-false, is a dictionary of field
+    // keys and error diagnostic strings.
+    connector.addResource = function addResource(resource, local creds, errors, error, resID, data) {
+        function badField(str) { !string(str) || str.trim().length == 0 }
+        creds = { urlName: resource.urlName }
+        errors = { }
+        if resource.label
+            creds.label = resource.label
+        else
+            creds.label = resource.urlName
+        if badField(creds.label)
+            errors.label = "invalid label"
+        if badField(resource.urlName)
+            errors.urlName = "required field"
+        if !badField(resource.authName) {
+            creds.authName = resource.authName
+            creds.authPW = resource.authPW
+            if badField(resource.authPW)
+                errors.authPW = "required if Auth Name specified" }
+        if length(errors) > 0
+            error = errors
+        else {
+            if resource.hidden
+                creds.hidden = resource.hidden
+            if resource.locked
+                creds.locked = resource.locked
+            resID = hashResourceID(resource)
+            `(error, data) = connector.vault.addResource(resID, creds)
+            if data {
+                watch.notify(connClassID, { added: [resID] })
+                data = resID } }
+        list(error, data)
+    }
+    
+    // getResource
+    //
+    // Get credentials for a named resource, matching the dictionary semantics of addResource. The
+    // result is a standard result tuple.
+    connector.getResource = function getResource(resID, local error, creds, resource) {
+        `(error, creds) = connector.vault.accessResource(resID)
+        if error
+            return (list(error))
+        resource = {
+            classID: connClassID
+            label: creds.label
+        }
+        if string(creds.urlName)
+            resource.urlName = creds.urlName
+        if string(creds.authName)
+            resource.authName = creds.authName
+        if string(creds.authPW)
+            resource.authPW = creds.authPW
+        list(false, resource)
+    }
+    
+    // deleteResource
+    //
+    // Delete credentials for a resource
+    connector.deleteResource = function deleteResource(resID) {
+        connector.vault.deleteResource(resID)
+        watch.notify(connClassID, { deleted: [resID] })
+        list(false, { ok: true})
+    }
+        
+    // listResources
+    //
+    // List saved resources in our database
+    connector.listResources = function listResources(local error, original) {
+        `(error, output) = connector.vault.listResources()
+        if error
+            return (list(error))                                            // can't access our saved resources
+        original = ["Host"]
+        if original
+            output = original.concat(output)
+        list(false, output)
+    }
+    
+    // info
+    //
+    // Return info for a resource.
+    connector.info = function info(resID, local info, error, creds) {
+        info = {
+            classID: connClassID
+            type: "remote filesystem"
+            services: ["NideFS", "NideHostAPI"]
+        }
+        if resID == "Host" {
+            info.name = "Host"
+            info.type = "host filesystem"
+            info.locked = true
+            info.where = nicc.api.url
+            info.access = "HostFS"
+        } else {
+            `(error, creds) = connector.vault.accessResource(resID)
+            if creds {
+                if creds.label
+                    info.name = creds.label
+                if creds.locked
+                    info.locked = true
+                if creds.hidden
+                    info.hidden = true
+                info.where = creds.urlName
+            }
+        }
+        list(false, info)
+    }
+
+    // access
+    //
+    // Return credentials for connecting to a service.
+    connector.access = function access(resID) {
+        if resID == "Host"
+            list(false, "HostFS")
+        else
+            connector.vault.accessResource(resID)
+    }
+
+    // connect
+    //
+    // Connect to the specified service.
+    connector.connect = function connect(resID, service, args, local error, creds, api, rootpath) {
+        `(error, creds) = connector.access(resID)
+        if !error {
+            if creds == "HostFS"
+                api = connector.api
+            else
+                `(error, api) = MakeNideAPIclient(creds.urlName)            // API to remote NodeJS filesystem
+        }
+        if error
+            list(error)
+        else if service == "NideExecutor"
+            require("../browser/terminals.nlg").TermHost(nicc.track, api, args.0, args.1)                       // host executor, args: (name, workerID)
+        else if service == "NideHostAPI"
+            list(false, api)                                                // connect to the Host API
+        else if service == "NideFS" {
+            rootpath = args.0                                               // connect to a NideFS filesystem
+            if !rootpath
+                return (list(Error("mandatory rootpath missing")))
+            psmcFsView(api, rootpath)
+        } else
+            list(Error("unsupported service", service))
+    }
+
+    // finis
+
+    psm.register(connClassID, connector)
+    connector
+};
+
+
+/*
+ * psmcMakeClientPSM
+ *
+ *     Return a new client PSM with our known connectors.
+ *
+ */
+
+function psmcMakeClientPSM(nicc, dbname, local importPSM) {
+    importPSM = require("../storage/psm.nlg")
+    App.psm = importPSM.MakePSM(dbname).1
+    if App.psm {
+        psmcFsConnector(App.psm, nicc)                                      // HostFS access
+        require("../storage/dbt_pouch.nlg").DbConnector(App.psm)            // Pouch databases as filesystems
+    }
+    App.psm
+};
+
+
+/*
+ * psmcInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function psmcInit(local manifest) {
+
+    manifest = `(psmcFsView, psmcFsConnector, psmcMakeClientPSM, psmcInit)
+
+    Naan.module.build(module.id, "psm_client", function(modobj, compobj) {
+        require("./client.nlg")
+        compobj.manifest = manifest
+        modobj.exports.MakeClientPSM = psmcMakeClientPSM
+    })
+
+} ();

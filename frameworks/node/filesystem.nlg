@@ -1,0 +1,1012 @@
+/*
+ * filesystem.nlg
+ * Naanlib/frameworks/node
+ *
+ * File and directory operations on the host filesystem.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Filesystem
+ *
+ *     Access to the NodeJS filesystem. Methods take a callback, which if not provided will cause
+ * execution to block until complete. The return value is always a tuple of (error, data).
+ *
+ */
+
+closure Filesystem(rootpath, local files, badCreatePathRegEx) {
+    if !rootpath
+        return (list(Error("mandatory rootpath missing")))
+    else if rootpath == ""
+        rootpath = js.g.process.cwd()                                       // NodeJS uses CWD for empty rootpath
+    files = new(object, this)
+    files.rootpath = rootpath
+    files.path = JSpath
+    
+    // commonParents
+    //
+    // Find the common parents between two paths, or "" if they have nothing in common.
+    
+    function commonParents(short, long, local swap) {
+        if short.length > long.length {
+            swap = long
+            long = short
+            short = swap
+        }
+        loop {
+            if long.startsWith(short)
+                return (short)
+            swap = JSpath.dirname(short)
+            if swap == short
+                break
+            short = swap
+        }
+        return ("")
+    }
+    
+    // localPath
+    //
+    // Convert a path argument to a local path, returning a standard result tuple. If the path is
+    // invalid this will report why. Otherwise this returns the correct localpath, which is the path
+    // we use with the underlying API.
+    
+    badCreatePathRegEx = RegExp("[:]|[/\\\\][/\\\\]|[/\\\\]$|(^|[/\\\\])[.][.]?$")
+
+    closure localPath(path, create, local pattern, testpath) {
+        if !path
+            return (list(Error("filesystem path false")))
+        else if !string(path)
+            return (list(Error("filesystem path invalid:", typeof(path))))
+        if JSpath.isAbsolute(path)
+            path = JSpath.resolve(path)                                     // puts C: in front of \abs\win\path
+        else
+            path = JSpath.normalize(path)                                   // normalize for current platform
+        if JSpath === JSpath.win32
+            pattern = "\\:\\"                                               // unchanged and unique on win32
+        else
+            pattern = "/:/"                                                 // unchanged and unique on posix
+        if ((testpath = commonParents(path, rootpath)) != "")
+            list(false, JSpath.resolve(rootpath, path))                     // ### shouldn't be so lax on this test
+        else if ((testpath = JSpath.resolve(pattern, path)).indexOf(pattern.slice(0,-1)) < 0)
+            list(Error("filesystem path reaches above root:", path))
+        else if create && testpath.indexOf(pattern) < 0
+            list(Error("filesystem create path cannot be root:", path))
+        else if create && badCreatePathRegEx.test(path)
+            list(Error("filesystem create path invalid", path))
+        else
+            list(false, JSpath.resolve(rootpath, path))
+    }
+
+    // winDrives
+    //
+    // Return an array of the drive letters on windows, or call back with false otherwise.
+
+    files.winDrives = closure winDrives(callback) {
+        if !callback
+            return (syncAdapter(winDrives))
+        if js.g.process.platform != "win32"
+            return (asyncResult(callback, false))                           // for unixen, return nothing
+        nodecp.execFile("wmic",
+            ["logicaldisk", "get", "name"],                                 // get name field for each mapped drive
+            { },                                                            // execution options
+            function(err, stdout, stderr) {
+                if stdout && string(stdout)
+                    callback(false, new(stdout.split("\r\r\n")
+                        .filter(function(value){RegExp("[A-Za-z]:").test(value)})
+                        .map(function(value){value.trim()})))
+                else
+                    callback(Error("exec(wmic) failed", err))
+            }
+        )
+    }
+    
+    // testHidden
+    //
+    // Test if the specified file or directory is hidden. On Windows this executes the attrib utility
+    // to obtain the hidden attribute.
+
+    files.testHidden = closure testHidden(path, callback, local darwinHiddenDirs, found, error, localpath) {
+        if !callback
+            return (syncAdapter(testHidden, path))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        darwinHiddenDirs = {
+            "/bin": true,
+            "/cores": true,
+            "/dev": true,
+            "/etc": true,
+            "/home": true,
+            "/net": true,
+            "/network": true,
+            "/private": true,
+            "/sbin": true,
+            "/tmp": true,
+            "/usr": true,
+            "/var": true }
+        if js.g.process.platform == "darwin" && darwinHiddenDirs[localpath]
+            return (asyncResult(callback, false, true))                        // Darwin has specific named hidden folders
+        if js.g.process.platform != "win32" {
+            found = JSpath.basename(localpath)
+            return (asyncResult(callback, false, RegExp("^\\.").test(found))) }    // for unixen, leading dot for hidden
+        nodecp.execFile("attrib",
+            ["/D", localpath],                                              // "/D" to include directories
+            { },                                                            // execution options
+            function(err, stdout, stderr) {
+                if stdout && string(stdout) {
+                    found = stdout.match(RegExp("^[A-Z ]{11}"))
+                    callback(false, found[0].indexOf("H") >= 0) }           // "H" for hidden
+                else
+                    callback(Error("exec(attrib) failed", err))
+            }
+        )
+    }
+
+    // readLines
+    //
+    // Read the contents of a file into an array of lines with the following options:
+    //      pattern:        -- only return lines matching pattern
+    //      fixed           -- pattern is a fixed string, not a regular expression
+    //      ignoreCase:     -- ignore case during match
+    //      invert:         -- return lines that DO NOT match the regex
+    //      returnText:     -- return text of matched lines
+    //
+
+    files.readLines = closure readLines(path, options, callback,
+        local localpath, error, instream, pattern, matchRE, liner, lines, lineno) {
+        if !callback
+            return (syncAdapter(readLines, path, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        instream = fs.createReadStream(localpath)
+        instream.on("error", function (err) {
+            callback(Error("stream failed:", localpath, err))
+        })
+        liner = NodeStreamLiner()
+        instream.pipe(liner)
+        liner.on("end", function() {
+            callback(false, lines)
+        })
+        lines = []
+        if options.pattern {
+            pattern = options.pattern
+            if options.fixed
+                pattern = pattern.replace(RegExp("\\.|\\0|\\\\|\\[|\\||\\(|\\*|\\+|\\?|\\{"), function(match) {
+                    "\\".concat(match)                                      // escape all special RegExp characters
+                })
+            try {
+                if options.ignoreCase
+                    matchRE = RegExp(pattern, "i")
+                else
+                    matchRE = RegExp(pattern)
+            } catch {
+                if true
+                    return (callback(Error("search expression error", exception)))
+            }
+            lineno = 0
+            liner.on("readable", function (local line, matched) {
+                while (line = liner.read()) {
+                    ++lineno
+                    matched = matchRE.test(line)
+                    if matched && !options.invert || !matched && options.invert
+                        if options.returnText
+                            lines.push([lineno, line])
+                        else
+                            lines.push(lineno) }
+            })
+        } else
+            liner.on("readable", function (local line) {
+                while (line = liner.read())
+                    lines.push(line)
+            })
+    }
+   
+    // readFile
+    //
+    // Read the contents of a file into a string.
+
+    files.readFile = closure readFile(path, options, callback, local nodeOptions, error, localpath) {
+        if !callback
+            return (syncAdapter(readFile, path, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        nodeOptions = { encoding: "utf8" }
+        if options.encoding == "binary"
+            nodeOptions.encoding = undefined
+        else if options.encoding
+            nodeOptions.encoding = options.encoding
+        fs.readFile(localpath, nodeOptions, function(err, strdata) {
+            if err
+                callback(Error("fs.readFile failed:", localpath, err))
+            else
+                callback(false, strdata)
+        })
+    }
+    
+    // writeFile
+    //
+    // Write a string to the specified file, with the following options:
+    //      md5: <hash>             -- existing file content must match hash to overwrite
+    //      encoding: <type>        -- default utf8
+    // The non-error result is a dictionary containing the new file contents hash.
+    
+    files.writeFile = closure writeFile(path, data, options, callback, local error, localpath, nodeOptions, md5data, pending, result) {
+        if !callback
+            return (syncAdapter(writeFile, path, data, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        nodeOptions = { encoding: "utf8" }
+        if options.encoding
+            nodeOptions.encoding = options.encoding
+        md5data = HashMD5(data)
+        if options.md5 {                                                    // read file to verify it is unchanged
+            pending = new(nonce)
+            fs.readFile(localpath, nodeOptions, function(err, strdata) {
+                if err.code == "ENOENT"
+                    result = false                                          // no file to check
+                else
+                    result = HashMD5(strdata)
+                pending.signal(result)
+            })
+            result = pending.wait()                                         // result is existing hash, or false if none
+            if result && options.md5 != result {                            // current contents don't match check
+                if md5data == result
+                    return (callback(false, { md5: md5data }))              // but, oddly, current contents match data
+                else
+                    return (callback(Error("existing file match failed:", { // someone beat us to the write
+                        path: localpath
+                        current: result
+                        check: options.md5
+                    }))) } }
+        fs.writeFile(localpath, data, nodeOptions, function (err) {
+            if err
+                callback(Error("fs.writeFile failed:", localpath, err))
+            else
+                callback(false, { md5: md5data })
+        })
+    }
+    
+    // delete
+    //
+    // Delete the file at the specified path, or a directory if the options dictionary includes:
+    //     recursive: true          -- "recursively" delete directory and children
+
+    files.delete = closure delete(path, options, callback, local error, localpath) {
+        if !callback
+            return (syncAdapter(delete, path, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        if options.recursive
+            fs.rmdir(localpath, function(err) {
+                if err
+                    callback(Error("fs.rmdir failed:", localpath, err))
+                else
+                    callback(false, { ok: true })
+            })
+        else
+            fs.unlink(localpath, function(err) {
+                if err
+                    callback(Error("fs.unlink failed:", localpath, err))
+                else
+                    callback(false, { ok: true })
+            })
+    }
+
+    // info
+    //
+    //     Report info on a file or directory.
+
+    files.info = closure info(path, callback, local error, localpath) {
+        if !callback
+            return (syncAdapter(info, path))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        fs.lstat(localpath, function(err, stat, local data, info, nodetype) {
+            if err
+                return (callback(Error("fs.stat failed:", localpath, err)))
+            info = {
+                type: "other"
+                length: stat.size
+                birthtimeMs: stat.birthtimeMs
+                birthtime: stat.birthtime
+                mtimeMs: stat.mtimeMs
+                mtime: stat.mtime
+                nodejs_stat: stat }
+            `(err, data) = files.testHidden(localpath)
+            if data.hidden
+                info.hidden = true
+            nodetype = mod(stat.mode / 4096, 16)
+            if nodetype == 4
+                info.type = "directory"
+            else if nodetype == 8
+                info.type = "file"
+            else if nodetype == 10
+                info.type = "symlink"
+            callback(false, info)
+        })
+    }
+
+    // setTimes
+    //
+    //     Set timestamps on a file or directory.
+    
+    files.setTimes = closure setTimes(path, atime, mtime, callback, local error, localpath) {
+        if !callback
+            return (syncAdapter(setTimes, path, atime, mtime))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        if !numeric(atime, mtime)
+            return (asyncResult(callback, Error("invalid arguments:", atime, mtime)))
+        localpath = JSpath.resolve(rootpath, localpath)
+        fs.utimes(localpath, atime, mtime, function(err, stat) {
+            if err
+                callback(Error("fs.utimes failed:", localpath, err))
+            else
+                callback(false, { ok: true})
+        })
+    }
+
+    // statfetch
+    //
+    // Update each element in the input array with info, in parallel if possible.
+    
+    closure statfetch(input, parentpath, local kqdex, filepath, pending) {
+        // queuemore
+        //
+        // Make more requests, or signal when all are completed
+        
+        function queuemore() {
+            while kqdex < input.length {
+                if pending.active >= 10
+                    return                                                  // too busy
+                closure (kdex, local name) {                                // separate closure to keep record context
+                    name = input[kdex].name
+                    if name {                                               // this record is fetchable
+                        ++pending.active
+                        filepath = JSpath.join(parentpath, name)
+                        files.info(filepath, function(error, info) {
+                            if error
+                                input[kdex].error = error                   // this record failed
+                            else
+                                input[kdex].info = info                     // this record succeeded
+                            --pending.active
+                            queuemore()
+                        }) }
+                } (kqdex++)                                                 // issue one request
+            }
+            if pending.active == 0
+                pending.signal()                                            // no more to do, and all done
+        }
+
+        pending = new(nonce)
+        pending.active = 0
+        kqdex = 0
+        queuemore()
+        pending.wait()
+    }
+
+    // dirList
+    //
+    // Return array of files in a directory if it exists. If options.head is true then this reads 
+    // info for each file as well.
+
+    files.dirList = closure dirList(path, options, callback, local error, localpath, output, nodelist, file) {
+        if path == "" && js.g.process.platform == "win32" && rootpath == "\\"
+            return (files.winDrives(callback))                              // top level is drive letters in Windows
+        if !callback
+            return (syncAdapter(dirList, path, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        output = {
+            name: JSpath.basename(localpath)
+            path: path
+            data: {
+                platform: js.g.process.platform,
+                semantics: cond(if JSpath eq JSpath.win32 "win32", if true "posix")
+                pathsep: JSpath.sep
+            }
+        }
+        fs.readdir(localpath, { }, function(err, files) {
+            if err
+                return (callback(Error("fs.readdir failed:", localpath, err)))
+            output.children = []
+            for file in files
+                output.children.push({
+                    name: file
+                })
+            if options.head
+                statfetch(output.children, localpath)                       // read all the info records
+            callback(false, output)
+        })
+    }
+    
+    // mkdir
+    //
+    // Make a directory at the specified path. If the directory already exists then the result is
+    // { exists: true }, otherwise if it was just created it's { created: true}
+
+    files.mkdir = closure mkdir(path, callback, local error, localpath) {
+        if !callback
+            return (syncAdapter(mkdir, path))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        fs.mkdir(localpath, { recursive: true }, function(errmkdir, local result) {
+            if errmkdir.code == "EEXIST"
+                fs.stat(localpath, function(errstat, stat) {
+                    if errstat || !stat.isDirectory()
+                        return (callback(Error("mkdir conflict:", errmkdir, localpath)))
+                    else
+                        return (callback(false, { exists: true }))          // directory already exists
+                })
+            else if errmkdir
+                callback(Error("mkdir failed", errmkdir))
+            else
+                return (callback(false, { created: true }))                 // directory just created
+        })
+    }
+
+    // tree
+    //
+    //     Create a directory tree to the specified depth by recursive enumeration. The depthlimit is 1
+    // to enumerate only the children of the specified path, or false to include all recursive children.
+    // Errors are recorded in the resulting tree.
+    //     Tree starts with the specified path and does not traverse device boundaries that it knows
+    // about. You'll need to list the drive letters (Win) and the volumes (Mac) yourself before asking
+    // for a tree on one of them.
+    //
+    // The minimum structure of an actual treedex is the following:
+    // {
+    //      name: <name of this node>
+    //      data: {
+    //          <store-specific data definitions, like timestamps, etc.>
+    //      }
+    //      parents: <array of node names describing path from this node to root>
+    //      error: <string>             // error that occured while attempting to enumerate children
+    //      children: <undefined>       // definitively no children
+    //      children: pending           // children may exist, but not yet enumerated
+    //      children: []                // empty array for non-leaf with no children, e.g. empty folder
+    //                                  // (if error with empty array then enumeration failed)
+    //      children: [                 // each child node is like us, but no ownerID or parents array
+    //          {
+    //              name: <name of the child; must be non-empty and unique among children>
+    //              iconID: <token identifying the icon to use>
+    //              data: {
+    //                  <store-specific data definitions>
+    //              }
+    //              view: {
+    //                  <optional view-specific data definitions>
+    //              }
+    //              error:              // as above, for grandchildren
+    //              children:           // as above, for grandchildren
+    //          },
+    //          ...
+    //      ]
+    // }
+    
+    files.tree = closure tree(path, depthlimit, callback, local error, localpath, root, pending, queue, data, rootstat) {
+        if !callback
+            return (syncAdapter(tree, path, depthlimit))
+    
+        // recurTree
+        //
+        // Recursively build the tree
+
+        closure recurTree(localpath, depth, parent) {
+            if depthlimit && depth >= depthlimit
+                return
+            ++pending.active
+            fs.readdir(localpath, { }, function(err, nodes, local child, node, stat) {
+                if err.code == "ENOTDIR"
+                    parent.children = undefined                             // we are a leaf (in the wind)
+                else if err {
+                    parent.children = [],                                   // enumeration failed
+                    parent.error = err.code }                               // keep lightweight
+                else {                                                      // we have children
+                    parent.children = []
+                    stat = files.info(localpath).1
+                    if stat {
+                        if stat.type == "symlink" {
+                            parent.children = "symlink"                     // don't follow links
+                            nodes = false }
+                        else if stat.nodejs_stat.dev && stat.nodejs_stat.dev != rootstat.dev {
+                            parent.children = "mountpoint"                  // don't enter mountpoints
+                            nodes = false } }
+                    for node in nodes {
+                        child = {
+                            name: node
+                            children: "pending"                             // temporary unless depth limit reached
+                        }
+                        parent.children.push(child)
+                        queue.push({
+                            path: JSpath.join(localpath, child.name),
+                            depth: depth+1,
+                            parent: child
+                        }) } }
+                --pending.active
+                while queue.length > 0 && pending.active < 20 {
+                    node = queue.pop()
+                    recurTree(node.path, node.depth, node.parent) }
+                if pending.active == 0 && queue.length == 0
+                    pending.signal(list(false, root))
+            })
+        }
+
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        if not integer(depthlimit)
+            depthlimit = false                                              // default is all children
+        queue = []
+        root = {
+            name: JSpath.basename(localpath)
+            data: {
+                platform: js.g.process.platform,
+                semantics: cond(if JSpath eq JSpath.win32 "win32", if true "posix")
+                pathsep: JSpath.sep
+            }
+        }
+        root.parents = new(JSpath.dirname(localpath).split(JSpath.sep))
+        pending = new(nonce)
+        pending.active = 0
+        `(error, data) = files.info(localpath)
+        if !error {
+            rootstat = data.nodejs_stat
+            recurTree(localpath, 0, root)
+            `(error, data) = pending.wait()                                 // returns `(false, root) when done
+        }
+        callback(error, data)
+    }
+    
+    // dirSearch
+    //
+    // Search the files in a directory for a pattern.
+    
+    files.dirSearch = closure dirSearch(path, options, callback,
+        local error, localpaths, output) {
+        if !callback
+            return (syncAdapter(dirSearch, path, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        output = []
+        debuglog("dirSearch begins", localpath)
+        asyncArray(localpaths, 10, closure(localpath, index, elements, local error, direnum, node, lines, line) {
+            `(error, direnum) = dirList(localpath, { })
+            if direnum.children
+                for node in direnum.children
+                    localpaths.push(JSpath.join(localpath, node.name))    // more files or directories to examine
+            else {
+               `(error, lines) = readLines(localpath, options)
+               if error && localpaths.length == 1 {
+                    error = Error("dirSearch failed:", localpath)           // can't access the root
+                    output = false }
+                else
+                    for line in lines {
+                        if array(line)
+                            output.push([localpath].concat(line))           // [localpath, line, text]
+                        else
+                            output.push([localpath, line])                  // [localpath, line]
+                    }
+            }
+        }).wait()
+        debuglog("    dirSearched", localpath, error, localpaths.length, output.length)
+        callback(error, output)
+    }
+    
+    // copy
+    //
+    // Copy / move / rename a file or directory. The source is the full path of the item. The
+    // destination is:
+    //  - a new name if it has no embedded slashes, or
+    //  - a new location if it ends in a slash, otherwise
+    //  - a new pathname for the source if it does not end in a slash.
+    //     This works by creating a new file or directory of files in the new location and then
+    // optionally deleting the files in the existing location. If options.move is true then we
+    // delete the source after the copy.
+    // Supported options are:
+    // {
+    //      move:       <boolean>           -- delete after successful copy
+    //      overwrite:  <boolean>           -- overwrite existing file, if any
+    // }
+    
+    files.copy = closure copy(srcpath, dest, options, callback, local error, localsrc, localdest, pending) {
+        if !callback
+            return (syncAdapter(copy, srcpath, dest, options))
+        `(error, localsrc) = localPath(srcpath)
+        if error
+            return (asyncResult(callback, error))
+        // ### the following localdest doesn't detect existing files in all cases
+        if dest.indexOf(JSpath.sep) < 0
+            localdest = JSpath.join(JSpath.dirname(localsrc), dest)         // new name for existing source in same path location
+        else {
+            `(error, localdest) = localPath(dest)
+            if error
+                return (asyncResult(callback, error))
+            if dest.slice(-1) == JSpath.sep                                 // new location, else entirely new pathname
+                localdest = JSpath.join(localdest, JSpath.basename(srcpath))
+        }
+        fs.lstat(localdest, closure(err, stat, local cmd, args) {
+            if !err && !options.overwrite
+                callback(Error("copy destination already exists",
+                    {
+                        status: 409
+                        name: "conflict"
+                        source: srcpath
+                        destination: dest
+                        existing: localdest
+                    }))
+            else {
+                if options.move {
+                    cmd = "mv"
+                    args = [localsrc, localdest] }
+                else {
+                    cmd = "cp"
+                    args = ["-pR", localsrc, localdest] }                   // preserve file modes and attributes; copy directories
+                nodecp.execFile(cmd, args, 
+                    { },                                                    // execution options
+                    function(err, stdout, stderr) {
+                        if err {
+                            debuglog("cp failed", err)
+                            debuglog("    ", srcpath, "|", localsrc, "->", dest, "|", localdest)
+                        }
+                        if err
+                            callback(Error(cmd.concat(" failed"), err, stderr))
+                        else
+                            callback(false, { ok: true })
+                    }
+                )
+            }
+        })
+    }
+
+    // reveal
+    //
+    //     Reveal the specified filesystem path(s) in the MacOS Finder. The path should be a string
+    // or array thereof. This returns an array listing any errors. Needs a Windows version too.
+   
+    files.reveal = closure reveal(path, callback, local errors, pathargs, item) {
+        if !callback
+            return (syncAdapter(reveal, path))
+
+        function addpath(path, local error, localpath) {
+            `(error, localpath) = localPath(path)
+            if error
+                errors.push(error)
+            else
+                pathargs.push("file://localhost".concat(localpath))
+        }
+    
+        errors = []
+        pathargs = ["-R", "--"]                                             // reveal, then stop using '-' for ags
+        if array(path)
+            for item in path
+                addpath(item)
+        else
+            addpath(path)
+        nodecp.execFile("open",
+            pathargs,                                                       // command-line options
+            { },                                                            // execution options
+            function(err, stdout, stderr) {
+                if err
+                    callback(Error("open failed", err, stderr))
+                else
+                    callback(false, errors)
+            }
+        )
+    }
+
+    //
+    // minimize
+    //
+    // Execute the uglifyjs utility on the specified source, returning the result as a standard
+    // tuple: `(error, minified)
+    //
+    files.minimize = closure minimize(input, callback, local child, stdinStream) {
+        if !callback
+            return (syncAdapter(minimize, input))
+        child = nodecp.execFile("uglifyjs",
+            ["--compress", "drop_debugger=false", "--mangle", "eval"],      // ### uglifyjs options should be parameterized
+            function(err, stdout, stderr) {
+                debuglog("#minimize:", input.length, "->", stdout.length, "bytes")
+                if err
+                    callback(Error("uglifyjs failed", err, stderr))
+                else
+                    callback(false, stdout)
+            }
+        )
+        child.stdin.on("error", function(err) {
+            // make sure error isn't unhandled, so that a failed uglifyjs doesn't
+            // kill our process when the stdin write occurs after the pipe closes.
+        })
+        child.stdin.end(input)
+    }
+
+    //
+    // unzip
+    //
+    // Execute the unzip utility, returning the result as a standard tuple: `(error, result)
+    //
+    files.unzip = closure unzip(inpath, outpath, callback) {
+        if !callback
+            return (syncAdapter(unzip, inpath, outpath))
+        nodecp.execFile("unzip",
+            ["-qo", inpath, "-d", outpath],                                 // quiet; no queries
+            { },                                                            // execution options
+            function(err, stdout, stderr) {
+                if err
+                    callback(Error("unzip failed", err, stderr))
+                else
+                    callback(false, { ok: true })
+            }
+        )
+    }
+
+    //
+    // touch
+    //
+    // Execute the touch utility, returning the result as a standard tuple: `(error, result)
+    //
+    files.touch = closure touch(outpath, callback) {
+        if !callback
+            return (syncAdapter(touch, outpath))
+        nodecp.execFile("touch",
+            [outpath],
+            { },                                                            // execution options
+            function(err, stdout, stderr) {
+                if err
+                    callback(Error("touch failed", err, stderr))
+                else
+                    callback(false, { ok: true })
+            }
+        )
+    }
+
+    //
+    // shellOpen
+    //
+    // Execute the MacOS open utility, returning a standard tuple: `(error, result)
+    //
+    files.shellOpen = closure shellOpen(path, args, callback) {
+        if !callback
+            return (syncAdapter(shellOpen, path, args))
+        if args
+            args = [path].concat("--args", args)                            // only add target args if specified
+        else
+            args = [path]
+        nodecp.execFile("open",
+            args,                                                           // command line args to open
+            { },                                                            // execution options
+            function(err, stdout, stderr) {
+                if err
+                    callback(Error("shellOpen failed", err, stderr))
+                else
+                    callback(false, { ok: true })
+            }
+        )
+    }
+    
+    // grepLines
+    //
+    // Return an array of text matches in a file or recursive directory of files with the following
+    // options:
+    //      pattern:        -- pattern to find
+    //      ignoreCase:     -- ignore case during match
+    //      invert:         -- return lines that DO NOT match the regex
+    //      returnText:     -- return text of matched lines
+    //      maxCount:       -- integer maximum number of results (default 10,000)
+    // grep-specific options:
+    //      ignoreBinary:   -- ignore binary files
+    //
+    files.grepLines = closure grepLines(path, options, callback,
+        local error, localpath, cmdargs, execOptions, grep, result, lineRE, maxcount) {
+        if !callback
+            return (syncAdapter(grepLines, path, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        cmdargs = ["-rn"]                                                   // recursively search directories for files; report line numbers
+        if options.ignoreCase
+            cmdargs.push("-i")
+        if options.invert
+            cmdargs.push("-v")
+        if options.ignoreBinary
+            cmdargs.push("-I")
+        else
+            cmdargs.push("--binary-files=text")
+        if options.fixed
+            cmdargs.push("-F")                                              // fixed pattern (not a regular expression)
+        else
+            cmdargs.push("-E")                                              // work like e-grep
+        cmdargs.push("-e")                                                  // ensure that patterns starting with "-" are accepted
+        cmdargs.push(options.pattern)
+        cmdargs.push(JSpath.resolve(rootpath, localpath))
+        execOptions = { cmdargs: cmdargs }
+        result = []
+        lineRE = RegExp("([^:]*):([0-9]+):(.*)$")                           // <path>:<line-number>:<matching-text-line>
+        if integer(options.maxCount)
+            maxcount = options.maxCount
+        else
+            maxcount = 5000                                                 // default is 5K lines maximum return
+        execOptions.outproc = function(output, liner, kill, local line, match) {
+            while (line = liner.read()) {
+                if result.length >= maxcount
+                    return (kill())
+                match = line.match(lineRE)
+                if match {
+                    item = [JSpath.relative(localpath, match.1), match.2]
+                    if options.returnText
+                        item.push(match.3)
+                    result.push(item)                                       // relative file path, line number, and (optional) text
+                }
+            }
+        }
+        execLines("grep", execOptions, function(error, output) {
+            if output.stderr
+                debuglog("grep stderr:", output.stderr.join("\n"))
+            if !error
+                output = result
+            callback(error, output)
+        })
+    }
+     
+    // execLines
+    //
+    // Execute a command and parse the results into lines, executing the callback when everything
+    // has completed. Options are:
+    //  {
+    //      cmdargs:            -- array of string arguments to the command (see below)
+    //      execops:            -- optional exec options like cwd
+    //      errproc:            -- callback for stderr output lines, or false
+    //      errLE:              -- string or RegExp for stderr line ending
+    //      outproc:            -- optional callback for stdout output lines
+    //      outLE:              -- string or RegExp for stdout line ending
+    //      output:             -- optional output structure
+    //  }
+    // The result is stored in an output structure, which can have:
+    //  {
+    //      exitCode:           -- status code from execution, or null if killed
+    //      stderr:             -- array of stderr lines if errproc not specified
+    //      stdout:             -- array of stdout lines if outproc not specified
+    //  }
+    // Errorproc and outproc have the same protocol, which is:
+    //      proc(output, liner, kill)
+    // These functions are free to modify output, which is the eventual result of execLines if no
+    // overall error occurs. Each time liner is called, the result is either a line of text or false
+    // to indicate that there are no more lines available at this time. Calling kill() will terminate
+    // execution of the command immediately, setting the output.exitCode to null. When all data is
+    // transferred the procs are called one more time with both liner and kill false to give the
+    // proc a chance to finalize any output.
+    //  
+    //
+
+    files.execLines = closure execLines(cmdname, options, callback, local output, arg, execops, spawn, linerErr, linerOut) {
+        if !callback
+            return (syncAdapter(execLines, cmdname, options))
+        if !string(cmdname) || cmdname == ""
+            return (asyncResult(callback, Error("invalid command:", typeof(cmdname))))
+        if options.output
+            output = options.output
+        else
+            output = {}
+        if options.execops
+            execops = options.execops
+        else
+            execops = { }
+        spawn = nodecp.spawn(cmdname, options.cmdargs, execops)
+
+        // completed
+        // execute callback only once
+        function completed(error, result) {
+            if callback {
+                callback(error, result)
+                callback = false } }
+
+        // kill
+        // terminate the command
+        function kill() {
+            grep.kill()
+            completed(false, output) }                                      // the official end will never come
+
+        //
+        // process pipes and errors
+        //
+        spawn.stdin.end()
+        spawn.on("error", function(err) {
+            completed(Error("failed to spawn command ".concat(cmdname), err))
+        })
+        spawn.on("close", function(code) {
+            output.exitCode = code                                          // zero on success; null on killed
+        })
+        spawn.stderr.on("error", function(err) {
+            completed(Error("stderr stream failed:", err))
+        })
+        spawn.stdout.on("error", function(err) {
+            completed(Error("stdout stream failed:", err))
+        })
+
+        //
+        // process stderr output
+        //
+        linerErr = NodeStreamLiner(options.errLE)
+        spawn.stderr.pipe(linerErr)
+        linerErr.on("end", function() {
+            if options.errproc
+                call(options.errproc, output)
+            if linerOut
+                linerErr = false                                            // let end-of-out do the completion
+            else
+                completed(false, output)
+        })
+        linerErr.on("readable", function (local line) {
+            if options.errproc
+                call(options.errproc, output, linerErr, kill)
+            else
+                while ((line = linerErr.read()) && line.length > 0) {
+                    if !output.stderr
+                        output.stderr = []                                  // only create this if we have real output
+                    output.stderr.push(line)
+                }
+        })
+
+        //
+        // process stdout output
+        //
+        linerOut = NodeStreamLiner(options.outLE)
+        spawn.stdout.pipe(linerOut)
+        linerOut.on("end", function() {
+            if options.outproc
+                call(options.outproc)
+            if linerErr
+                linerOut = false                                            // let end-of-err do the completion
+            else
+                completed(false, output)
+        })
+        linerOut.on("readable", function (local line) {
+            if options.outproc
+                call(options.outproc, output, linerOut, kill)
+            else {
+                if !output.stdout
+                    output.stdout = []
+                while (line = linerOut.read())
+                    output.stdout.push(line)
+            }
+        })
+    }
+
+    // finis
+
+    list(false, files)
+};
+
+
+/*
+ * filesystemInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function filesystemInit(local manifest) {
+
+    manifest = `(Filesystem, filesystemInit)
+
+    Naan.module.build(module.id, "filesystem", function(modobj, compobj) {
+        Naan.module.require("./node.nlg")
+        compobj.manifest = manifest
+        modobj.exports.Filesystem = Filesystem
+    })
+
+}();

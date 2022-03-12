@@ -1,0 +1,464 @@
+/*
+ * common.nlg
+ * Naanlib/frameworks/common
+ *
+ *     Root compoment for common utility functionality applicable to both browser and NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * EncodeQuery
+ *
+ *     Encode a dictionary of query terms into a query string for a URI.
+ *
+ */
+
+function EncodeQuery(prefix, items, local result, item) {
+    result = []
+    for item in items
+        result.push(EncodeURIComponent(item).concat("=", EncodeURIComponent(items[item])))
+    result = result.join("&")
+    if prefix && result.length > 0
+        prefix.concat(result)
+    else
+        result
+};
+
+
+/*
+ * UUID
+ *
+ *     Return a new v4 variant 1 UUID, which is the random variety. It will be a 36-character string.
+ *
+ */
+ 
+function UUID(local rando, cc) {
+    if !RandomBytes
+        return (false)
+    rando = RandomBytes(36)                                                 // length of UUID
+    "00000000-0000-4000-8000-000000000000".replace(RegExp("[018]", "g"), function(cc, offset) {
+        if cc == "4"
+            cc = 4
+        else if cc == "8"
+            cc = bitor(8, bitand(rando[offset], 3))
+        else
+            cc = bitand(rando[offset], 15)
+        "0123456789abcdef".charAt(cc)
+    })
+};
+
+
+/*
+ * JsonParse
+ *
+ *     Parse a string as JSON, returning a result tuple instead of an exception.
+ *
+ */
+
+function JsonParse(data) {
+    try {
+        data = JSONparse(data)
+        list(false, data)
+    } catch {
+        if true
+             list(exception)
+    }
+};
+
+
+/*
+ * JsonStringify
+ *
+ *     Convert an object to a JSON string, returning a result tuple instead of an exception.
+ *
+ */
+
+function JsonStringify(data) {
+    try {
+        data = JSONstringify(data)
+        list(false, data)
+    } catch {
+        if true
+             list(exception)
+    }
+};
+
+ 
+/*
+ * JsLoadScript
+ *
+ *     Load the specified script, or return its main entry point if already loaded. This blocks the
+ * caller until the script load completes. The return value is false if an error occurred.
+ *
+ */
+
+jsScripts = { };                                                            // script values become false on reload
+ 
+function JsLoadScript(libpath, globalID, local scriptTag, fpath) {
+    if jsScripts[jsScripts]
+        return                                                              // already loaded
+    if libpath.startsWith("/")
+        fpath = libpath
+    else
+        fpath = "/".concat(libpath)
+    if js.s.importScripts && tostring(js.s.importScripts) == "[Function importScripts]" {
+        js.s.importScripts(fpath)                                           // load in worker context
+        jsScripts[libpath] = js.s[globalID]
+    } else if js.w {                                                        // load in browser context
+        pending = new(nonce)
+        scriptTag = js.w.document.createElement("script")
+        scriptTag.src = js.w.location.origin.concat(fpath)
+        scriptTag.onload = function (event) {
+            jsScripts[libpath] = js.w[globalID]
+            pending.signal(JSZipLib)
+            true
+        }
+        scriptTag.onerror = function (event) {
+            debuglog("jsScriptLoader:", libpath, "not found")
+            pending.signal(false)
+            true
+        }
+        js.w.document.body.appendChild(scriptTag)
+        pending.wait()
+    } else if js.g {
+        if !libpath.startsWith("/")
+            fpath = "./".concat(libpath)
+        jsScripts[libpath] = js.r(fpath)                                    // load in NodeJS context
+    }
+    jsScripts[libpath]
+};
+
+
+/*
+ * LoadComponentOnDemand
+ *
+ *     Create and export a new load-on-demand function in the caller's module for the key or array
+ * of keys specified. On successful load the component will automatically replace the export with the
+ * actual function. This requires that the export be called as a procedure. Throw's on failure, which
+ * shouldn't happen unless the component or the exported function are unavailable.
+ *
+ */
+
+macro LoadComponentOnDemand(functionKeys, componentPath, local modobj, key) {
+    modobj = car(nsrights().lookup("module"))
+    functionKeys = eval(functionKeys)
+    componentPath = eval(componentPath)
+    if name(functionKeys)
+        functionKeys = list(functionKeys)
+    for key in functionKeys
+        closure (key, path, local exproc) {
+            function loadComponent args {                                   // called when exported function first called
+                exproc = require(path)[key]
+                if !exproc || exproc === loadComponent
+                    throw("Unable to load ".concat(key, " in ", path))
+                apply(exproc, args)                                         // call exported function with args
+            }
+            modobj.exports[key] = loadComponent
+        } (key, componentPath)
+    true
+};
+
+
+/*
+ * LiveImport
+ * LiveExport
+ *
+ *     These are used to ensure that imported symbols have up-to-date values. This is needed because
+ * well-known JavaScript objects are cleared on reload, so imported xobjects become invalid. One
+ * cannot simply call letimport again on reload because the import may occur before the symbol values
+ * are updated. We'd rather not call a function on each reference.
+ *     Our solution is LiveImport(), exported by the exporting module so that importers can call it
+ * to receive updates. Because other modules besides common will need this, LiveExport() will add a
+ * LiveImport() function to a module's exports.
+ *
+ * To use LiveImport, call from the importing module as follows:
+ *     require("frameworks/common/common.nlg").LiveImport(<fixproc>);
+ * The optional <fixproc> is called after the imports in case the foreign module wants to fix up
+ * anything after the import:
+ *     fixproc(exporterMod);
+ * If LiveImport is called from the same module as the exporter then there is nothing to import, but
+ * <fixproc> will be called, which allows components in the module to update internal state.
+ *
+ * To use LiveExport, call it as follows:
+ *     exportUpdate = LiveExport()
+ * This will create a LiveImport function in the module.exports of the caller. Call exportUpdate()
+ * after updating the exported symbols.
+ *
+ */
+
+macro LiveExport() {
+    closure (exporterMod, local importList) {
+        importList = []
+        //
+        // LiveImport
+        // Return a new LiveImport function to be exported by the module who called MakeLiveImport.
+        //
+        macro LiveImport(fixproc, local importingMod, mdex, updater) {
+            importingMod = car(nsrights().lookup("module"))
+            mdex = importList.indexOf(importingMod)
+            if mdex >= 0
+                updater = importList[mdex]                                  // already registered
+            else {
+                updater = closure(importingMod, fixproc) {                  // create new updater
+                    putproc(compress(updateImports), function updateImports(local goback) {
+                        if importingMod !== exporterMod {
+                            goback = makeActivator()
+                            nsactive(cons(nsrights(), nsactive()))          // make importer namespace active
+                            letimport(exporterMod.exports) }                // import to active namespace
+                        try {
+                            call(fixproc, exporterMod)                      // let caller do any fixups
+                        } catch {
+                            if (true)
+                                debuglog("LiveImport fixup failed in", nsrights(), "exception:", exception)
+                        }
+                        goback()
+                    })
+                    updateImports
+                } (importingMod, eval(fixproc))
+                importList.push(updater)
+            }
+            call(updater)                                                   // update the imports
+            updater                                                         // return the updater
+        }
+        exporterMod.exports.LiveImport = LiveImport
+
+        //
+        // updateExports
+        // Update our exports into all registered importers.
+        //
+        function updateExports(local updater) {                             // defined in exporter's namespace
+            for updater in importList
+                call(updater)
+            true
+        }
+    } (car(nsrights().lookup("module")))                                    // module of caller
+};
+
+
+/*
+ * comrInit
+ *
+ *     Initialize the common module.
+ *
+ */
+
+updateExports = false;                                                      // explicit globals used below
+RandomBytes = false;
+HashMD5 = false;
+HashMD5_base64 = false;
+JSpath = false;
+TextEncoder = false;
+TextDecoder = false;
+EncodeURIComponent = false;
+DecodeURIComponent = false;
+JSONstringify = false;
+JSONparse = false;
+
+function comrInit(local manifest) {
+    manifest = `(EncodeQuery, UUID, JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
+
+    Naan.module.build(module.id, "nideCommon", closure(modobj, compobj) {
+        compobj.manifest = manifest
+        modobj.exports.EncodeQuery = EncodeQuery
+        modobj.exports.UUID = UUID
+        modobj.exports.JsLoadScript = JsLoadScript
+        modobj.exports.LoadComponentOnDemand = LoadComponentOnDemand
+        modobj.exports.LiveExport = LiveExport                              // allow others to create export updaters
+        updateExports = LiveExport()                                        // export LiveImport() so we can update
+
+        // comrReload
+        //
+        // Initialize environment functionality when we reload.
+        //
+        closure comrReload(local wsg, crypto) {
+            wsg = js.w || js.s || js.g                                      // any global: browser or web worker or nodejs
+            RandomBytes = false
+            HashMD5 = false
+            HashMD5_base64 = false
+            JSpath = js.r("path")
+            jspath = JSpath                                                 // ### temporary during transition
+            //
+            // everywhere: Text
+            TextEncoder = wsg.TextEncoder
+            TextDecoder = wsg.TextDecoder
+            EncodeURIComponent = wsg.encodeURIComponent
+            DecodeURIComponent = wsg.decodeURIComponent
+            //
+            // everywhere: JSON
+            JSONstringify = wsg.JSON.stringify
+            JSONparse = wsg.JSON.parse
+            //
+            // binaryFrom - convert arbitrary item to binary buffer or text.
+            //
+            function binaryFrom(data) {
+                if xobject(data) {
+                    if js.o.getPrototypeOf(data).constructor !== wsg.ArrayBuffer
+                        && tostring(data) != "[object ArrayBuffer]"
+                        && !jsTypedArray(data)
+                        JSONstringify(data)
+                    else
+                        data
+                } else if !string(data)
+                    JSONstringify(data)
+                else
+                    data
+            }
+            //
+            // hexFormat - create padded hex string from binary array
+            //
+            function hexFormat(data, padlen, local result) {
+                result = toint(xnew(wsg.Uint8Array, data)).tostring({radix:16})
+                if result.length > padlen
+                    result.slice(-padlen)
+                else if result.length < padlen
+                    "0".repeat(padlen-result.length).concat(result)
+                else
+                    result
+            }
+            //
+            // base64Format - create base 64 string from binary array
+            //
+            function base64Format(data, local blob, reader, pending, result) {
+                blob = xnew(wsg.Blob, [data])
+                reader = xnew(wsg.FileReader)
+                pending = new(nonce)
+                reader.onload = function(event) { pending.signal(event.target.result) }
+                reader.readAsDataURL(blob)
+                result = pending.wait()
+                result.slice(37)
+            }
+            //
+            // DecodeBase64url - decode base64url to original string
+            // See https://en.wikipedia.org/wiki/Base64 for details on variants
+            //
+            DecodeBase64url = function decodeBase64url(base64url, local padding) {
+                base64url = base64url.replace(RegExp("-", "g"), '+').replace(RegExp("_", "g"), '/')
+                wsg.atob(base64url)
+            }
+            //
+            // For browser windows and web workers
+            //
+            if js.w || js.s {
+                //
+                // MD5 functions
+                JsLoadScript("frameworks/browser/spark-md5/spark-md5.min.js", "SparkMD5")
+                //
+                // hasMD5 in hex
+                HashMD5 = function browserMD5(data, raw) {
+                    data = binaryFrom(data)
+                    if xobject(data)
+                        wsg.SparkMD5.ArrayBuffer.hash(data, raw)
+                    else
+                        wsg.SparkMD5.hash(data, raw) }
+                //
+                // HashMD5 in base64
+                HashMD5_base64 = function browserMD5_base64(data) {
+                    wsg.btoa(browserMD5(data, true)) }
+                //
+                // browserDigest - only in secure contexts (localhost and HTTPS)
+                //
+                function browserDigest(data, algo, local error, result) {
+                    if !wsg.crypto.subtle
+                        throw(Error("crypto functions unavailable"))
+                    data = binaryFrom(data)
+                    if string(data)
+                        data = xnew(TextEncoder).encode(data)
+                    `(error, result) = await(wsg.crypto.subtle.digest(algo, data))
+                    if error
+                        throw(Error("crypto digest failed", error))
+                    result
+                }
+                //
+                // HashSHA1 in hex
+                HashSHA1 = function browserSHA1(data) {
+                    hexFormat(browserDigest(data, "SHA-1"), 40)
+                }
+                //
+                // HashSHA-256 in hex
+                HashSHA256 = function browserSHA256(data) {
+                    hexFormat(browserDigest(data, "SHA-256"), 64)
+                }
+                //
+                // HashSHA-256 in base64
+                HashSHA256_base64 = function browserSHA256_base64(data) {
+                    base64Format(browserDigest(data, "SHA-256"))
+                }
+               //
+                // random bytes as UInt8Array - use toint() for integer
+                if wsg.crypto
+                    RandomBytes = function browserRandomBytes(bytes) {
+                        wsg.crypto.getRandomValues(xnew(wsg.Uint8Array,bytes))
+                    }
+            }
+            //
+            // For NodeJS
+            //
+            if js.g {
+                if !crypto
+                    crypto = js.r("crypto")
+                if crypto {
+                    //
+                    // hasMD5 in hex
+                    HashMD5 = function nodejsMD5(text) {
+                        crypto.createHash("MD5").update(binaryFrom(text)).digest("hex") }
+                    //
+                    // HashMD5 in base64
+                    HashMD5_base64 = function nodejsMD5_base64(text) {
+                        crypto.createHash("MD5").update(binaryFrom(text)).digest("base64") }
+                    //
+                    // HashSHA1 in hex
+                    HashSHA1 = function nodejsSHA1(text) {
+                        crypto.createHash("sha1").update(binaryFrom(text)).digest("hex") }
+                    //
+                    // HashSHA1 in hex
+                    HashSHA256 = function nodejsSHA256(text) {
+                        crypto.createHash("sha256").update(binaryFrom(text)).digest("hex") }
+                    //
+                    // HashSHA1 in base64
+                    HashSHA256_base64 = function nodejsSHA256_base64(text) {
+                        crypto.createHash("sha256").update(binaryFrom(text)).digest("base64") }
+                    //
+                    // random bytes as UInt8Array - use toint() for integer
+                    RandomBytes = function nodeRandomBytes(bytes) {
+                        crypto.randomBytes(bytes)
+                    }
+                } else {
+                    HashMD5 =
+                    HashMD5_base64 =
+                    HashSHA1 =
+                    RandomBytes = function() { throw(Error("crypto functions unavailable")) }
+                }
+            }
+            //
+            // Exports for all environments
+            //
+            modobj.exports.JSpath = JSpath
+            modobj.exports.TextEncoder = TextEncoder
+            modobj.exports.TextDecoder = TextDecoder
+            modobj.exports.EncodeURIComponent = EncodeURIComponent
+            modobj.exports.DecodeURIComponent = DecodeURIComponent
+            modobj.exports.JSONstringify = JSONstringify
+            modobj.exports.JSONparse = JSONparse
+            modobj.exports.JsonStringify = JsonStringify
+            modobj.exports.JsonParse = JsonParse
+            modobj.exports.DecodeBase64url = DecodeBase64url
+            modobj.exports.HashMD5 = HashMD5
+            modobj.exports.HashMD5_base64 = HashMD5_base64
+            modobj.exports.HashSHA1 = HashSHA1
+            modobj.exports.HashSHA256 = HashSHA256
+            modobj.exports.HashSHA256_base64 = HashSHA256_base64
+            modobj.exports.RandomBytes = RandomBytes
+            //
+            // Update any importers who cared enough to call LiveImport
+            //
+            updateExports()
+        }()
+        module.reload = comrReload
+    })
+
+} ();

@@ -1,0 +1,26 @@
+/*
+ * nodeLib.nlg
+ *
+ * Support library for running with NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * nodeLibInit
+ *
+ *     Initialize NodeJS utilities.
+ *
+ */
+
+function nodeLibInit(local manifest) {
+    manifest = `(nodeLibInit)
+
+    Naan.module.build(module.id, "nodeLib", function(modobj, compobj) {
+        compobj.manifest = manifest
+    })
+}();

@@ -1,0 +1,565 @@
+/*
+ * debugnub.nlg
+ *
+ *     Debug nub allowing remote debugging.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * DebugNub
+ *
+ *     Install a debug nub for a remote debugger. This communicates between the CLI/debugger.nlg
+ * debug controller in the local worker and the DebugCommander in the remote with its debugger.
+ *
+ */
+
+closure DebugNub(local nub, debug, paused) {
+    debug = module.owner.list.Util.exports.DebugController()
+    if !debug {                                                             // no debugger support in worker
+        debuglog("DebugNub: no debugger support in this execution instance")
+        return (false)
+    }
+    if debugNub !== `debugNub {                                             // multiple load attempt
+        debuglog("DebugNub: a debugNub already exsts; there can be only one")
+        return (false)
+    }
+    nub = new(object, this)
+    debugNub = nub                                                          // access from taskDispatcher
+    nub.codemgr = CodeManager()
+    nub.exenable = true
+    nub.watches = []
+
+    // debugDepth
+    // Return the recursive debugging depth as an integer.
+    //
+    function debugDepth(local curdepth) {
+        curdepth = debug.depth()
+        if !integer(curdepth)
+            curdepth = 0
+        curdepth
+    }
+
+    // onDebugger proc
+    // Process an incoming debugger command.
+    //
+    function onDebugger(msg) {
+        if msg.op == "attach" {
+            debug.setCommander(nub)
+            js.t.ReplyDebugger({
+                op: "status"
+                depth: debugDepth()
+                bpenable: debug.bpenable
+                exenable: nub.exenable
+            })
+        }
+        else if msg.op == "detach" {
+            debug.setCommander(false)
+            paused.wait = false                                             // false: go back to ndb
+        }
+        else if msg.op == "pause"
+            future(function(){ debugger() }, 1)                             // enter at convenient time
+        else if msg.op == "resume" || msg.op == "stop"
+            || msg.op == "stepover" || msg.op == "stepinto" || msg.op == "stepout"
+            paused.wait = msg.op
+        else
+            debuglog("DebugNub received unknown message op", msg.op)
+    }
+
+    // sourcePos
+    //
+    //     Return our current source position. If task is not specified then this uses the top of
+    // the stack. The result is a position dictionary, or false if the source location not found.
+    
+    function sourcePos(procdef, task, local frame, comp, position) {
+        if !procdef || !task {
+            for frame in nub.frames
+                if procedure(frame)
+                    break
+            `(procdef, task) = nub.procTask(frame)
+        }
+        if !procdef
+            return (false)
+        comp = nub.codemgr.procComponent(procdef)
+        position = comp.textpos(procdef, task)
+        position
+    }
+    
+    // lineStepSet
+    //
+    //     Configure to step whole lines with the specified step type.
+    
+    function lineStepSet() {
+        if !nub.lineStepProc {
+            procdef = debug.insideProc()
+            position = sourcePos()
+            nub.lineStepProc = procdef
+            nub.lineStepLine = position.first.0
+        }
+    }
+    
+    // lineStepClear
+    //
+    //     Clear lineStep info.
+    
+    function lineStepClear() {
+        nub.stepType = false
+        nub.lineStepProc = false
+        nub.lineStepLine = false
+    }
+    
+    // nubStep
+    //
+    //     Step: 1-into, 2-over, or 3-up.
+    
+    function nubStep(type) {
+        nub.stepType = type
+        if type == 1 {                                                      // into
+            lineStepSet()
+            debug.step(1)
+        } else if type == 2 {                                               // over
+            lineStepSet()
+            debug.stepover()
+        } else if type == 3 {                                               // up
+            lineStepClear()
+            debug.stepup()
+        }
+    }
+
+    // stepHit
+    //
+    //     A step was completed. This returns true to resume execution.
+    
+    function stepHit(msg, dict, local procdef, position) {
+        msg.stepstate = dict.state
+        procdef = debug.insideProc()
+        if !procdef
+            msg.error = Error("Stepped to unknown location: ", dict.task)
+        else {
+            if member(procdef.1.namespace, debug.nshidden) {
+                debug.stepup()
+                return (true)
+            }
+            position = sourcePos(procdef, dict.task)                        // about to execute task
+            if nub.stepType && nub.lineStepProc == procdef && nub.lineStepLine == position.first.0 {
+                nubStep(nub.stepType)                                       // keep stepping until line changes
+                return (true)
+            }
+            nub.lineStepProc = procdef
+            nub.lineStepLine = position.first.0
+        }
+        nub.stepValue = list(dict.value)                                    // encapsulate in tuple for undefined, etc.
+        js.t.ReplyDebugger({
+            op: "stepped"
+            depth: debugDepth()
+            value: tostring(dict.value, { quote: true })
+        })
+        false
+    }
+    
+    // breakpointHit
+    //
+    //     We hit a breakpoint. This returns true to resume execution.
+    
+    function breakpointHit(msg, where, value) {
+        msg.bpid = debug.breakHit(where, value)
+        if !msg.bpid
+            return (true)
+        js.t.ReplyDebugger({
+            op: "breakpoint"
+            depth: debugDepth()
+            bpid: msg.bpid
+            value: tostring(value, { quote: true })
+        })
+        false
+    }
+
+    // exceptionHit
+    //
+    //     We hit an exception. This returns true to resume execution.
+    
+    function exceptionHit(msg, except) {
+        if !nub.exenable || tuple(nub.exenable) && !eval(nub.exenable)
+            return (true)                                                   // catch break not enabled or expression false
+        exceptstr = debug.startExcept
+        if dictionary(exceptstr) && exceptstr.error == "Naan Error"
+            exceptstr = ErrorString(exceptstr)
+        js.t.ReplyDebugger({
+            op: "exception"
+            depth: debugDepth()
+            exceptstr: exceptstr
+            exception: debug.startExcept
+        })
+        false
+    }
+
+    // entering
+    // leaving
+    //
+    // Notice that the debugger is being entered/left. Entering or leaving may not be called if we
+    // switch debuggers while in the debugger.
+    //
+
+    nub.entering = function entering(state) {
+    }
+
+    nub.leaving = function leaving(state) {
+    }
+
+    // pauser
+    //
+    //     Enter the debugger to allow the user to have a say in the proceedings. When this returns
+    // non-false then execution resumes. The entry argument defines the reason for entering using a
+    // constant string, with corresponding arguments defined as follows:
+    //
+    //  "startpause"        - pause at start of evaluating an expression
+    //      tuple               - expression being evaluated
+    //  "breakpoint"        - hit a breakpoint
+    //      where               - dictionary
+    //      value               - applied value
+    //  "steptrap"          - finished stepping
+    //      dict                - dictionary of current step info
+    //  "startfail"         - failed pause at start of eval
+    //  "escape"            - debugger entered via escape request
+    //  "exception"         - debugger entered due to exception
+    //      value               - exception that occurred
+    //  ""                  - normal entry (e.g. debugger call)
+    //
+    nub.pauser = closure pauser(entry, arg1, arg2, arg3, local msg, frame, proc1) {
+        msg = {
+            op: "pauser"
+            entry: entry
+        }
+        if entry != "steptrap"
+            lineStepClear()
+        if entry == "startpause" {
+            if atom(arg1)
+                msg.error = Error("can't debug atom:", arg1)
+            else
+                msg.expr = arg1
+        } else if entry == "breakpoint" {
+            if breakpointHit(msg, arg1, arg2)
+                return
+        } else if entry == "steptrap" {
+            if stepHit(msg, arg1)
+                return
+        } else if entry == "startfail" {
+            msg.error = Error("can't pause before eval")
+        } else if entry == "escape" {
+            { }
+        } else if entry == "exception" {
+            if exceptionHit(msg, arg1)
+                return
+        } else if entry == "" {
+        } else
+            msg.error = Error("debugger entry type unknown:", entry)
+        nub.frames = []
+        for frame in debug.frames {
+            if procedure(frame)
+                proc1 = true
+            if frame.0 != `body && (!proc1 || frame.0 != `loop)
+                nub.frames.push(frame) }                                    // we ignore body and loop frames
+        msg.depth = debugDepth()
+        msg.bpenable = debug.bpenable
+        msg.exenable = nub.exenable
+        js.t.ReplyDebugger(msg)
+        paused = { wait: true }
+        msg.entry = undefined
+        while paused.wait == true
+            wait()
+        msg.exit = paused.wait
+        msg.depth = debugDepth()
+        msg.bpenable = debug.bpenable
+        msg.exenable = nub.exenable
+        js.t.ReplyDebugger(msg)
+        if msg.exit == "resume"
+            debug.resume()
+        else if msg.exit == "stop"
+            debug.quit()                                                    // throw to quit
+        else if msg.exit == "stepinto"
+            msg.exit = nubStep(1)
+        else if msg.exit == "stepover"
+            msg.exit = nubStep(2)
+        else if msg.exit == "stepout"
+            nubStep(3)
+        msg.exit
+    }
+
+    // endPauser
+    //
+    // End our pause so we can switch to REPL debugger.
+    
+    nub.endPauser = function endPauser() {
+        paused.wait = false
+    }
+
+    // breakGlobalEnable
+    //
+    //     Enable or disable global breakpoints.
+    
+    nub.breakGlobalEnable = function breakGlobalEnable(enable) {
+        debug.breakGlobalAble(enable)
+    }
+
+    // catchGlobalEnable
+    //
+    //     Enable or disable exception traps, or if a tuple then an expression to evaluate.
+    
+    nub.catchGlobalEnable = function catchGlobalEnable(enablex) {
+        nub.exenable = enablex
+    }
+
+    // breakAdd
+    //
+    //     Add a breakpoint as specified.
+    
+    nub.breakAdd = function breakAdd(modname, compname, lineno, column, expr, local result, bpid) {
+        result = nub.codemgr.component(modname, compname).findbreak(lineno, column)
+        if !result
+            return (list(Error("breakpoint location invalid at (", lineno, ", ", column, ")")))
+        bpid = debug.breakAdd(result.proc, result.task, expr)
+        if !bpid
+            return (list(Error("can't add breakpoint at (", lineno, ", ", column, ")")))
+        list(false, {
+            first:  result.first
+            last:   result.last
+            bpid:   bpid
+        })
+
+ }
+    
+    // breakClear
+    //
+    //     Clear a breakpoint given the text location.
+    
+    nub.breakClear = function breakClear(modname, compname, lineno, column, local result) {
+        result = nub.codemgr.component(modname, compname).findbreak(lineno, column)
+        if !result
+            return (list(Error("breakpoint location invalid at (", lineno, ", ", column, ")")))
+        if !debug.breakClear(result.proc, result.task)
+            return (list(Error("breakpoint not found at (", lineno, ", ", column, ")")))
+        list(false, true)
+    }
+    
+    // breakDelete
+    //
+    //     Delete breakpoint(s) given the number(s) in our breakpoint list.
+    
+    nub.breakDelete = function breakDelete(bpid) {
+        if !debug.breakDelete(bpid)
+            return (list(Error("breakpoint", bpid, "not found")))
+        list(false, true )
+    }
+    
+    // breakAble
+    //
+    //     Enable/disable a breakpoint given the number.
+    
+    nub.breakAble = function breakAble(bpid, enable) {
+        debug.breakAble(bpid, enable)
+    }
+
+    // breakInfo
+    //
+    // Provide info on a breakpoint:
+    //  {
+    //      bpid:       <integer identifier from 1>
+    //      enable:     true/false
+    //      count:      hit count
+    //      proc:       procdef
+    //      task:       task
+    //      condition:  <expression
+    //  }
+    
+    nub.breakInfo = function breakInfo(bpid, local bp) {
+        bp = debug.breakpoints[bpid]
+        if !bp
+            return (false)
+        {
+            bpid:       bpid
+            enable:     bp.where.enable
+            count:      bp.hitcount
+            proc:       bp.procdef
+            task:       bp.where.task
+            condition:  bp.conditional
+        }
+    }
+
+    // breakList
+    //
+    // Report all our breakpoints as an array of dictionary items.
+    
+    nub.breakList = function breakList(local output, id, bp) {
+        output = []
+        for bpid in debug.breakpoints
+            output.push(breakInfo(bpid))
+        output
+    }
+
+    // callStack
+    //
+    // List our callers as of the last entry.
+    
+    nub.callStack = function callStack(local output, frame, type, record) {
+        output = []
+        for frame in nub.frames {
+            record = {
+                type:       frame.0.tostring                                // e.g. "function"
+            }
+            if procedure(frame) {
+                record.namespace = frame.1.namespace.tostring
+                record.procname = frame.3.1
+                record.params = frame.3.2
+            }
+            else if record.type == "interrupt"
+                record.variant = frame.2.tostring
+            else
+                continue
+            output.push(record)
+        }
+        output
+    }
+    
+    // nthFrame
+    //
+    // Return the nth stack frame in the list returned by callStack above.
+    
+    nub.nthFrame = function nthFrame(nth, local frame) {
+        for frame in nub.frames
+            if procedure(frame) || frame.0.tostring == "interrupt" {
+                if nth-- == 0
+                    return (frame)
+            }
+    }
+    
+    // localist
+    //
+    //     Obtain a tuple of all local variables in scope on the specified stack frame.
+    
+    nub.localist = function localist(frame, local symbols) {
+        if !procedure(frame)
+            return (false)
+
+        function scope(parent, local lex1, ex1, proc) {                     // capture scope variables
+            while parent {
+                proc = getproc(parent)
+                lex1 = third(proc)
+                if atom(lex1)
+                    push(lex1, symbols)
+                else
+                    loop {
+                        if empty(lex1) break
+                        ex1 = pop(lex1)
+                        if ex1
+                            push(ex1, symbols)
+                    }
+                push(parent, symbols)
+                lex1 = parent@\.children
+                loop {
+                    if empty(lex1) break
+                    ex1 = pop(lex1)
+                    if ex1 && !member(ex1, symbols)
+                        push(ex1, symbols)
+                }
+                parent = parent@\.parent } } (frame.3.1)
+
+        reverse(symbols)
+    }
+
+    // evalWatchesInFrame
+    //
+    //     Parse and evaluate our watchpoints, optionally in the context of the nth frame. Each entry
+    // in the returned array is for a watchpoint, comprising a tuple: `(error, expression, evaluated)
+    
+    nub.evalWatchesInFrame = function evalWatchesInFrame(nth,
+        local frame, locals, ns, mod, gohome, texts, watch, exprs, error, expr)
+    {
+        if integer(nth) {
+            frame = nthFrame(nth)
+            locals = localist(frame)
+            ns = frame.3.1.namespace
+            if ns !== nsactive().0 {
+                mod = module.owner.findModule(ns)
+                if mod {
+                    gohome = makeActivator(nsactive())
+                    chns(mod.id)
+                }
+            }
+        }
+        texts = []
+        for watch in nub.watches
+            texts.push(watch.source)
+        exprs = nub.codemgr.parseExprs(texts, locals)
+        results = []
+        for watch in nub.watches {
+            `(error, expr) = exprs.shift()
+            if !watch.source
+                expr = watch.expr
+            results.push(list(error, expr, eval(expr)))
+        }
+        gohome()
+        results
+    }
+
+    // procTask
+    //
+    // Return procedure and task from a frame, as a `(procdef, task) tuple.
+    
+    nub.procTask = function procTask(frame) {
+        debug.frameProcTask(frame)
+    }
+    
+    // lastStepValue
+    //
+    // Return the applied value after the last step. This is encapsulated in a tuple so that we can
+    // get undefined, null, etc.
+    
+    nub.lastStepValue = function lastStepValue() {
+        nub.stepValue
+    }
+    
+    // utilities
+    //
+    // Procedure utilities.
+
+    nub.rootproc = rootproc.proc                                            // root procdef from nested procdef
+    nub.baseproc = baseproc.proc                                            // base procdef from procdef
+    nub.pathmatch = pathmatch.proc                                          // child symbol from (parent, path)
+    nub.procpath = procpath.proc                                            // tuple of parents from nested procdef
+    nub.procname = procname.proc                                            // return full pathname of nested procsym
+    nub.procstring = procstring.proc                                        // return proc string with arguments
+
+    // nubInstall
+    // Install the nub for receiving debugger messages, and reload on state load.
+    //
+    function nubInstall() {
+        js.t.OnDebugger(onDebugger.proc)                                    // receive debug messages
+    }()
+    LoadNotify(nubInstall)
+
+    // finis
+    nub
+};
+
+
+/*
+ * dnubInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function dnubInit(local manifest) {
+    manifest = `(DebugNub, dnubInit)
+
+    Naan.module.build(module.id, "debugnub", function(modobj, compobj) {
+        require("./running.nlg")
+        require("./sourcecode.nlg")
+        compobj.manifest = manifest
+        modobj.exports.DebugNub = DebugNub
+    })
+} ();

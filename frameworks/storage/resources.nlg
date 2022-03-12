@@ -1,0 +1,445 @@
+/*
+ * resources.nlg
+ * NaanIDE
+ *
+ *     These objects track resources with dynamically loaded components and change notifications.
+ * A resource is an object identified by a UUID that typically refers to an external resource we 
+ * wish to access from within Nide. Examples are storage locations, thread hosts, and projects.
+ * A resource is represented here by a dictionary containing the information necessary to access it.
+ * Providers register using a classID string when they wish to handle a resource of that class.
+ * Watchers register and unregister for change notifications to a resource list.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+ 
+/*
+ * rsrcVault
+ *
+ *     Make a resource vault object, which is used for storing credentials and other persistent
+ * information on behalf of resources. The database is the PouchDB that we use for storing access
+ * credentials. The tablename distinguishes different resource classes and resource types within
+ * the database. Resources are identified by a UUID string. This returns a standard (error, vault)
+ * tuple.
+ *
+ */
+
+closure rsrcVault(db, tablename, local vault) {
+    vault = new(object, this)
+
+    // addResource
+    //
+    // Add credentials for accessing a resource, returning the added credential record.
+    
+    vault.addResource = function addResource(resID, data) {
+        vault.table.add(resID, data)
+    }
+    
+    // deleteResource
+    //
+    // Delete resource credentials.
+    
+    vault.deleteResource = function deleteResource(resID, local error, data) {
+        `(error, data) = vault.table.get(resID)
+        if !error
+            `(error, data) = vault.table.delete(data)
+        else if error.status == 404
+            error = false                                                   // already missing
+        if error
+            list(error)
+        else
+            list(false, { ok: true }) }
+
+    // accessResource
+    //
+    // Return credentials for access to the resource.
+
+    vault.accessResource = function accessResource(resID) {
+        `(error, data) = vault.table.get(resID)
+        if error
+            list(error)
+        else
+            list(false, new(data.content))
+    }
+
+    // listResources
+    //
+    // List saved resources in our database as an array of resIDs.
+    
+    vault.listResources = function listResources(local error, data, output, record) {
+        `(error, data) = vault.table.records()
+        if error
+            return (list(error))                                            // can't access our record
+        output = []
+        for record in data.rows
+            output.push(record.key)
+        list(false, output)
+    }
+
+    // dbopen
+    //
+    // Open our database for accessing credentials, and then return the result tuple.
+
+   let dbopen(local error, data) {
+        `(error, data) = db.table(tablename)
+        if !error
+            vault.table = data
+        list(error, vault)
+    }()
+};
+
+
+/*
+ * ResourceManager
+ *
+ *     Make a resource manager object. A resource manager tracks the dynamic list of resource types
+ * available, and also offers providers a storage vault for credentials and other persistent and
+ * possibly sensitive information. This does not track the resources themselves, which is done by
+ * a resource tracker.
+ *     A connector is a registered object in a component that is responsible for connecting with
+ * its resources. Each connector has a stable classID string. A label is a user-visible string,
+ * which is the name of the connector here.
+ *     The database name is the PouchDB that we use for the vault. The prefix distinguishes this
+ * class of resource types from other classes of resource types, e.g. storage vs. projects.  This
+ * returns a standard (error, vault) tuple.
+ *
+ * A connector must implement at least the following members:
+ *      conn.label                              - return the className of the connector
+ *      conn.uifields()                         - entry fields for add this kind of resource in UI
+ *      conn.findResource(resource)             - find a resource by content, returning resID or false
+ *      conn.addResource(resource)              - add the resource dict and return `(error, resID)
+ *      conn.info(resID)                        - return `(error, infoDictionary) tuple
+ *      conn.deleteResource(resID)              - delete the specified resource, returning a tuple
+ *      conn.connect(resID, serviceID, args)    - connect to resource and return object
+ *
+ */
+
+closure ResourceManager(dbname, prefix, local reman, watch, result) {
+    reman = new(object, this)
+    watch = commonWatching.Watchable()
+    reman.watch = watch.watch
+    reman.unWatch = watch.unWatch
+    reman.dbname = dbname
+    reman.conns = {}
+    result =  PouchDB(dbname)
+    if result.0
+        return (result)                                                     // can't access our vault database
+    reman.db = result.1
+    
+    // vault
+    //
+    // Return a vault object for a class, returning the vault or false. If this is successful then
+    // you should call register() below after initializing the connector.
+    reman.vault = function vault(classID, local name, error, data) {
+        name = prefix.concat(classID)
+        if reman.conns[classID] {
+            debuglog("Resource Manager: already registered", name)
+            return (false)
+        }
+        `(error, data) = rsrcVault(reman.db, name)
+        if error
+            ErrorDebugLog("Resource Manager: cannot register", name, error)
+        data
+    }
+
+    // register
+    //
+    // Register a connector, which may recursively call it back for inquiries on its resources. You
+    // must call vault() above first, then initialize and call this if successful.
+    reman.register = function register(classID, obj) {
+        reman.conns[classID] = obj
+        watch.notify(prefix, { added: [classID] })
+    }
+
+    // connectors
+    //
+    // Return an array of the registered connector classIDs.
+    reman.connectors = function connectors() {
+        reman.conns.*.toarray
+    }
+
+    // labels
+    //
+    // Return an array of labels for the registered connectors.
+    reman.labels = function labels(local classID, labels) {
+        labels = []
+        for remanID in reman.conns.*
+            labels.push(reman.conns[classID].label)
+        labels
+    }
+        
+    // watchable
+    //
+    // Return a new Watchable object.
+    reman.watchable = function watchable(connector, local watch) {
+        watch = commonWatching.Watchable()
+        if connector {
+            connector.watch = watch.watch
+            connector.unWatch = watch.unWatch
+        }
+        watch
+    }
+
+    // tracker
+    //
+    // Return a new ResourceTracker tracking object.
+    reman.tracker = function tracker() {
+        ResourceTracker(reman)
+    }
+    
+    // close
+    //
+    // Close the resource manager and its database instance.
+    reman.close = function close() {
+        if reman.db {
+            reman.db.close()
+            reman.db = false }
+        list(false, { ok: true })
+    }
+
+    // finis
+
+    list(false, reman)
+};
+
+
+/*
+ * ResourceTracker
+ *
+ *     A resource tracker maintains a list of resources. Each resource is associated with a
+ * registered connector using a classID. Resources are enumerated from the list provided by each
+ * connector class. A tracker does not store any persistent state information about specific
+ * connectors or resources, and can be updated at any time.
+ *     The tracker object can provide a list of its resources by resID, which are UUID strings.
+ * There is no specific collation order. If you want the resources sorted by name or date or
+ * whatever, please do that yourself. Once you have a resID, you can use the connect method to get 
+ * an instance object with methods appropriate to a specifed service on that resource. For example,
+ * you can  connect to a filesystem instance and then manipulate files. A tracker must be opened 
+ * before use and should be closed when no longer needed.
+ *     A classID identifies a type of connector, a className is the user-friendly string for that
+ * connector type, and a resID is the string that uniquely names a specific resource.
+ *
+ */
+
+closure ResourceTracker(reman, local retor, watch) {
+    retor = new(object, this)
+    watch = commonWatching.Watchable()
+    retor.watch = watch.watch
+    retor.unWatch = watch.unWatch
+
+    // connUpdateOnChange
+    // Update the list when watched connectors change resources.
+    function connUpdateOnChange(classID, changelist, local resID) {
+        for resID in changelist.deleted
+            retor.resids[resID] = undefined
+        for resID in changelist.added
+            retor.resids[resID] = classID
+        watch.notify(classID, changelist)                                   // tell our watchers
+    }
+
+    // addConnResources
+    // Add the resources for the specified connector.
+    function addConnResources(classID, local connector, reslist) {
+        if retor.classIdList.indexOf(classID) >= 0
+            return                                                          // someone screwed up, but let's not join them
+        retor.classIdList.push(classID)
+        connector = reman.conns[classID]
+        connector.watch(connUpdateOnChange)
+        reslist = connector.listResources()
+        if reslist.1
+            connUpdateOnChange(classID, {                                   // notify our new resources
+                added:  reslist.1
+            })
+    }
+
+    // remanUpdateOnChange
+    // Update after a new connector is added to the resource manager.
+    function remanUpdateOnChange(prefix, changelist, local classID) {
+        for classID in changelist.added
+            addConnResources(classID)
+    }
+
+    // classIDs
+    //
+    // Return an array of possible connection classIDs.
+    retor.classIDs = function classIDs() {
+        retor.classIdList
+    }
+    
+    // className
+    //
+    // Return user-friendly name for a classID
+    retor.className = function className(classID) {
+        reman.conns[classID].label
+    }
+    
+    // labels
+    //
+    // Return an array of user-visible labels for our connection types
+    retor.labels = function labels(local labels, classID) {
+        labels = []
+        for classID in retor.classIdList
+            labels.push(className(classID))
+        labels
+    }
+
+    // resources
+    //
+    // Return an array of our known resources as resIDs.
+    retor.resources = function resources(all, local resID, output) {
+        output = [ ]
+        for resID in retor.resids.* {
+            `(error, info) = reman.conns[retor.resids[resID]].info(resID)
+            if !error && (all || !info.hidden)
+                output.push(resID)
+        }
+        output
+    }
+
+    // addResource
+    //
+    // Add a resource for a classID, returning the resID as a standard result tuple.
+    retor.addResource = function addResource(classID, resource) {
+        if !reman.conns[classID]
+            list(Error("resource type not available", classID))
+        else
+            reman.conns[classID].addResource(resource)
+    }
+    
+    // getResource
+    //
+    // Get a resource for the resID as a standard result tuple.
+    retor.getResource = function getResource(resID, local error, classID) {
+        `(error, classID) = resourceClassID(resID)
+        if error
+            list(error)
+        else
+            reman.conns[classID].getResource(resID)
+    }
+
+    // deleteResource
+    //
+    // Delete a resource.
+    retor.deleteResource = function deleteResource(resID, local error, classID) {
+        `(error, classID) = resourceClassID(resID)
+        if error
+            list(error)
+        else
+            reman.conns[classID].deleteResource(resID)
+    }
+    
+    // ensureExists
+    //
+    // Test for resource and add it if needed, returning the resID as a standard result tuple.
+    retor.ensureExists = function ensureExists(classID, resource, local resID) {
+        resID = reman.conns[classID].findResource(resource)
+        if retor.resids[resID]
+            list(false, resID)
+        else
+            addResource(classID, resource)
+    }
+    
+    // uifields
+    //
+    // Return a dictionary of field descriptions for UI
+    retor.uifields = function uifields(classID) {
+        reman.conns[classID].uifields()
+    }
+
+    // resourceClassID
+    //
+    // Get a resource for use and return an `(error, classID) tuple.
+    retor.resourceClassID = function resourceClassID(resID, local classID) {
+        classID = retor.resids[resID]
+        if !classID
+            return (list(Error("resource not found", resID)))
+        if !reman.conns[classID]
+            return (list(Error("resource type not available", classID)))
+        list(false, classID)
+    }
+
+    // info
+    //
+    // Get a dictionary describing the named resource, or false if not found.
+    retor.info = function info(resID, local error, classID, connector, info) {
+        `(error, classID) = resourceClassID(resID)
+        if classID {
+            connector = reman.conns[classID]
+            `(error, info) = connector.info(resID)
+        }
+        new(info)
+    }
+
+    // connect
+    //
+    // Connect to the resource for a service, returning an `(error, instance) tuple.
+    // Example:
+    //      locate.connect(resid, "NideFS", rootpath)
+    retor.connect = function connect args {
+        function (resID, service, local error, classID) {
+            `(error, classID) = resourceClassID(resID)
+            if error
+                return (list(error))
+            reman.conns[classID].connect(resID, service, args.-2)
+        } (args.0, args.1)
+    }
+
+    // open
+    //
+    // Start tracking resources.
+    retor.open = function open() {
+        if retor.classIdList
+            return                                                          // already open
+        watch.reset()
+        retor.resids = { }                                                  // start empty
+        retor.classIdList = []
+        for classID in reman.connectors()
+            addConnResources(classID)
+        reman.watch(remanUpdateOnChange)
+    }
+    
+    // close
+    //
+    // stop tracking resources.
+    retor.close = function close(local classID, connector) {
+        watch.reset()
+        if retor.classIdList {
+            for classID in retor.classIdList {
+                connector = reman.conns[classID]
+                connector.unWatch(connUpdateOnChange)
+            }
+            retor.classIdList = false
+        }
+        reman.unWatch(remanUpdateOnChange)
+        retor.resids = false
+    }
+
+    // finis
+    retor
+};
+
+
+/*
+ * rsrcInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function rsrcInit(local manifest) {
+
+    manifest = `(rsrcVault, ResourceManager, ResourceTracker, rsrcInit)
+
+    Naan.module.build(module.id, "resources", function(modobj, compobj) {
+        require("./storage.nlg")
+        require("./dbt_pouch.nlg")
+        commonWatching = require("../common/watching.nlg")
+        compobj.manifest = manifest
+        module.exports.ResourceManager = ResourceManager
+        module.exports.ResourceTracker = ResourceTracker
+    })
+
+} ();

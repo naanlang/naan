@@ -1,0 +1,65 @@
+/*
+ * node_cp.nlg
+ *
+ *     Child Process operations for NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * CatVideo
+ *
+ * Concatenate a list of videos.
+ *
+ */
+
+closure CatVideo(filepaths, outfile, local fileslist, listfile, error, pending, child) {
+    fileslist = []
+    for file in filepaths
+        fileslist.push("file ".concat(nodePath.resolve("/tmp", file)))
+    fileslist = fileslist.join("\n")
+    listfile = nodePath.resolve("/tmp", "catVideoFiles")
+    `(error, data) = WriteFile(listfile, fileslist, "text")
+    if error
+        return (list(Error("CatVideo: can't write filelist:", error)))
+    outfile = nodePath.resolve("/tmp", outfile)
+    pending = new(nonce)
+    child = nodeCp.execFile("ffmpeg",
+        ["-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", outfile],
+        function(err, stdout, stderr) {
+            debuglog("CatVideo completed ffmpeg", err, "||", stderr, "||", stdout)
+            if err
+                pending.signal(list(Error("ffmpeg failed", err, stderr)))
+            else
+                pending.signal(list(false, stdout))
+        }
+    )
+    child.stdin.on("error", function(err) {
+        // make sure error isn't unhandled, so that a failed uglifyjs doesn't
+        // kill our process when the stdin write occurs after the pipe closes.
+    })
+    child.stdin.end(input)
+    pending.wait()
+};
+
+
+/*
+ * nodeCpInit
+ *
+ * Initialize NodeJS FS operations.
+ *
+ */
+
+function nodeCpInit(local manifest) {
+    manifest = `(CatVideo, nodeCpInit)
+
+    Naan.module.build(module.id, "node_cp", function(modobj, compobj) {
+        require("node_util.nlg")
+        compobj.manifest = manifest
+        modobj.exports.CatVideo = CatVideo
+    })
+}();

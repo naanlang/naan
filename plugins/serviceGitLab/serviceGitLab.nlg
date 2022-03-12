@@ -1,0 +1,65 @@
+/*
+ * serviceGitLab.nlg
+ * serviceGitLab
+ *
+ *     GitLab access for browser and NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * glabReload
+ *
+ */
+
+function glabReload() {
+    jspath = js.r("path")
+    if js.w {
+        hashMD5 = function browserMD5(text) {
+            js.w.SparkMD5.hash(text) }
+        hashMD5_base64 = function browserMD5_base64(text) {
+            js.w.btoa(js.w.SparkMD5.hash(text, true)) }
+        textEncoder = js.w.TextEncoder
+        textDecoder = js.w.TextDecoder
+        atob = js.w.atob
+        btoa = js.w.btoa
+        encodeURIComponent = js.w.encodeURIComponent
+        JSON = js.w.JSON }
+    else if js.g {
+        if !crypto
+            crypto = js.r("crypto")
+        hashMD5 = function nodejsMD5(text) {
+            crypto.createHash("MD5").update(text).digest("hex") }
+        hashMD5_base64 = function nodejsMD5_base64(text) {
+            crypto.createHash("MD5").update(text).digest("base64") }
+        textEncoder = js.g.TextEncoder
+        textDecoder = js.g.TextDecoder
+        atob = js.g.atob
+        btoa = js.g.btoa
+        encodeURIComponent = js.g.encodeURIComponent
+        JSON = js.g.JSON }
+    LoadNotify(glabReload)
+}();
+
+
+/*
+ * glabInit
+ *
+ *     Initialize the GitLab module.
+ *
+ */
+
+function glabInit(local manifest) {
+
+    manifest = `(glabReload, glabInit)
+
+    Naan.module.build(module.id, "serviceGitLab", function(modobj, compobj) {
+        compobj.manifest = manifest
+    })
+    require("frameworks/common", { in: naanlib }).LiveImport()
+    require("./psm_gitlab.nlg").GitLabConnector(App.psm)
+} ();

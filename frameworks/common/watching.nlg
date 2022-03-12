@@ -1,0 +1,97 @@
+/*
+ * watching.nlg
+ * naanlib/frameworks/common/watching
+ *
+ *     A simple notificaiton system to broadcast change to interested parties.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Watchable
+ *
+ *     Watchable objects provide a common protocol to broadcast change notifications and to allow
+ * interested parties to subscribe using register and unregister. A watchable is an instance for a
+ * particular broadcast topic. Watchers are procedures that subscribe to a watchable to be notified.
+ * The owner of the watchable is responsible for telling it about changes by calling the notify
+ * method with a changes dictionary. Each notification can report any number of changes to multiple
+ * items.
+ *
+ * A {changes} dictionary has the following structure, where each field is optional:
+ * {
+ *      added:      [<item>,<item>...<item>]
+ *      changed:    [<item>,<item>...<item>]
+ *      deleted:    [<item>,<item>...<item>]
+ *      <custom>:   [<item>,<item>...<item>]
+ * }
+ *
+ */
+
+closure Watchable(local watch, watchers) {
+    watch = new(object, this)
+    reset()
+
+    // notify
+    //
+    // Notify watchers using:
+    //     watcher(classID, {changes})
+    watch.notify = function notify(classID, changes, local watcher) {
+        for watcher in watchers
+            call(watcher, classID, changes)
+    }
+
+    // watch
+    //
+    // Call the specified watch function after changes occur:
+    //     watcher(classID, {changes})
+    watch.watch = function watch(proc, local wadex) {
+        wadex = watchers.findIndex(function(item) {
+            item eq proc
+        })
+        if wadex < 0
+            watchers.push(proc)
+    }
+        
+    // unWatch
+    //
+    // Stop calling the specified watch function after changes occur.
+    watch.unWatch = function unWatch(proc, local wadex) {
+        wadex = watchers.findIndex(function(item) {
+            item eq proc
+        })
+        if wadex >= 0
+            watchers.splice(wadex)
+    }
+    
+    // reset
+    //
+    // Reset the watch list.
+    watch.reset = function reset() {
+        watchers = []
+    }
+
+    // finis
+    watch
+};
+
+
+/*
+ * wachInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function wachInit(local manifest) {
+    manifest = `(Watchable, wachInit)
+
+    Naan.module.build(module.id, "watching", function(modobj, compobj) {
+        require("./common.nlg")
+        compobj.manifest = manifest
+        module.exports.Watchable = Watchable
+    })
+} ();

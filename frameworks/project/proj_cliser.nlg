@@ -1,0 +1,139 @@
+/*
+ * proj_cliser.nlg
+ * Naanlib/frameworks/project/
+ *
+ * Controllers for client-server projects.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * proj_cliserInstance
+ *
+ *     Create an instance of the client-server projects type. Client-server projects support a web
+ * browser front end and a Naan-based web server on the backend, which can either be a virtual web
+ * server or NodeJS with ExpressJS. Given a new instance you can either load (which fails of the
+ * project is not valid)  or create (which fails if the project already exists.) Unless other noted 
+ * the methods all return standard (error, data) tuples.
+ *
+ */
+
+closure proj_cliserInstance(projman, where, projID, local project) {
+    project = new(object, this)
+    project.name = where.name
+    project.where = where
+    project.projID = projID
+    project.config = projConfig(projman, where)
+    
+    // create
+    //
+    // Create the project with the specified name.
+    //
+    project.create = closure create(name, local result) {
+        result = project.config.create(name)
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // load
+    //
+    //     Load the project.
+    //
+    project.load = closure load(local result) {
+        if project.loaded
+            return (list(false, { ok: true }))
+        result = project.config.load()
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // run
+    //
+    //     Run the project by building and then launching.
+    //
+    project.run = closure run(buildonly) {
+        project.config.run(buildonly)
+    }
+
+    // close()
+    //
+    //     Close the project.
+
+    project.close = function close() {
+        project.config.close()
+        project.fm = false
+        project.loaded = false
+    }
+
+    project
+};
+
+
+/*
+ * proj_cliserType
+ *
+ *     Create a project type object for folder objects.
+ *
+ */
+
+closure proj_cliserType(projman, local cliserProj) {
+    cliserProj = new(object, this)
+    cliserProj.classID = "clientserver"
+    cliserProj.classLabel = "client-server"
+    cliserProj.connect = projConnector(projman, cliserProj)
+    
+    // testActiveLocation
+    //
+    // Test if we can handle a project at the specified location.
+    
+    cliserProj.testActiveLocation = function testActiveLocation(where, local error, config, proj) {
+        if !where.locationID || !where.path
+            return (false)
+        config = projConfig(projman, where)                                 // updates where.name and where.typeID
+        `(error, proj) = config.load()
+        if !error && proj["nide-type"] == cliserProj.classID
+            20
+    }
+
+    // instantiate
+    //
+    // Instantiate a project object for the specified where data.
+    
+    cliserProj.instantiate = function instantiate(where, projID) {
+        proj_cliserInstance(projman, where, projID)
+    }
+
+    // finis
+    cliserProj
+};
+
+
+/*
+ * proj_cliserInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function proj_cliserInit(local manifest) {
+
+    manifest = `(proj_cliserInstance, proj_cliserType, proj_cliserInit)
+
+    Naan.module.build(module.id, "proj_cliser", function(modobj, compobj) {
+        require("./project.nlg")
+        storageFileManager = require("../storage/file_manager.nlg")
+        compobj.manifest = manifest
+    })
+}();

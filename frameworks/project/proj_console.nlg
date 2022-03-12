@@ -1,0 +1,137 @@
+/*
+ * proj_console.nlg
+ * Naanlib/frameworks/project/
+ *
+ * Controllers for console-based projects.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * proj_consoleInstance
+ *
+ * column positioning:                          //                          //                      !
+ *     Create an instance of the console projects type. Console projects interact through the Naan
+ * console (if it exists) and by default can run anywhere Naan runs. Given a new project instance you
+ * can either load an existing project or create a new one. Unless other noted the methods all return
+ * standard (error, data) tuples.
+ *
+ */
+
+closure proj_consoleInstance(projman, where, projID, local project) {
+    project = new(object, this)
+    project.name = where.name
+    project.where = where
+    project.projID = projID
+    project.config = projConfig(projman, where)
+    project.runPageDebug = true                                             // switch to Debug page on run
+
+    // create
+    //
+    // Create the project with the specified name, and leave it loaded if no error.
+    project.create = function create(name, local result) {
+        result = project.config.create(name)
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // load
+    //
+    // Load the project, which fails if it does not already exist.
+    project.load = closure load(local error, info) {
+        if project.loaded
+            return (list(false, { ok: true }))
+        result = project.config.load()
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // run
+    //
+    // Run the project by building and then launching.
+    project.run = closure run(buildonly) {
+        project.config.run(buildonly)
+    }
+
+    // close
+    //
+    // Close the project, releasing resources.
+    project.close = function close() {
+        project.config.close()
+        project.fm = false
+        project.loaded = false
+    }
+
+    // finis
+    project
+};
+
+
+/*
+ * proj_consoleType
+ *
+ *     Create a project type object for folder objects.
+ *
+ */
+
+closure proj_consoleType(projman, local consoleProj) {
+    consoleProj = new(object, this)
+    consoleProj.classID = "console"
+    consoleProj.classLabel = "console"
+    consoleProj.connect = projConnector(projman, consoleProj)
+    
+    // testActiveLocation
+    //
+    // Test if we can handle a project at the specified location.
+    
+    consoleProj.testActiveLocation = function testActiveLocation(where, local error, config, proj) {
+        if !where.locationID || !where.path
+            return (false)
+        config = projConfig(projman, where)                                 // updates where.name and where.typeID
+        `(error, proj) = config.load()
+        if !error && proj["nide-type"] == consoleProj.classID
+            20
+    }
+
+    // instantiate
+    //
+    // Instantiate a project object for the specified where data.
+    
+    consoleProj.instantiate = function instantiate(where, projID) {
+        proj_consoleInstance(projman, where, projID)
+    }
+
+    // finis
+    consoleProj
+};
+
+
+/*
+ * proj_consoleInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function proj_consoleInit(local manifest) {
+
+    manifest = `(proj_consoleInstance, proj_consoleType, proj_consoleInit)
+
+    Naan.module.build(module.id, "proj_console", function(modobj, compobj) {
+        require("./project.nlg")
+        storageFileManager = require("../storage/file_manager.nlg")
+        compobj.manifest = manifest
+    })
+}();

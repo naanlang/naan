@@ -1,0 +1,175 @@
+/*
+ * lambda_naan_control.nlg
+ * serviceAws
+ *
+ *     Access remote AWS lambda from local Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * lancoRest
+ *
+ *    REST interface to the remote lambda.
+ *
+ */
+
+closure lancoRest(local url, client) {
+    client = new(object, this)
+    client.url = "https://s3cn49ir43.execute-api.us-east-1.amazonaws.com"
+
+    // clientRequest() - general request routine
+
+    closure clientRequest(method, path, options, cbReq, local request) {
+        request = xnew(js.w.XMLHttpRequest)
+        request.addEventListener("load", function (event) {
+            cbReq(false, request, event)
+        })
+
+        request.addEventListener("error", function reqFailed(event, local errtext) {
+            if request.status == 0
+                errtext = "connectivity"
+            ellse
+                errtext = "request failed"
+            error = Error(errtext, {
+                status: request.status
+                method: method
+                path: path
+            })
+            cbReq(error, request, event)
+        })
+
+        request.open(method, path, true)
+        if options.responseType
+            request.responseType = options.responseType
+        request.send(options.putdata)
+    }
+
+    //
+    // test()
+    //
+
+    client.test = closure test() {
+        clientRequest("GET", client.url.concat("/"), false, function (error, req, event) {
+            printline(req.responseText)
+        })
+    }
+    
+    // finis
+    
+    client
+};
+
+
+/*
+ * lancoWs
+ *
+ *    WebSockets interface to the remote lambda.
+ *
+ */
+
+closure lancoWs(local url, laws) {
+    laws = new(object, this)
+    laws.url = "wss://8h5htw8bfj.execute-api.us-east-1.amazonaws.com/dev"
+    laws.name = name
+    
+    // connect
+    // Connect with the host if not already connected.
+    function connect() {
+        if !laws.ws
+            laws.ws = xnew(js.w.WebSocket, laws.url)
+    
+        // onopen
+        // The WebSocket connection is now open.
+        laws.ws.onopen = function onopen(e) {
+            debuglog("ws open")
+        }
+
+        // onmessage
+        // A message was received from the worker via WebSockets.
+        
+        laws.ws.onmessage = function onmessage(e, local message, msg) {
+            laws.doMessage(e.data)
+        }
+        
+        // onerror
+        // An error occurred on the WebSocket connection.
+        laws.ws.onerror = function onerror(e) {
+            debuglog("ws error:", totuple(e))
+        }
+        
+        // onclose
+        // The WebSocket connection was closed.
+        laws.ws.onclose = function onclose(e) {
+            debuglog("ws close:", e.code, e.reason)
+            laws.ws = false
+        }
+    }
+    
+    //
+    // doMessage
+    //
+    //     Process the specified undecoded message.
+    laws.doMessage = function doMessage(text, local message, msg) {
+        try {
+            message = new(JSONparse(text))
+        } catch {
+            if true
+                return (debuglog("can't decode incoming ws message:", exception))
+        }
+        if message.respOp == "msgout"
+            { }
+        else
+            debuglog("unknown host response message:", message.respOp)
+    }
+    
+    //
+    // sendControl
+    //
+    //     Send a message to the worker controller.
+
+    laws.sendControl = function sendControl(action, payload) {
+        laws.ws.send(JSONstringify({
+            action: action
+            payload: payload
+        }))
+    }
+    
+    //
+    // test()
+    //
+
+    laws.test = closure test() {
+        sendControl("test", "my load is large")
+    }
+    
+    // finis
+    
+    connect()                                                               // connect right away to start receiving messages
+    laws
+};
+
+
+/*
+ * lancoInit
+ *
+ *     Initialize the lambda control module.
+ *
+ */
+
+function lancoInit(local manifest) {
+
+    manifest = `(lancoRest, lancoWs, lancoInit)
+
+    Naan.module.build(module.id, "lambda_naan_control", function(modobj, compobj) {
+        require("serviceAws/serviceAws.nlg")
+        compobj.manifest = manifest
+        modobj.exports.LambdaRest = lancoRest
+        modobj.exports.LambdaWs = lancoWs
+    })
+
+} ();

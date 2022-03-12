@@ -1,0 +1,137 @@
+/*
+ * node_fs.nlg
+ *
+ *     File system operations for NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * ReadFile
+ *
+ * Read an entire file from the specified path and return the contents.
+ *
+ * Encodings are:
+ *  "text"      - default
+ *  "json"      - perform JSON decoding on result
+ *  "binary"    - return file as buffer
+ *
+ */
+
+function ReadFile(filepath, encoding, local options, error, data) {
+    filepath = nodePath.resolve("/tmp", filepath)
+    options = { }
+    if !encoding || encoding == "text" || encoding == "json"
+        options.encoding = "utf8"
+    else if encoding != "binary"
+        error = Error("ReadFile: invalid encoding", encoding)
+    if !error {
+        `(error, data) = await(nodeFs.promises.readFile(filepath, options))
+        if !error && encoding == "json"
+            `(error, data) = JsonParse(data)
+        if error
+            error = Error("ReadFile failed:", filepath, error)
+    }
+    if error
+        ErrorDebuglog(error)
+    list(error, data)
+};
+
+
+/*
+ * WriteFile
+ *
+ * Write the specified contents to a file at the path.
+ *
+ * Encodings are:
+ *  "text"      - default
+ *  "json"      - perform JSON decoding on result
+ *  "binary"    - return file as buffer
+ *
+ */
+
+function WriteFile(filepath, data, encoding, local options, error) {
+    filepath = nodePath.resolve("/tmp", filepath)
+    options = { }
+    if !encoding || encoding == "text"
+        options.encoding = "utf8"
+    else if encoding == "json" {
+        `(error, data) = JsonStringify(data)
+        options.encoding = "utf8"
+    }
+    else if encoding != "binary"
+        error = Error("WriteFile: invalid encoding", encoding)
+    if !error {
+        `(error, data) = await(nodeFs.promises.writeFile(filepath, data, options))
+        if error
+            error = Error("WriteFile failed:", filepath, error)
+    }
+    if error
+        ErrorDebuglog(error)
+    list(error, data)
+};
+
+
+/*
+ * ReadStream
+ *
+ * Make a read stream.
+ *
+ * Encodings are:
+ *  "text"      - default
+ *  "json"      - perform JSON decoding on result
+ *  "binary"    - return file as buffer
+ *
+ */
+
+function ReadStream(filepath, encoding, local options, error, data) {
+    filepath = nodePath.resolve("/tmp", filepath)
+    options = { }
+    if !encoding || encoding == "text" || encoding == "json"
+        options.encoding = "utf8"
+    else if encoding != "binary"
+        error = Error("ReadStream: invalid encoding", encoding)
+    if !error
+        data = nodeFs.createReadStream(filepath, options)
+    if error
+        ErrorDebuglog(error)
+    list(error, data)
+};
+
+
+/*
+ * DeleteDir
+ *
+ * Delete the directory at the specified path.
+ *
+ */
+
+function DeleteDir(dirpath, local error, data) {
+    dirpath = nodePath.resolve("/tmp", dirpath)
+    `(error, data) = await(nodeFs.promises.rmdir(dirpath, { recursive: true }))
+}
+
+
+/*
+ * nodeFsInit
+ *
+ * Initialize NodeJS FS operations.
+ *
+ */
+
+function nodeFsInit(local manifest) {
+    manifest = `(ReadFile, WriteFile, DeleteDir, nodeFsInit)
+
+    Naan.module.build(module.id, "node_fs", function(modobj, compobj) {
+        require("node_util.nlg")
+        compobj.manifest = manifest
+        modobj.exports.ReadFile = ReadFile
+        modobj.exports.WriteFile = WriteFile
+        modobj.exports.ReadStream = ReadStream
+        modobj.exports.DeleteDir = DeleteDir
+    })
+}();

@@ -1,0 +1,138 @@
+/*
+ * proj_static.nlg
+ * Naanlib/frameworks/project/
+ *
+ * Controllers for static projects, where browser-resident Naan is served from static website.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * proj_staticInstance
+ *
+ *     Create an instance of the static projects type. Static projects support a web browser front
+ * end and a static web server on the backend. Given a new instance you can either load (which fails
+ * if the project is not valid)  or create (which fails if the project already exists.) Unless other-
+ * wise noted the methods all return standard (error, data) tuples.
+ *
+ */
+
+closure proj_staticInstance(projman, where, projID, local project) {
+    project = new(object, this)
+    project.name = where.name
+    project.where = where
+    project.projID = projID
+    project.config = projConfig(projman, where)
+    
+    // create
+    //
+    // Create the project with the specified name.
+    //
+    project.create = closure create(name, local result) {
+        result = project.config.create(name)
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // load
+    //
+    //     Load the project.
+    //
+    project.load = closure load(local result) {
+        if project.loaded
+            return (list(false, { ok: true }))
+        result = project.config.load()
+        project.fs = project.config.fs
+        if project.fs {
+            project.fm = storageFileManager.FileManager(project.fs)
+            project.fm.load()
+            project.loaded }
+        result
+    }
+
+    // run
+    //
+    //     Run the project by building and then launching.
+    //
+    project.run = closure run(buildonly) {
+        project.config.run(buildonly)
+    }
+
+    // close()
+    //
+    //     Close the project.
+
+    project.close = function close() {
+        project.config.close()
+        project.fm = false
+        project.loaded = false
+    }
+
+    project
+};
+
+
+/*
+ * proj_staticType
+ *
+ *     Create a project type object for folder objects.
+ *
+ */
+
+closure proj_staticType(projman, local staticProj) {
+    staticProj = new(object, this)
+    staticProj.classID = "static"
+    staticProj.classLabel = "static"
+    staticProj.connect = projConnector(projman, staticProj)
+    
+    // testActiveLocation
+    //
+    // Test if we can handle a project at the specified location.
+    
+    staticProj.testActiveLocation = function testActiveLocation(where, local error, config, proj) {
+        if !where.locationID || !where.path
+            return (false)
+        config = projConfig(projman, where)                                 // updates where.name and where.typeID
+        `(error, proj) = config.load()
+        if !error && proj["nide-type"] == staticProj.classID
+            20
+    }
+
+    // instantiate
+    //
+    // Instantiate a project object for the specified where data.
+    
+    staticProj.instantiate = function instantiate(where, projID) {
+        proj_staticInstance(projman, where, projID)
+    }
+
+    // finis
+    staticProj
+};
+
+
+/*
+ * proj_staticInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function proj_staticInit(local manifest) {
+
+    manifest = `(proj_staticInstance, proj_staticType, proj_staticInit)
+
+    Naan.module.build(module.id, "proj_static", function(modobj, compobj) {
+        require("./project.nlg")
+        storageFileManager = require("../storage/file_manager.nlg")
+        compobj.manifest = manifest
+    })
+}();

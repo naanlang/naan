@@ -1,0 +1,465 @@
+/*
+ * psm_server.nlg
+ * Naanlib/frameworks/node
+ *
+ * PSM Connector for the Node data stores.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * psmsFsView
+ *
+ *     Make a filesystem view for the specified root path. These functions are accessed locally
+ * within NodeJS. If a callback is specified then the call is async, but otherwise the call is
+ * blocking. There is also a method to dispatch operations requested by the Web API.
+ *
+ */
+
+closure psmsFsView(rootpath, local view, gitter) {
+    view = Filesystem(rootpath)
+    if view.0
+        return (view)                                                       // failed to create filesystem access at rootpath
+    view = view.1
+    
+    // inherited
+    //  --  view.winDrives(callback)
+    //  --  view.testHidden(path, callback)
+    //  --  view.readLines(path, options, callback)
+    //  --  view.readFile(path, options, callback)
+    //  --  view.writeFile(path, data, options, callback)
+    //  --  view.info(path, callback)
+    //  --  view.setTimes(path, atime, mtime, callback)
+    //  --  view.dirList(path, options, callback)
+    //  --  view.mkdir(path, callback)
+    //  --  view.tree(path, depthlimit, callback)
+    //  --  view.dirSearch(path, options, callback)
+    //  --  view.copy(srcpath, destpath, options, callback)
+    //  --  view.reveal(path(s), callback)
+    //  --  view.minimizeApi(content, callback)
+    //  --  view.unzipApi(path, callback)
+    //  --  view.touch(path, callback)
+    //  --  view.shellOpenApi(path, options, callback)
+    //  --  view.grepLines(path, options, callback)
+    //  --  view.gitStatus(path, callback)
+    //  --  view.gitLog(path, callback)
+    //  --  view.gitShowFile(path, callback)
+
+    // api
+    //
+    // Entry point for API requests.
+    
+    view.api = closure api(req, res, local path, proc, result) {
+        if not string(req.query.path) {
+            res.status(400).send("invalid path")
+            return }
+        path = req.query.path
+        
+        // gitterLoaded 
+        // Load gitter if needed for git access, returning false on failure.
+        function gitterLoaded(local result) {
+            if !gitter {
+                result = require("./gitter.nlg").Gitter(view)
+                if result.0 {
+                    res.send(new(array, result))
+                    return (false) }
+                gitter = result.1 }
+            true
+        }
+
+        // op: pathOp
+        function pathOpApi(local selector, local result) {
+            try {
+                result = list(false, xapply(JSpath, req.query.selector, totuple(js.g.JSON.parse(req.query.arglist))))
+            } catch {
+                if true
+                    result = list(Error(exception))
+            }
+            res.send(new(array, result))
+        }
+                 
+        // op: readLines
+        function readLinesApi() {
+            res.send(new(array, view.readLines(path, req.query)))
+        }
+
+        // op: readFile
+        function readFileApi(local options) {
+            options = {
+                dotfiles: "allow" }
+            if req.query.encoding == "binary"
+                options.headers = {
+                    "Content-Type": "application/octet-stream"
+                }
+            else
+                options.headers = {                                         // ### is this always the right default?
+                    "Content-Type": "text/html; charset=UTF-8"
+                }
+            res.sendFile(path, options, function (err, local status) {
+                if err {
+                    if err.code == "ENOENT"
+                        status = 404
+                    else
+                        status = 500
+                    res.status(status).end()
+                } })
+        }
+
+        // op: writeFile
+        function writeFileApi(local options) {
+            options = { }
+            if req.query.md5
+                options.md5 = req.query.md5
+            if req.query.encoding
+                options.encoding = req.query.encoding
+            res.send(new(array, view.writeFile(path, req.body, options)))
+        }
+ 
+        // op: delete
+        function deleteApi(local options) {
+            options = {  }
+            if req.query.recursive
+                options.recursive = true
+            if req.query.directory
+                options.directory = true
+            res.send(new(array, view.delete(path, options)))
+        }
+
+        // op: info
+        function infoApi() {
+            res.send(new(array, view.info(path)))
+        }
+
+        // op: setTimes
+        function setTimesApi() {
+            res.send(new(array, view.setTimes(path, req.query.atime, req.query.mtime)))
+        }
+
+        // op: dirList
+        function dirListApi(local options) {
+            if req.query.head
+                options = { head: true }
+            res.send(new(array, view.dirList(path, options)))
+        }
+        
+        // op: mkdir
+        function mkdirApi() {
+            res.send(new(array, view.mkdir(path)))
+        }
+        
+        // op: tree
+        function treeApi() {
+            res.send(new(array, view.tree(path, req.query.depthlimit)))
+        }
+                
+        // op: dirSearch
+        function dirSearchApi() {
+            res.send(new(array, view.dirSearch(path, req.query)))
+        }
+
+        // op: copy
+        function copyApi() {
+            res.send(new(array, view.copy(path, req.query.destination, req.query)))
+        }
+        
+        // op: reveal
+        function revealApi() {
+            res.send(new(array, view.reveal(path)))
+        }
+        
+        // op: minimize
+        function minimizeApi() {
+            res.send(new(array, view.minimize(req.body)))
+        }
+        
+        // op: unzip
+        function unzipApi() {
+            res.send(new(array, view.unzip(path, req.query.destination)))
+        }
+        
+        // op: touch
+        function touchApi() {
+            res.send(new(array, view.touch(path)))
+        }
+        
+        // op: shellOpen
+        function shellOpenApi() {
+            res.send(new(array, view.shellOpen(path, req.query.args)))
+        }
+        
+        // op: grepLines
+        function grepLinesApi() {
+            res.send(new(array, view.grepLines(path, req.query)))
+        }
+        
+        // op: gitStatus
+        function gitStatusApi() {
+            if gitterLoaded()
+                res.send(new(array, gitter.status(path, req.query)))
+        }
+        
+        // op: gitLog
+        function gitLogApi() {
+            if gitterLoaded()
+                res.send(new(array, gitter.log(path, req.query)))
+        }
+        
+        // op: gitShowFile
+        function gitShowFileApi() {
+            if gitterLoaded()
+                res.send(new(array, gitter.showfile(path, req.query)))
+        }
+
+        proc = {
+            pathOp:         pathOpApi
+            readFile:       readFileApi
+            readLines:      readLinesApi
+            writeFile:      writeFileApi
+            delete:         deleteApi
+            info:           infoApi
+            setTimes:       setTimesApi
+            dirList:        dirListApi
+            mkdir:          mkdirApi
+            tree:           treeApi
+            dirSearch:      dirSearchApi
+            copy:           copyApi
+            reveal:         revealApi
+            minimize:       minimizeApi
+            unzip:          unzipApi
+            touch:          touchApi
+            shellOpen:      shellOpenApi
+            grepLines:      grepLinesApi
+            gitStatus:      gitStatusApi
+            gitLog:         gitLogApi
+            gitShowFile:    gitShowFileApi
+        }[req.query.op]
+        if proc
+            proc()
+        else
+            res.status(400).send("invalid psm op: ".concat(req.query.op))
+    }
+
+    // finis
+    list(false, view)
+};
+
+
+/*
+ * psmsFsConnector
+ *
+ *     Make a PSM file system connector with a single filesystem store. This supports resources
+ * but doesn't use them yet. Maybe someday they'll be helpful.
+ *
+ */
+
+closure psmsFsConnector(psm, api, local connClassID, connector, watch) {
+    connClassID = "NodeFS"
+    connector = new(object, this)
+    connector.psm = psm
+    connector.vault = psm.vault(connClassID)
+    connector.label = "Naan IDE Server"
+    watch = psm.watchable(connector)
+    
+    // hashResourceID
+    //
+    // Make a stable hash based on the resource credentials that we can persist or share between
+    // different domains accessing the same resource.
+    connector.hashResourceID = function hashResourceID(resource, local ident) {
+        ident = resource.urlName
+        if resource.label
+            ident = ident.concat(resource.label)
+        HashSHA256(ident)
+    }
+    
+    // findResource
+    //
+    // Find a resource with the specified contents, returning the resID or false. The loose criteria
+    // is: if added, would the specified contents be redundant to an existing resource?
+    connector.findResource = function findResource(resource, local resID, creds) {
+        for resID in listResources().1 {
+            creds = access(resID).1
+            if resource.urlName == creds.urlName
+                && (!resource.label || resource.label == creds.label)
+                return (resID)
+        }
+        false
+    }
+
+    // addResource
+    //
+    // Add credentials for a named resource. This is just a stub at the moment
+
+    connector.addResource = function addResource(resource, local creds, errors, error, resID, data) {
+        function badField(str) { !string(str) || str.trim().length == 0 }
+        creds = { urlName: resource.urlName }
+        errors = { }
+        if resource.label
+            creds.label = resource.label
+        else
+            creds.label = resource.urlName
+        if badField(creds.label)
+            errors.label = "invalid label"
+        if badField(resource.urlName)
+            errors.urlName = "required field"
+        if length(errors) > 0
+            error = errors
+        else {
+            if resource.hidden
+                creds.hidden = resource.hidden
+            if resource.locked
+                creds.locked = resource.locked
+            resID =  hashResourceID(resource)
+            `(error, data) = connector.vault.addResource(resID, creds)
+            if data {
+                watch.notify(connClassID, { added: [resID] })
+                data = resID } }
+        list(error, data)
+    }
+        
+    // getResource
+    //
+    // Get credentials for a named resource, matching the dictionary semantics of addResource. The
+    // result is a standard result tuple.
+    connector.getResource = function getResource(resID, local error, creds, resource) {
+        `(error, creds) = connector.vault.accessResource(resID)
+        if error
+            return (list(error))
+        resource = {
+            classID: connClassID
+            label: creds.label
+        }
+        if string(creds.urlName)
+            resource.urlName = creds.urlName
+        list(false, resource)
+    }
+
+    // deleteResource
+    //
+    // Delete credentials for a resource
+    connector.deleteResource = function deleteResource(resID) {
+        connector.vault.deleteResource(resID)
+        watch.notify(connClassID, { deleted: [resID] })
+        list(false, { ok: true})
+    }
+        
+    // listResources
+    //
+    // List saved resources in our database
+    connector.listResources = function listResources(local error, original) {
+        `(error, output) = connector.vault.listResources()
+        if error
+            return (list(error))                                            // can't access our saved resources
+        original = ["Host"]
+        if original
+            output = original.concat(output)
+        list(false, output)
+    }
+    
+    // info
+    //
+    // Return info for a resource.
+    connector.info = function info(resID, local info, error, creds) {
+        info = {
+            classID: connClassID
+            type: "remote filesystem"
+            services: ["NideFS", "NideHostAPI"]
+        }
+        if resID == "Host" {
+            info.name = "Host"
+            info.type = "host filesystem"
+            info.locked = true
+            info.where = "localhost:".concat(api.port)
+            info.access = "HostFS"
+        } else {
+            `(error, creds) = connector.vault.accessResource(resID)
+            if creds {
+                if creds.label
+                    info.name = creds.label
+                if creds.locked
+                    info.locked = true
+                if creds.hidden
+                    info.hidden = true
+                info.where = data.urlName
+            }
+        }
+        list(false, info)
+    }
+
+    // access
+    //
+    // Return credentials for connecting to a service.
+    //
+    connector.access = function access(resID) {
+        if resID == "Host"
+            list(false, "HostFS")
+        else
+            connector.vault.accessResource(resID)
+    }
+
+    // connect
+    //
+    // Connect to the specified service. The first argument is the rootpath, which is required.
+    //
+    connector.connect = function connect(resID, service, args, local error, creds, api) {
+        `(error, creds) = connector.access(resID)
+        if !error {
+            if creds == "HostFS"
+                return (psmsFsView(args.0))                                 // use HostFS API
+        }
+        if error
+            list(error)
+        else if service == "NideFS" {
+            return (psmsFsView(args.0))                                     // use HostFS API
+        } else
+            list(Error("unsupported service", service))
+    }
+
+    // finis
+
+    psm.register(connClassID, connector)
+    connector
+};
+
+
+/*
+ * MakeServerPSM
+ *
+ *     Return a new server PSM with our known connectors.
+ *
+ */
+
+function MakeServerPSM(api, local importPSM) {
+    importPSM = require("../storage/psm.nlg")
+    App.psm = importPSM.MakePSM(JSpath.resolve(js.d, "NideDB")).1
+    if App.psm {
+        psmsFsConnector(App.psm, api)
+        require("frameworks/storage/dbt_pouch.nlg").DbConnector(App.psm)    // Pouch databases as filesystems
+    }
+    App.psm
+};
+
+
+/*
+ * psmsInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function psmsInit(local manifest) {
+
+    manifest = `(psmsFsView, psmsFsConnector, MakeServerPSM, psmsInit)
+
+    Naan.module.build(module.id, "psm_server", function(modobj, compobj) {
+        require("./node.nlg")
+        require("./filesystem.nlg")
+        require("./gitter.nlg")
+        compobj.manifest = manifest
+        modobj.exports.MakeServerPSM = MakeServerPSM
+    })
+
+} ();

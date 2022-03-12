@@ -1,0 +1,38 @@
+/*
+ * serviceAws.nlg
+ * serviceAws
+ *
+ *     ServiceAWS module configuration and management for browser and NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * sawsInit
+ *
+ *     Initialize the AWS module.
+ *
+ */
+
+function sawsInit(local manifest) {
+    manifest = `(sawsInit)
+
+    Naan.module.build(module.id, "serviceAws", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("frameworks/common").LiveImport()
+        function sawsPostload() {
+            if js.g
+                awsSDK = js.r("aws-sdk")
+            else
+                awsSDK = JsLoadScript(JSpath.join(module.locpath, "./aws/aws-sdk.min.js"), "AWS")
+            module.exports.awsSDK = awsSDK
+            if App.psm
+                require("./psm_aws.nlg").AwsConnector(App.psm)
+        }()
+        module.postload = sawsPostload
+    })
+} ();

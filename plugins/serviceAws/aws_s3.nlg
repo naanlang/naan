@@ -1,0 +1,134 @@
+/*
+ * aws_s3.nlg
+ * serviceAws
+ *
+ *     Access to S3 services for AWS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * S3bucket
+ *
+ *     S3 buckets.
+ *
+ */
+
+closure S3bucket(s3, name, local bucket) {
+    bucket = new(object, this)
+    bucket.name = name
+    
+    //
+    // list
+    //
+    bucket.listObjects = closure listObjects(local pending) {
+        pending = new(nonce)
+        s3.aws.listObjectsV2({
+            Bucket: bucket.name
+        }, function (error, data) {
+            if error
+                error = Error("S3bucket.list failed", error)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    //
+    // upload
+    //
+    bucket.upload = closure upload(key, data, local pending) {
+        pending = new(nonce)
+        s3.aws.upload({
+            Bucket: bucket.name
+            ACL: "public-read"
+            Body: data
+            Key: key
+                ContentType: "application/octet-stream"                     // force download from browser
+        })
+        .on("httpUploadProgress", function(evt) {
+            debuglog("upload progress", totuple(evt))
+        })
+        .send(function(error, data) {
+            if error
+                error = Error("S3bucket.upload failed", error)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    // finis
+    bucket
+};
+
+
+/*
+ * S3
+ *
+ *     S3 access objects.
+ *
+ */
+
+closure S3(local s3) {
+    s3 = new(object, this)
+
+    //
+    // login
+    //
+    s3.login = closure login(creds, local params) {
+        if !awsSDK
+            return (list(Error("S3.login: no AWS SDK available")))
+        params = {
+            apiVersion: "2012-08-10"
+        }
+        if creds {
+            params.accessKeyId = creds.keyID,
+            params.secretAccessKey = creds.keySecret,
+            params.region = creds.region
+        }
+        s3.aws = xnew(awsSDK.S3, params)
+        `(false, { ok: true })
+    }
+    
+    //
+    // bucket
+    //
+    //     Return a new bucket access object for the table of the specified name. The bucket may not 
+    // yet exist; see S3bucket for methods.
+    //
+    // parameters:
+    //  {
+    //      hash:       <name>                  // primary hash key attribute name (required)
+    //      hashType:   <type>                  // string | numeric (required)
+    //      range:      <name>                  // primary range key attribute name (optional)
+    //      rangeType:  <name>                  // string | numeric (required if range specified)
+    //  }
+    //
+    s3.bucket = closure bucket(name) {
+        S3bucket(s3, name)
+    }
+
+    // finis
+    s3
+};
+
+
+/*
+ * s3Init
+ *
+ *     Initialize the AWS module.
+ *
+ */
+
+function s3Init(local manifest) {
+    manifest = `(S3bucket, S3, s3Init)
+
+    Naan.module.build(module.id, "S3", function(modobj, compobj) {
+        require("./serviceAws.nlg")
+        compobj.manifest = manifest
+        modobj.exports.S3 = S3
+    })
+} ();

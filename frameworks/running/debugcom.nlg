@@ -1,0 +1,163 @@
+/*
+ * debugcom.nlg
+ *
+ *     Debug commander interface to remote debugging.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * DebugCommand
+ *
+ *     Create a debug commander for local debugger access to the remote executor.
+ *
+ */
+
+closure DebugCommand(executor, notify, local decom, excon) {
+    decom = new(object, this)
+    executor.DebugCmd({
+        op: "attach"
+    })
+    decom.executor = executor
+
+    // debugData
+    // Debug data has arrived from the remote debugger.
+    //
+    decom.debugData = function debugData(msg) {
+        // ### debuglog("DebugCommand data:", totuple(msg))
+        if msg.error
+            debuglog("    ", ErrorString(msg.error))
+        if msg.op == "pauser" {
+            decom.entryReason = msg.entry
+            decom.running = msg.depth <= 1 && !msg.entry
+            decom.bpenable = msg.bpenable
+            decom.exenable = msg.exenable
+            notify.runState(debugStatus())
+        } else if msg.op == "status" {
+            decom.running = msg.depth == 0
+            decom.bpenable = msg.bpenable
+            decom.exenable = msg.exenable
+            notify.runState(debugStatus())
+        } else if msg.op == "exception" {
+            decom.running = false
+            if array(msg.exceptstr)
+                msg.exceptstr = totuple(msg.exceptstr)
+            if array(msg.exception)
+                msg.exception = totuple(msg.exception)
+            notify.hitException(msg)
+        } else if msg.op == "breakpoint" {
+            decom.running = false
+            notify.hitBreakpoint(msg)
+        } else if msg.op == "stepped" {
+            decom.running = false
+            notify.hitStep(msg)
+        }
+    }
+
+    // detach
+    // Detach from the remote debugger, rendering this commander obsolete.
+    //
+    decom.detach = function detach() {
+        decom.executor.DebugCmd({
+            op: "detach"
+        })
+        decom.executor = false
+    }
+    
+    // context
+    // Obtain a remote execution context object. This returns a standard `(error, context) tuple.
+    //
+    decom.context = function context() {
+        if excon
+            excon
+        else
+            excon = executor.context()
+    }
+    
+    // remote
+    // Obtain a remote debug utilities object. This returns just the new object.
+    //
+    decom.remote = function remote() {
+        DebugRemote(decom)
+    }
+
+    // debugStatus
+    // Report the debug status in a dictionary.
+    //
+    decom.debugStatus = function debugStatus(local status) {
+        status = { }
+        status.running = decom.running
+        status.bpenable = decom.bpenable
+        status.exenable = decom.exenable
+        status
+    }
+
+    //
+    // Run control.
+    //
+
+    decom.pause = function pause() {
+        decom.executor.DebugCmd({
+            op: "pause"
+        })
+    }
+
+    decom.resume = function resume() {
+        decom.executor.DebugCmd({
+            op: "resume"
+        })
+    }
+
+    decom.stepOver = function stepOver() {
+        decom.executor.DebugCmd({
+            op: "stepover"
+        })
+    }
+
+    decom.stepInto = function stepInto() {
+        decom.executor.DebugCmd({
+            op: "stepinto"
+        })
+    }
+
+    decom.stepOut = function stepOut() {
+        decom.executor.DebugCmd({
+            op: "stepout"
+        })
+    }
+
+    decom.stop = function stop() {
+        decom.executor.DebugCmd({
+            op: "stop"
+        })
+        decom.running = true
+        notify.runState(debugStatus())
+    }
+
+    // finis
+    
+    decom
+};
+
+
+/*
+ * dcomInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function dcomInit(local manifest) {
+    manifest = `(DebugCommand, dcomInit)
+
+    Naan.module.build(module.id, "debugcom", function(modobj, compobj) {
+        require("./running.nlg")
+        compobj.manifest = manifest
+        modobj.exports.DebugCommand = DebugCommand
+        require("./debugutil.nlg")
+    })
+} ();

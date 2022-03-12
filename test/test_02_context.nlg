@@ -1,0 +1,269 @@
+/*
+ * test_02_context.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Test Category 2 - Context
+ *
+ */
+
+RegisterTestCategory("context", [
+    [ "4+3;", "7" ],                                                        // generic first test
+
+    //
+    // rights
+    //
+    
+    [ "nsrights();", "Namespace<Test-context>" ],
+    [ "nsactive().1;", "Namespace<Lang_Lingo>" ],
+    [ "nsrights(nsactive().1);", "Namespace<Test-context>" ],
+    [ "list(nsrights(nsactive().1),nsrights());>", "(Namespace<Test-context> Namespace<Test-context>)" ],
+    [ "list(sudo(nsrights(nsactive().1)),nsrights());>", "(Namespace<NaanRoot> Namespace<Test-context>)" ],
+    [ "sudo(list(nsrights(nsactive().1),nsrights()));>", "(Namespace<NaanRoot> Namespace<Lang_Lingo>)" ],
+
+    //
+    // namespaces
+    //
+    
+    [ "defNS=nsactive();>", "(Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "function setNS(ns) { ns=reverse(ns),sudo(nsactive(reverse(ns, defNS))) };", "setNS" ],
+    [ "x;", "x" ],
+    [ "y;", "y" ],
+    [ "length(symlist(nsactive(true).0));", "170"],
+    [ "testvar;", "testvar" ],
+    [ "function setTestvar(v) { testvar=v };", "setTestvar" ],
+    [ "naanvar;", "naanvar" ],
+    [ "namespace();", "Namespace<NaanRoot>" ],
+    [ "namespace(true);", "Namespace<NaanCore>" ],
+    [ "namespace(1.0);", "false" ],
+    [ "nine;", "nine" ],
+    [ "blue = new(namespace, \"blue\");", "Namespace<blue>" ],
+    // now in namespace blue
+    [ "setNS(list(blue));;setNS(list(false, blue));>", "(Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    // now in namespace NaanRoot
+    [ "setNS(list(false, blue));;nine = new(namespace, 9);", "Namespace<9>" ],
+    // now in namespace 9
+
+    [ "setNS(list(nine, false, blue));;namespace(blue);", "\"blue\"" ],
+    [ "setNS(list(nine, false, blue));;nsactive();>", "(Namespace<9> Namespace<NaanRoot> Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(nine, false, blue));;setNS(list(blue));>", "(Namespace<9> Namespace<NaanRoot> Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    // now in namespace blue
+    [ "setNS(list(blue));;hidevar;", "hidevar" ],
+    [ "setNS(list(blue));;nsactive();>", "(Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+
+    [ "setNS(list(blue));;setNS(list(nine));>", "(Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    // now in namespace 9
+    [ "setNS(list(nine));;hidevar;", "hidevar" ],
+    [ "setNS(list(nine));;setTestvar(hidevar);", "hidevar" ],
+    [ "setNS(list(nine));;setNS(list(nine, blue));>", "(Namespace<9> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(nine, blue));;testvar;", "hidevar" ],
+    [ "setNS(list(nine, blue));;setNS(list(blue, nine));>", "(Namespace<9> Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    // now in namespace blue
+    [ "setNS(list(blue, nine));;printq(testvar);", "9::hidevar|hidevar" ],
+    [ "setNS(list(blue, nine));;setNS(list(blue));>", "(Namespace<blue> Namespace<9> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(blue));;printq(testvar);", "9::hidevar|hidevar" ],
+    
+    [ "setNS(list(blue));;function () { moveproc(false, testvar) }();", { errors: "can't modify 9::hidevar from blue" } ],
+    [ "setNS(list(blue));;closure () { function inner() { moveproc(false, testvar) }, inner(), }();", { errors: "can't modify 9::hidevar from blue" } ],
+    [ "setNS(list(blue));;function fromblue1() { moveproc(false, testvar) };", "fromblue1" ],
+    [ "setNS(list(blue));;fromblue1();", { errors: "can't modify 9::hidevar from blue" } ],
+    [ "setNS(list(blue));;function fromblue2() { moveproc(false, `testvar) };", "fromblue2" ],
+    [ "setNS(list(blue));;fromblue2();", { errors: "can't modify Test-context::testvar from blue" } ],
+    [ "setNS(list(blue));;function fromblue3() { testvar=17 };", "fromblue3" ],
+    [ "setNS(list(blue));;fromblue3();", { errors: "can't modify Test-context::testvar from blue" } ],
+    [ "setNS(list(blue));;function fromblue4(first) { 18 };", "fromblue4" ],
+    [ "setNS(list(blue));;getproc(car);", "[Builtin car]" ],
+    [ "setNS(list(blue));;fromblue4 = cons(`function, cons(false, cons(list(ba), list(list(`+,1,18)))));>", "(function false (ba) (+ 1 18))" ],
+    [ "setNS(list(blue));;fromblue4();", "18" ],
+
+    [ "setNS(list(blue));;function fromblue5 testvar { first };", "fromblue5" ],
+    [ "setNS(list(blue));;function fromblue5(testvar) { first };", "==> redefined: fromblue5|fromblue5" ],
+
+    [ "setNS(list(blue));;function& fromblue5(ba) { eval(ba) };", "==> redefined: fromblue5|fromblue5" ],
+    [ "setNS(list(blue));;fromblue5(quote(setNS(list(blue, nine))));>", "(Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(blue, nine));;fromblue5(quote(setNS(list(blue))));>", "(Namespace<blue> Namespace<9> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(blue));;fromblue5(quote(nsactive(cons(false, nsactive(true)))));>", { errors: "Namespace<blue>: no privileges to activate NaanRoot" } ],
+    [ "setNS(list(blue));;fromblue5(quote(nsactive(cons(nine, nsactive(true)))));", { errors: "Namespace<blue>: no privileges to activate 9" } ],
+    [ "setNS(list(blue));;fromblue5(quote(function () { ba }()));>", "(Lib::call (function lambda false ba))" ],
+
+    [ "setNS(list(blue));;fromblue5(quote(nsactive()));>", "(Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(blue));;fromblue5(quote(nsactive(true))) == nsactive(true);", "true" ],
+
+    [ "setNS(list(blue));;function () { testvar=17 }();", { errors: "can't modify Test-context::testvar from blue" } ],
+
+    [ "setNS(list(blue));;closure (ba) { function inner(x) { naanvar = x }, inner(ba) }(37);", { errors: "can't modify Test-context::naanvar from blue" } ],
+    [ "setNS(list(blue));;function (ba) { ba=17 }();", "17" ],
+
+    [ "setNS(list(blue));;function nospreader ba { car(ba) };", "nospreader" ],
+    [ "setNS(list(blue));;nospreader(39);", "39" ],
+    [ "setNS(list(blue));;function (x, y) { x*y, }(11, 17);", "187" ],
+
+    [ "setNS(list(blue));;closure nestest1(ba) { function inner(bx) { blueref = bx }, inner(ba) };", "nestest1" ],
+    [ "setNS(list(blue));;nestest1(31);", "31" ],
+    [ "setNS(list(blue));;closure nestest2(ba) { function inner(x) { blueref = x }, inner(ba) };", "nestest2" ],
+    [ "setNS(list(blue));;nestest2(28);", "28" ],
+    [ "setNS(list(blue));;namespace(namespace(`testvar));", "\"Test-context\"" ],
+    [ "setNS(list(blue));;closure nestest3(bb) { function inner(ba) { blueref = ba }, inner(bb) };", "nestest3" ],
+    [ "setNS(list(blue));;nestest3(43);", "43" ],
+    [ "setNS(list(blue));;namespace(namespace(`testvar));", "\"Test-context\"" ],
+
+    [ "setNS(list(blue));;namespace(car(nsactive()));", "\"blue\"" ],
+    [ "setNS(list(blue));;macro repsymval(sym) { printline(\"value of \", namespace(namespace(sym)), \"::\", sym, \" is: \", car(sym)) };", "repsymval" ],
+    [ "setNS(list(blue));;namespace(namespace(`naanvar));", "\"Test-context\"" ],
+    [ "setNS(list(blue));;function (naanvar) { repsymval(naanvar) }(71);", "value of blue::naanvar is: 71|71" ],
+    [ "setNS(list(blue));;namespace(namespace(`naanvar));", "\"Test-context\"" ],
+    [ "setNS(list(blue));;function bluther() { naanvar = 73 };", "bluther" ],
+    [ "setNS(list(blue));;bluther();", { errors: "can't modify Test-context::naanvar from blue" } ],
+
+    [ "setNS(list(blue));;function () { nsrights() }();", "Namespace<blue>" ],
+    [ "setNS(list(blue));;function () { function () { nsrights() }(), }();", "Namespace<blue>" ],
+
+    [ "setNS(list(blue));;$$=function () { function t() { nsrights() }, t, }();>", "t" ],
+    [ "setNS(list(blue));;call($$,);", "Namespace<blue>" ],
+
+    [ "setNS(list(blue));;function () { function t() { nsrights() }, t(), }();", "Namespace<blue>" ],
+    [ "setNS(list(blue));;$$=function () { function t() { nsrights() }, `t, }();>", "t" ],
+    [ "setNS(list(blue));;call($$,);", "Namespace<blue>" ],
+
+    [ "setNS(list(blue));;ftemp = function () { function t ba { apply(car(ba), cdr(ba)) }, `t }();", "t" ],
+    [ "setNS(list(blue));;ftemp(function (x) { print(x), nsrights() }, \"hi-\");", "hi-|Namespace<blue>" ],
+    [ "setNS(list(blue));;ftemp(function (xy) { print(xy), nsrights() }, \"hi-\");", "hi-|Namespace<blue>" ],
+
+    [ "setNS(list(blue));;function bluert1() { function () { nsrights() }(), };", "bluert1" ],
+    [ "setNS(list(blue));;bluert1();", "Namespace<blue>" ],
+    [ "setNS(list(blue));;function bluert2() { function t() { nsrights() }, t() };", "bluert2" ],
+    [ "setNS(list(blue));;bluert2();", "Namespace<blue>" ],
+    [ "setNS(list(blue));;function bluert3() { function () { nsrights() }, };", "bluert3" ],
+    [ "setNS(list(blue));;$$=bluert3();>", "(function lambda false (nsrights))" ],
+    [ "setNS(list(blue));;call($$,);", "Namespace<blue>" ],
+    
+    [ "setNS(list(blue));;nns=new(namespace, \"newblue\");", "Namespace<newblue>" ],
+    [ "setNS(list(blue));;setNS(list(nns, blue));;nsactive().0;", "Namespace<newblue>" ],
+    [ "setNS(list(blue));;setNS(list(nns, blue));;sadjoe;", "sadjoe" ],
+    [ "setNS(list(blue));;setNS(list(nns, blue));;namespace(sadjoe);", "Namespace<newblue>" ],
+    [ "setNS(list(blue));;setNS(list(nns, blue));;setNS(list(blue));>", "(Namespace<newblue> Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(blue));;$$=symlist(nns);>", "(newblue::sadjoe)" ],
+    [ "setNS(list(blue));;joe=$$.0;", "sadjoe" ],
+    [ "setNS(list(blue));;namespace(joe);", "Namespace<newblue>" ],
+    [ "setNS(list(blue));;delete(nns);", "false" ],
+    [ "setNS(list(blue));;namespace(joe);", "false" ],
+    [ "setNS(list(blue));;interned(joe);", "false" ],
+    [ "setNS(list(blue));;nsactive().0;", "Namespace<blue>" ],
+
+    //
+    // additional security checks
+    //
+    
+    [ "setNS(list(blue));;function sudo() { nsrights() };", { text: "cannot define function sudo in Namespace<blue>" } ],
+    [ "setNS(list(blue));;apply(`(function sudo false (nsrights)));", { errors: "privilege violation in (function sudo false (nsrights))" } ],
+
+    //
+    // xlock
+    //
+    
+    [ "setNS(list(blue));;blueobj = new(object);", "Object{0}" ],
+    [ "setNS(list(blue));;blueobj.a=3;", "3" ],
+    [ "setNS(list(blue));;blueobj.b=4;", "4" ],
+    [ "setNS(list(blue));;blueobj.c=5;", "5" ],
+    [ "setNS(list(blue));;xlock(blueobj, car(nsactive(true)));", { errors: "can't lock Object{3} to NaanRoot" } ],
+    [ "setNS(list(blue));;xlock(blueobj, car(nsactive()));", "Object{3}" ],
+    [ "setNS(list(blue));;setNS(list(nine, blue));>", "(Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(nine, blue));;blueobj.d=6;", { errors: "can't modify blue::Object{3} from 9" } ],
+    [ "setNS(list(nine, blue));;xlock(blueobj);", "false" ],
+
+    [ "setNS(list(nine, blue));;ninearray = new(array);", "[]" ],
+    [ "setNS(list(nine, blue));;xset(ninearray, 0, `a);", "a" ],
+    [ "setNS(list(nine, blue));;xset(ninearray, 1, `b);", "b" ],
+    [ "setNS(list(nine, blue));;xlock(ninearray, car(nsactive()));", "[a, b]" ],
+    [ "setNS(list(nine, blue));;setNS(list(blue, nine));>", "(Namespace<9> Namespace<blue> Namespace<Test-context> Namespace<Lang_Lingo> Namespace<NaanCore>)" ],
+    [ "setNS(list(blue, nine));;xset(ninearray, 2, `c);", { errors: "can't modify 9::Array[2] from blue" } ],
+    [ "setNS(list(blue, nine));;xlock(ninearray);", "false" ],
+    [ "delete(blue, nine);", "false" ],
+
+    //
+    // tail call optimization
+    //
+    
+    [ "function testRecurCheck(x) { if stacktrace().length > 200 throw('recursed '.concat(x)) };", "testRecurCheck" ],
+
+    [ "function test1(x) { if x > 10000 printline(x) else test2(x+1) };", "test1" ],
+    [ "function test2(x) { testRecurCheck(x), test1(x+1) };", "test2" ],
+    [ "test2(4);", "10001|10001" ],
+
+    [ "function test1(x) { if x > 10000 printline(x) else test2(x+1), undefined() };", "==> redefined: test1|test1" ],
+    [ "test2(5);", { errors: "exception: recursed 101" } ],
+
+    [ "function test1(x) { if x > 10000 printline(x) else loop test2(x+1) };", "==> redefined: test1|test1" ],
+    [ "test2(6);", { errors: "exception: recursed 102" } ],
+
+    [ "function test1(x) { if x > 10000 printline(x) else 0+test2(x+1) };", "==> redefined: test1|test1" ],
+    [ "test2(7);", { errors: "exception: recursed 151" } ],
+
+    [ "function test2(x) { testRecurCheck(x), if true test1(x+1) else print(x) };", "==> redefined: test2|test2" ],
+    [ "test2(8);", { errors: "exception: recursed 152" } ],
+
+    [ "function test1(x) { if x > 10000 printline(x) else loop test2(x+1, 4, 5) };", "==> redefined: test1|test1" ],
+    [ "function test2(x,y,z) { testRecurCheck(x), loop if true { test1(x+1),break } else print(x) };", "==> redefined: test2|test2" ],
+    [ "test2(9);", { errors: "exception: recursed 51" } ],
+
+    [ "function test1 xt { if car(xt) > 10000 printline(xt) else test2(car(xt)+1) };", "==> redefined: test1|test1" ],
+    [ "function test2 xt { testRecurCheck(car(xt)), test1(car(xt)+1) };", "==> redefined: test2|test2" ],
+    [ "test2(10);", "(10001)|(10001)" ],
+
+    [ "oo=new(object);", "Object{0}"],
+    [ "oo.test1 = function test1(x) { if x > 10000 printline(x) else test2(x+1) };", "==> redefined: test1|test1"],
+    [ "oo.test2 = function test2 xt { testRecurCheck(car(xt)), oo.test1(car(xt)+1) };", "==> redefined: test2|test2"],
+    [ "oo.test1(11);", { errors: "exception: recursed 156" } ],
+
+    [ "function test1 xt { testRecurCheck(car(xt)), if car(xt) > 10000 printline(xt) else test1(car(xt)+1) };",
+        "==> redefined: test1|test1" ],
+    [ "test1(12);", "(10001)|(10001)" ],
+
+    [ "(function testnfs(a, b) { function inner() { print('a=', a) }, inner(), if a<2 { testnfs(a+1), inner() } else inner() })(0);",
+        "a=0a=1a=2a=2a=1a=0|0"],
+    
+    //
+    // closure instances
+    //
+    
+    [ "closure outer(x) {\n"
+        "closure inner(y) {\n"
+        "   if !x\n"
+        "       x = '-'\n"
+        "   printline(x,y)\n"
+        "   function() {\n"
+        "       print(x, ':', y)\n"
+        "   }.1\n"
+        "}.1\n"
+      "};", "outer" ],
+    [ "instances(outer);>", "(outer)" ],
+    [ "a1 = outer(1);", "inner" ],
+    [ "a2 = outer(2);", "inner" ],
+    [ "b1 = a1(3);", "13|lambda" ],
+    [ "b2 = a2(4);", "24|lambda" ],
+    [ "b2b = outer(6);", "inner" ],
+    [ "instances(b1);>", "(lambda lambda lambda lambda lambda lambda)" ],
+    [ "instances(b2);>", "(lambda lambda lambda lambda lambda lambda)" ],
+    [ "instances(outer);>", "(outer outer outer outer)" ],
+    [ "instances(outer).map(function(o) { car(o.proc.2.0) });>", "(6 2 1 x)"],
+    [ "a1=false;a2=false;b1=false;b2=false;", "false|false|false|false" ],
+    [ "instances(outer);>", "(outer outer)" ],
+    
+    //
+    // closure-object integration
+    //
+    
+    [ "closure Xx(y, local xx) { xx = new(object, this) };", "Xx" ],
+    [ "x = Xx(33);", "Object{0}" ],
+    [ "car(x@\\.closure.proc.2.0)", "33" ],
+    [ "new(object, 3)@*", "false" ]
+]);

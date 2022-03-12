@@ -1,0 +1,528 @@
+/*
+ * gitops.nlg
+ * serviceGitLab
+ *
+ *     GitLab access for performing remote Git operations.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * GitLabOps
+ *
+ *     An object to perfor general GitLab operations using GraphQL.
+ *
+
+Play-lng> rr = App.nide.locate.connect("04d1e9aa-d154-4e99-b60f-3a67d4033ac4", "Git").1;
+$: Object{2}
+Play-lng> rr.*;
+$: ("userid", "repolist")
+Play-lng> rr.repolist();
+$: (false, {
+    data: {
+        viewer  : {
+            repositories: {
+                nodes           : [
+                    { name: "DAStool" },
+                    { name: "DDPinternal" },
+                    { name: "Naan" },
+                    { name: "aws-learning" },
+                    { name: "Naanlang" }] } } } })
+Play-lng> rr.userid();
+$: (false, {
+    data: {
+        viewer  : { login: "rczulch" } } })
+
+ *
+ */
+
+closure GitLabOps(access, local gops, url) {
+    gops = new(object, this)
+    url = "https://gitlab.com/api/graphql"
+    urlrest = "https://gitlab.com/api/v4/"
+
+    // userid
+    //
+    // Return the userid string for the provided PAT.
+    //
+    gops.userid = closure userid(local query, error, response, result) {
+        query = "{
+            \"query\": \"query { currentUser { username }}\"
+        }"
+        `(error, response) = await(js.w.fetch(
+            url, {
+            method: "post"
+            body: query
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": query.length
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitLab gql fetch failed:", error))
+        else if result.error
+            list(Error("GitLab query error:", result.error))
+        else if !result.data
+            list(Error("GitLab empty result"))
+        else
+            list(false, result.data.currentUser.username)
+    }
+
+    // repolist
+    //
+    // Return an array of available repositories with Node IDs.
+    //
+    gops.repolist = closure repolist(local query, response, result) {
+        query = "{
+            \"query\": \"query { projects (membership: true, first:50) { nodes { name, id, fullPath } } }\"
+        }"
+        `(error, response) = await(js.w.fetch(
+            url, {
+            method: "post"
+            body: query
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": query.length
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitLab gql fetch failed:", error))
+        else if result.error
+            list(Error("GitLab query error:", result.error))
+        else if !result.data
+            list(Error("GitLab empty result"))
+        else                                                                // output { name, idnum }
+           list(false,  new(result.data.projects.nodes.map(function(item) {
+                {
+                    name:       item.name
+                    id:         item.id.match(RegExp("[0-9]+$")).0
+                    fullPath:   item.fullPath
+                }
+            })))
+    }
+        
+    // repomake
+    //
+    // Make an empty project (and repo) with the specified name, returning a standard tuple of the
+    // `(error, result) form. On success the result is the repodict for the new repo.
+    //
+    gops.repomake = closure repomake(name, local query, response, result) {
+        query = urlrest.concat("projects/", EncodeQuery("?", { name: name }))
+        `(error, response) = await(js.w.fetch(
+            query, {
+            method: "post"
+            headers: {
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitLab post fetch failed:", error))
+        else if response.status != 201
+            list(Error("GitLab: cannot create repo:", name, new(result), { status: response.status }))
+        else
+            list(false, {
+                name:       result.name
+                id:         result.id
+                fullPath:   result.path_with_namespace
+            })
+    }
+
+    // repo
+    //
+    // Return a repo access object for the specified repodict.
+    //
+    gops.repo = function repo(repodict) {
+        GitLabRepo(access, repodict)
+    }
+
+    // finis
+    
+    list(false, gops)
+};
+
+
+/*
+ * GitLabRepo
+ *
+ *     An object to perform GitLab repo operations using the REST and GraphQL APIs.
+
+rr = App.nide.locate.connect("04d1e9aa-d154-4e99-b60f-3a67d4033ac4", "Git").1;
+glr=rr.repo(rr.repolist().1.1).1;
+glr.tree();
+glr.tree({deep:false});
+glr.tree({path:"myfolder"});
+glr.showfile("app.py");
+
+ *
+ *
+ */
+
+closure GitLabRepo(access, repodict, local gepo, url) {
+    gepo = new(object, this)
+    url = "https://gitlab.com/api/graphql"
+    urlrest = "https://gitlab.com/api/v4/"
+    
+    // importRestCommit
+    //
+    // Import a commit from GitLab field terminology to ours.
+    //
+    function importRestCommit(gldict, local common) {
+        common = {
+            hash:               gldict.id
+            author:             gldict.author_name
+            email:              gldict.author_email
+            date:               gldict.authored_date
+            committer_name:     gldict.committer_name
+            committer_email:    gldict.committer_email
+            committer_date:     gldict.committed_date
+            message:            gldict.message
+        }
+        if gldict.parent_ids
+            common.parents = gldict.parent_ids
+        common
+    }
+    
+    // branchesAndTags
+    //
+    // Return a list of repository branches, with an optional search string.
+    //
+    closure branchesAndTags(endpoint, pardict, local params, query, error, response, result) {
+        if pardict
+            params = EncodeQuery("?", pardict)
+        else
+            params = ""
+        query = urlrest.concat("projects/", repodict.id, "/repository/", endpoint, params)
+        `(error, response) = await(js.w.fetch(
+            query, {
+            method: "get"
+            headers: {
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitLab get fetch failed:", error))
+        else if !result
+            list(Error("GitLab empty result"))
+        else
+            list(false, new(result.map(function(item, local common) {
+                common = {
+                    name:   item.name
+                    commit: importRestCommit(item.commit)
+                }
+                if defined(item, merged)
+                    common.merged = item.merged
+                if defined(item, default)
+                    common.default = item.default
+                if defined(item, target)
+                    common.target = item.target
+                if defined(item, message)
+                    common.message = item.message
+                common
+            })))
+    }
+        
+    // branches
+    //
+    // Return a list of repository branches, with an optional search string.
+    //
+    gepo.branches = closure branches(search, local pardict) {
+        pardict = {}
+        if string(search)
+            pardict.search = search
+        branchesAndTags("branches", pardict)
+    }
+        
+    // tags
+    //
+    // Return a list of repository tags, with an optional search string.
+    //
+    gepo.tags = closure tags(search, local pardict) {
+        pardict = {}
+        if string(search)
+            pardict.search = search
+        branchesAndTags("tags", pardict)
+    }
+
+    // commits
+    //
+    // Return a list of commits in the repo, optionally matching the specified file path.
+    //
+    gepo.commits = closure commits(filepath, local params, query, error, response, result) {
+        if filepath
+            params = EncodeQuery("?", { path: filepath })
+        else
+            params = ""
+        query = urlrest.concat("projects/", repodict.id, "/repository/commits", params)
+        `(error, response) = await(js.w.fetch(
+            query, {
+            method: "get"
+            headers: {
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitLab get fetch failed:", error))
+        else if !result
+            list(Error("GitLab empty result"))
+        else
+            list(false, new(result.map(function(item) {
+                importRestCommit(item)
+            })))
+    }
+    
+    // tree
+    //
+    // Retrieve a commit tree, with similar structure to filesystem trees. Options include:
+    // {
+    //      path: <relpath>     - relative path below repository to start
+    //      deep: <boolean>     - whether to include recursive children.
+    //      ref:  <commit>      - branch, tag or commit hash, default "HEAD"
+    // }
+    //
+    gepo.tree = closure tree(options, local path, ref, params, query, error, response, result) {
+        path = options.path
+        ref = options.ref
+        if !ref
+            ref = "HEAD"
+        params = "ref:".concat("\\\"", ref, "\\\"")
+        if !defined(options.deep) || options.deep
+            params = params.concat(", recursive: true")
+        if path {
+            if path.slice(0,1) == "/"
+                path = path.slice(1)                                        // remove initial slash
+            if path.slice(-1) == "/"
+                path = path.slice(0,-1)                                     // remove terminal slash
+             if path != ""
+                params = params.concat(", path: ", "\\\"", path, "\\\"") }
+        else
+            path = ""
+        query = strcat("{ "
+            "\"query\": \"query { "
+                "project (fullPath: ", "\\\"", repodict.fullPath, "\\\"", ") { "
+                    "repository { "
+                        "tree (", params, ") { "
+                            "blobs { "
+                                "nodes { "
+                                    "path "
+                                    "mode "
+                                    "sha "
+                                "} "
+                                "pageInfo { "
+                                    "hasNextPage "
+                                    "endCursor "
+                                "} "
+                            "} "
+                        "} "
+                    "} "
+                "} "
+            "}\" "
+        "}")
+        `(error, response) = await(js.w.fetch(
+            url, {
+            method: "post"
+            body: query
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": query.length
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitLab gql fetch failed:", error))
+        else if result.error
+            list(Error("GitLab query error:", result.error))
+        else if !result.data
+            list(Error("GitLab empty result"))
+        else {
+            let (blobs, item, tree, dircache, patharray, parent, name) {
+                blobs = result.data.project.repository.tree.blobs
+                if blobs.pageInfo.hasNextPage
+                    debuglog("GitLab repo blobs truncated by paging")
+                tree = {
+                    name:       path.split("/").pop()
+                    data:       {
+                                    platform: "GitLab"
+                                    semantics: "git"
+                                    pathsep: "/" }
+                    parents:    []
+                    children:   []
+               }
+                if path != ""
+                    tree.parents = new(path.split("/"))
+
+                // findir
+                // Given an array of directory path elements, return the directory dictionary
+                dircache = { }                                              // pathnames to dir dict
+                function findir(patharray, local dir, dirname) {
+                    if patharray.length == 0
+                        tree
+                    else {
+                        dirname = patharray.join("/")
+                        dir = dircache[dirname]
+                        if !dir {
+                            parent = findir(patharray.slice(0,-1))          // all-but-last element
+                            dir = {
+                                name: patharray.slice(-1).0
+                                children: [] }
+                            parent.children.push(dir)
+                            dircache[dirname] = dir
+                        }
+                        dir }
+                }
+
+                // record files in tree
+                for item in blobs.nodes {
+                    patharray = item.path.split("/").slice(tree.parents.length)
+                    name = patharray.slice(-1).0                            // last path element
+                    parent = findir(patharray.slice(0,-1))                  // all-but-last element
+                    parent.children.push({
+                        name: name
+                        mode: item.mode
+                        hash: item.sha
+                    })
+                }
+                tree
+            }()
+        }
+    }
+        
+    // getblob
+    //
+    // Retrieve a blob using the specified query and method.
+    //
+    closure getblob(query, method) {
+        `(error, response) = await(js.w.fetch(
+            query, {
+            method: method
+            headers: {
+                "Authorization":    "bearer ".concat(access.userPat)
+            } }))
+        if !error {
+            if method == "head" {
+                if response.status != 200
+                    result = { message: response.status }
+                else
+                    result = {
+                        name:           response.headers.get("x-gitlab-file-name")
+                        path:           response.headers.get("x-gitlab-file-path")
+                        blobID:         response.headers.get("x-gitlab-blob-id")
+                        commitID:       response.headers.get("x-gitlab-commit-id")
+                        lastCommitID:   response.headers.get("x-gitlab-last-commit-id")
+                        sha256:         response.headers.get("x-gitlab-content-sha256")
+                        size:           response.headers.get("x-gitlab-size")
+                        encoding:       response.headers.get("x-gitlab-encoding")
+                        ref:            response.headers.get("x-gitlab-ref")
+                    }
+            }
+            else
+                `(error, result) = await(response.json())
+        }
+        if error
+            list(Error("GitLab: get/head failed:", error))
+        else if response.status != 200
+            list(Error("GitLab: cannot retrieve file:", result.message))
+        else if method == "head"
+            list(false, result)
+        else if !result
+            list(Error("GitLab: empty result"))
+        else {
+            if result.encoding == "base64"
+                result.content = atob(result.content)
+            list(false, {
+                name:           result.file_name
+                path:           result.file_path
+                blobID:         result.blob_id
+                commitID:       result.commit_id
+                lastCommitID:   result.last_commit_id
+                sha256:         result.content_sha256
+                size:           result.size
+                encoding:       result.encoding
+                ref:            result.ref
+                content:        result.content
+            })
+        }
+    }
+
+    // readfile
+    //
+    // Retrieve a named file within a commit. The filepath must be the path of the file within the 
+    // repo. Available options include:
+    //  {
+    //      ref:  <commit>      - branch, tag or commit hash, default "HEAD"
+    //      head: <boolean>     - true to obtain metadata only without contents
+    //  }
+    //
+    gepo.readfile = closure readfile(filepath, options, local ref, params, query, method, error, response, result) {
+        if !string(filepath)
+            return (list(Error("filepath must be a string:", filepath)))
+        ref = options.ref
+        if !string(ref)
+            ref = "HEAD"
+        params = EncodeQuery("?", { ref:  ref })
+        query = urlrest.concat("projects/", repodict.id, "/repository/blobs/", encodeURIComponent(filepath), params)
+        if options.head
+            method = "head"
+        else
+            method = "get"
+        getblob(query, method)
+    }
+    
+    // showfile
+    //
+    // Retrieve just the content of a named file within a commit. This is just like readfile except 
+    // that it just gets the content.
+    //
+    gepo.showfile = closure showfile(filepath, options, local error, result) {
+        `(error, result) = readfile(filepath, options)
+        list(error, result.content)
+    }
+    
+    // showblob
+    //
+    // Retrieve a blob by hash, with no metadata--just content.
+    //
+    gepo.showblob = closure showblob(hash, local query, error, result) {
+        if !string(hash)
+            return (list(Error("file hash must be a string:", hash)))
+        query = urlrest.concat("projects/", repodict.id, "/repository/blobs/", hash)
+        `(error, result) = getblob(query, "get")
+        list(error, result.content)
+    }
+
+    // finis
+    
+    list(false, gepo)
+};
+
+
+/*
+ * gtopInit
+ *
+ *     Initialize the gitops module.
+ *
+ */
+
+function gtopInit(local manifest) {
+
+    manifest = `(GitLabOps, GitLabRepo, gtopInit)
+
+    Naan.module.build(module.id, "gitops", function(modobj, compobj) {
+        require("./serviceGitLab.nlg")
+        compobj.manifest = manifest
+        modobj.exports.GitLabOps = GitLabOps
+        modobj.exports.GitLabRepo = GitLabRepo
+    })
+
+}();

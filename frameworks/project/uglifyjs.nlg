@@ -1,0 +1,79 @@
+/*
+ * uglifyjs.nlg
+ * Naanlib/frameworks/project/
+ *
+ *     Naan wrapper for the UglifyJS library.
+ *
+ * Origin:
+ *     https://github.com/mishoo/UglifyJS
+ *
+ * License:
+ *     BSD
+ *
+ * Installation:
+ *     npm install uglify-js -g
+ *     uglifyjs --self -c -m -o uglifyjs.js
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+ 
+/*
+ * UglifyJS
+ *
+ *     Construct a UglifyJS wrapper object.
+ *
+ */
+
+closure UglifyJS(local uglify) {
+    uglify = new(object, this)
+        
+    // reload
+    // Load the library if needed, and throw an exception if unavailable.
+    
+    function reload() {
+        if !uglify.jslib {
+            uglify.jslib = JsLoadScript("frameworks/project/uglifyjs.js", "UglifyJS")
+            if !uglify.jslib
+                return (list(Error("UglifyJS not accessible")))
+        }
+    }
+
+    // minify
+    // Minify some code.
+    uglify.minify = function minify(code, options, local result) {
+        reload()
+        result = uglify.jslib.minify(code, options)
+        if result.error
+            list(Error("UglifyJS error:", result.error.message, "file:", result.error.filename, "line:", result.error.line, "col:", result.error.col))
+        else
+            list(false, result.code)
+    }
+
+    // finis
+    
+    reload()
+    if uglify.jslib
+        uglify
+};
+
+
+/*
+ * uglifyInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function uglifyInit(local manifest) {
+    manifest = `(UglifyJS, uglifyInit)
+
+    Naan.module.build(module.id, "uglifyjs", function(modobj, compobj) {
+        require("./project.nlg")
+        compobj.manifest = manifest
+        module.exports.UglifyJS = UglifyJS
+    })
+} ();

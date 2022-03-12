@@ -1,0 +1,312 @@
+/*
+ * harness.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+
+/*
+ * initPreload
+ *
+ */
+
+loglevel(2);;
+Naan.module.chns("Play");;
+
+
+/*
+ * Parsenv
+ *
+ *     Create a parsing environment.
+ *
+ */
+
+closure Parsenv(name, local penv, gohome, saveOperators, lingo, libns, naansym) {
+    penv = new(object, this)
+    gohome = makeActivator()
+    sleep(1)
+    lingo = Dialect
+    penv.lib = Naan.module.modlist().Lib.exports
+    penv.parser = lingo.parser
+    penv.unparser = lingo.unparser
+    lingo.defsym(`("#e", "#i", "#pi"))
+    penv.ns = new(namespace, name)
+    if !penv.ns {
+        debuglog("parnParsenv: can't create namespace")
+        return (false)
+    }
+    if penv.naansym {
+        naansym = letlocal(Naan).0
+        assign(naansym, car(penv.naansym))
+    }
+    nsactive(cons(penv.ns, lingo.info().namespace, nsactive().-2))
+    penv.gons = makeActivator()
+    gohome()
+
+
+    // parse
+    //
+    // Parse the specified text into our environment, returning the following dictionary:
+    // {
+    //      errors:         <array of errors, if any>
+    //      text:           <array of output text, if any>
+    //      exprs:          <array of expressions that we have parsed>
+    //      results:        <array of evaluation results for the expressions>
+    //      pretty:         <array of pretty-printed results>
+    // }
+
+    penv.parse = function parse(text, local output, curns, source, xchan, errors, error, expr, savex, outext) {
+        output = {
+            errors: []
+            text: []
+            exprs: []
+            results: []
+            pretty: []
+        }
+        curns = nsactive()
+        source = new(textstream, text, `string)
+        xchan = textstreams(list(source, source))
+        try {
+            penv.gons()
+            loop {
+                try {
+                    savex = `exception.proc
+                    sudo(putproc(`exception, false))                        // don't enter debugger during test
+                    `(errors, expr) = lingo.parse(source)
+                    for error in errors
+                        output.errors.push(penv.lib.ParseErrorString(error))
+                    if expr {
+                        output.exprs.push(expr)
+                        expr = function() { evalactive(expr) }()            // return here if return executed outside procedure
+                        output.results.push(expr)
+                        if source.tokenlast().atom == `;>
+                            output.pretty.push(tostring(expr, { quote: true }))
+                        else if source.tokenlast().atom != `;;
+                            output.pretty.push(lingo.print(expr))
+                    }
+                } finally {
+                    sudo(putproc(`exception, savex)) }
+            }
+        } catch {
+            if true {
+                if tostring(car(exception)) == "internal" and tostring(second(exception)) == "end-of-file"
+                    { }
+                else if tostring(car(exception)) == "internal" and string(second(exception))
+                    output.errors.push(second(exception))
+                else
+                    output.errors.push("exception: ".concat(exception))
+            }
+        } finally {
+            gohome()
+            textstreams(xchan)
+            outext = source.taketext().trim()
+            if outext.length > 0
+                output.text = new(outext.split("\n"))
+        }
+        output
+    }
+    
+    // unparse
+    //
+    // Unparse our environment into text.
+
+    penv.unparse = function unparse(local options, text, sym, didprop, key) {
+        options = {
+            wrapMaxCol: 240
+        }
+        text = ""
+        for sym in symlist(penv.ns) {
+            if !(sym eq car(sym))
+                text = text.concat(sym, " = ", car(sym), ";;\n\n")
+            didprop = false
+            for key in sym@*
+                if key.charAt(0) != "." {
+                    didprop = true
+                    text = text.concat(sym, "@", key, " = ", sym@[key], ";;\n") }
+            if didprop
+                text = text.concat("\n")
+            if sym.proc.1.namespace eq penv.ns
+                text = text.concat(lingo.print(sym.proc, options), ";\n\n")
+        }
+        text
+    }
+    
+    // destroy
+    //
+    // Destroy our environment to reclaim the namespace.
+
+    penv.destroy = function destroy() {
+        penv.ns = delete(penv.ns)
+    }
+
+    // finis
+
+    penv
+};;
+
+
+/*
+ * RegisterTestCategory
+ *
+ *     Register a test category to run later.
+ *
+ */
+
+testsToRun = [];;
+
+function RegisterTestCategory(name, tests) {
+    testsToRun.push({
+        name: name
+        tests: tests
+    })
+};;
+
+
+/*
+ * Load tests
+ *
+ */
+
+nodeparse("test_01_core.nlg");;
+nodeparse("test_02_context.nlg");;
+nodeparse("test_03_jsinterop.nlg");;
+nodeparse("test_04_numerics.nlg");;
+nodeparse("test_05_strings.nlg");;
+nodeparse("test_06_lingoparse.nlg");;
+nodeparse("test_07_lingo.nlg");;
+
+
+/*
+ * RunTests
+ *
+ *     Run all our tests and produce a total summary at the end.
+ *
+ */
+
+function RunTests(local totalTestCount, totalPassCount, totalTimeMS) {
+    totalTestCount = 0
+    totalPassCount = 0
+    totalTimeMS = 0
+    printline("Running Naan unit test suite")
+    printline("============================")
+
+
+    //
+    // testOneLocation
+    //
+    //
+    function testOneLocation(name, tests, local testCounter, successCounter, bannered,
+        parsenv, test, textout, elapsedMS) {
+        testCounter = 0
+        successCounter = 0
+        bannered = false
+        parsenv = Parsenv("Test-".concat(name))
+        textout = ""
+    
+        function banner()
+        {
+            if !bannered {
+                textout = textout.concat("While running ", name, "...\n")
+                textout = textout.concat("-----\n") }
+            bannered = true
+        }
+    
+        function testOne(cmd, expect, local result, response, type, break1, break2)
+        {
+            if string(cmd)
+                result = parsenv.parse(cmd.concat("\n"))
+            else
+                return ("invalid cmd at test ".concat(testCounter, ": ", typeof(cmd), "\n"))
+            if string(expect) {
+                if result.errors.length > 0
+                    return (strcat("test(\"", cmd, "\") failed:\n    ", result.errors.join("|"), "\n"))
+                else
+                    response = result.text.concat(result.pretty).join("|")
+            } else if dictionary(expect) {
+                for type in expect {
+                    response = result[type].map(function(item){
+                        if string(item)
+                            item
+                        else
+                            tostring(item, { quote: true, nonamespace: true })})
+                    response = response.join("|")
+                    if response != expect[type]
+                        break
+                }
+                if !expect.errors && result.errors.length > 0
+                    return (strcat("test(\"", cmd, "\") unexpected errors = \"", result.errors.join("|"), "\"\n"))
+                if !expect.text && result.text.length > 0
+                    return (strcat("test(\"", cmd, "\") unexpected text = \"", result.text.join("|"), "\"\n"))
+                expect = expect[type]
+            } else
+                return (strcat("test(\"", cmd, "\"): invalid response type ", typeof(expect), "\n"))
+            if response != expect {
+                break1 = ""
+                break2 = ", "
+                if cmd.length > 10 || result.length > 20 {
+                    break1 = "\n    "
+                    break2 = "\n    " }
+                return (strcat("test(\"", cmd, "\") ", break1, "reported \"", response, "\"", break2, "expected \"", expect, "\"", "\n")) }
+        
+            ++totalAllSuccess
+            return ("")
+        }
+    
+        function rrTest(cmd, expect, local error)
+        {
+            ++testCounter
+            if ((error = testOne(cmd, expect)) == "")
+                ++successCounter
+            else
+            {
+                banner()
+                textout = textout.concat(error)
+            }
+        }
+    
+        elapsedMS = Date.now()
+        for test in tests
+            rrTest(test.0, test.1)
+        elapsedMS = Date.now() - elapsedMS
+        parsenv.destroy()
+
+        if (bannered) {
+            print(textout)
+            printline("-----") }
+        printline(prepad(name, 18).concat(": ", prepad(successCounter, 3), " of ", prepad(testCounter, 3), " tests ran successfully in ", (elapsedMS/1000.0).toFixed(3), " seconds"))
+        totalTestCount += testCounter
+        totalPassCount += successCounter
+        totalTimeMS += elapsedMS
+        { ok: true }
+    }
+
+    
+    //
+    // run registered tests
+    //
+     
+    let(local categ) {
+        for categ in testsToRun
+            testOneLocation(categ.name, categ.tests)
+    }()
+
+    
+    //
+    // report results
+    //
+     
+    let () {
+        printline("============================")
+        printline(prepad(totalTestCount, 5), " tests in ", (totalTimeMS/1000.0).toFixed(3), " seconds")
+        printline(prepad(totalPassCount, 5), " succeeded")
+        printline(prepad(totalTestCount-totalPassCount, 5), " failed")
+        printline()
+    }()
+}();;

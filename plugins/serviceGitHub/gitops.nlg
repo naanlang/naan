@@ -1,0 +1,522 @@
+/*
+ * gitops.nlg
+ * serviceGitHub
+ *
+ *     GitHub access for performing remote Git operations.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * GitHubOps
+ *
+ *     An object to perform GitHub operations using GraphQL.
+ *
+
+Play-lng> rr = App.nide.locate.connect("d1f7b1ef-8f78-46de-a53f-529053ef4c4b", "Git").1;
+$: Object{2}
+Play-lng> rr.*;
+$: ("userid", "repolist")
+Play-lng> rr.userid();
+$: (false, {
+    data: {
+        viewer  : { login: "rczulch" } } })
+Play-lng> rr.repolist();
+$: (false, [
+    { name: "DAStool", id: "MDEwOlJlcG9zaXRvcnkyMDU1ODA5MTY=" },
+        { name: "DDPinternal", id: "MDEwOlJlcG9zaXRvcnkyMDU1ODYyNTU=" },
+        { name: "Naan", id: "MDEwOlJlcG9zaXRvcnkyMDU1OTc2MDA=" },
+        { name: "aws-learning", id: "MDEwOlJlcG9zaXRvcnkyMTcxNzI4NzQ=" },
+        { name: "Naanlang", id: "MDEwOlJlcG9zaXRvcnkzMTA3MzcwNTM=" },
+        { name: "lightning-fs", id: "MDEwOlJlcG9zaXRvcnkzMjkxOTI4MTg=" },
+        { name: "isomorphic-git", id: "MDEwOlJlcG9zaXRvcnkzMjkyMDYwNzk=" }])
+
+ *
+ */
+
+closure GitHubOps(access, local gops, url) {
+    gops = new(object, this)
+    url = "https://api.github.com/graphql"
+    urlrest = "https://api.github.com/"
+
+    // userid
+    //
+    // Return the userid string for the provided PAT.
+    //
+    gops.userid = function userid(local query, response, result) {
+        query = "{
+            \"query\": \"query { viewer { login }}\"
+        }"
+        `(error, response) = await(js.w.fetch(
+            url, {
+            method: "post"
+            body: query
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": query.length
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitHub gql fetch failed:", error))
+        else if result.error
+            list(Error("GitHub query error:", result.error))
+        else if !result.data
+            list(Error("GitHub empty result"))
+        else
+            list(false, result.data.viewer.login)
+    }
+
+    // repolist
+    //
+    // Return an array of available repositories with Node IDs.
+    //
+    gops.repolist = function repolist(local query, response, result) {
+        query = "{
+            \"query\": \"query { viewer { repositories (first:50) { nodes { name, id, nameWithOwner } } } }\"
+        }"
+        `(error, response) = await(js.w.fetch(
+            url, {
+            method: "post"
+            body: query
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": query.length
+                "Authorization": "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitHub gql fetch failed:", error))
+        else if result.error
+            list(Error("GitHub query error:", result.error))
+        else if !result.data
+            list(Error("GitHub empty result"))
+        else
+            list(false, new(result.data.viewer.repositories.nodes))
+    }
+            
+    // repomake
+    //
+    // Make an empty project (and repo) with the specified name, returning a standard tuple of the
+    // `(error, result) form. On success the result is the repodict for the new repo.
+    //
+    gops.repomake = function repomake(name, local response, result) {
+        `(error, response) = await(js.w.fetch(
+            urlrest.concat("user/repos"), {
+            method: "post"
+            body: JSON.stringify({ name: name, private: true })
+            headers: {
+                "Accept":           "application/vnd.github.v3+json",
+                "Authorization":    "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitHub post fetch failed:", error))
+        else if response.status != 201
+            list(Error("GitHub: cannot create repo:", name, new(result), { status: response.status }))
+        else
+            list(false, {
+                name:           result.name
+                id:             result.id
+                nameWithOwner:  result.full_name
+            })
+    }
+
+    // repo
+    //
+    // Return a repo access object for the specified fullPath.
+    //
+    gops.repo = function repo(repodict) {
+        GitHubRepo(access, repodict)
+    }
+
+    // finis
+    
+    list(false, gops)
+};
+
+
+/*
+ * GitHubRepo
+ *
+ *     An object to perform GitHub repo operations using the REST and GraphQL APIs.
+
+rr = App.nide.locate.connect("d1f7b1ef-8f78-46de-a53f-529053ef4c4b", "Git").1;
+glr=rr.repo(rr.repolist().1.0).1;
+glr.commits();
+glr.branches();
+glr.tags();
+
+ *
+ *
+ */
+
+closure GitHubRepo(access, repodict, local gepo, url) {
+    gepo = new(object, this)
+    url = "https://api.github.com/graphql"
+    urlrest = "https://api.github.com/"
+    
+    // restPagedGet
+    //
+    // Accumulate an array of results from the specified URL using pagination.
+    //
+    closure restPagedGet(query, mapper, local accum, error, response, result, paging) {
+        accum = []
+        loop {
+            `(error, response) = await(js.w.fetch(
+                query, {
+                method: "get"
+                headers: {
+                    "Accept":           "application/vnd.github.v3+json",
+                    "Authorization":    "bearer ".concat(access.userPat)
+                } }))
+            if !error
+                `(error, result) = await(response.json())
+            if error
+                list(Error("GitHub get fetch failed:", error))
+            else if !result
+                list(Error("GitHub empty result"))
+            else {
+                accum = accum.concat(new(result.map(mapper)))
+                paging = gtopParseLinkHeader(response.headers.get("Link"))
+                if paging.next {
+                    query = paging.next.url
+                    continue }                                              // do more pages   
+                list(false, accum)
+            }
+            break
+        }
+    }
+
+    // branchesAndTags
+    //
+    // Return a list of repository branches, with an optional search string.
+    //
+    closure branchesAndTags(endpoint, pardict, local params, query) {
+        if !pardict
+            pardict = {}
+        pardict.per_page = 100
+        params = EncodeQuery("?", pardict)
+        query = urlrest.concat("repos/", repodict.nameWithOwner, "/", endpoint, params)
+        restPagedGet(query, function(item) {
+            {
+                name:   item.name
+                commit: {
+                    hash: item.commit.sha
+                }
+            }
+        })
+    }
+    
+    // info
+    //
+    // Report info about the repository.
+    //
+    gepo.info = closure info() {
+        
+    }
+                
+    // branches
+    //
+    // Return a list of repository branches, with an optional search string.
+    //
+    gepo.branches = closure branches(search) {
+        branchesAndTags("branches", {})
+    }
+                
+    // branches
+    //
+    // Return a list of repository branches, with an optional search string.
+    //
+    gepo.tags = closure tags(search) {
+        branchesAndTags("tags", {})
+    }
+
+    // commits
+    //
+    // Return a list of commits in the repo, optionally matching the specified file path.
+    //
+    //
+    gepo.commits = closure commits(filepath, local pardict, query, error, response, result) {
+        pardict = {
+            per_page: 100
+        }
+        if filepath
+            pardict.path = filepath
+        query = urlrest.concat("repos/", repodict.nameWithOwner, "/commits", EncodeQuery("?", pardict))
+        restPagedGet(query, function(item, local commit, common) {
+            commit = item.commit
+            common = {
+                hash:               item.sha
+                author:             commit.author.name
+                email:              commit.author.email
+                date:               commit.author.date
+                committer_name:     commit.committer.name
+                committer_email:    commit.committer.email
+                committer_date:     commit.committer.date
+                message:            commit.message
+            }
+            if item.parents.length > 0
+                common.parents = item.parents.map(function(parent) {
+                    parent.sha
+                })
+            common
+        })
+    }
+
+    // tree
+    //
+    // Retrieve a commit tree, with similar structure to filesystem trees. Options include:
+    // {
+    //      path: <relpath>     - relative path below repository to start
+    //      deep: <boolean>     - whether to include recursive children
+    //      ref:  <commit>      - branch, tag or commit hash, default "HEAD"
+    // }
+    //
+    // The GitHub API for trees offers size and sha, so we're storing those for now.
+    //
+    gepo.tree = closure tree(options, local path, ref, deep, params, query, error, response, result) {
+        path = options.path
+        ref = options.ref
+        if !ref
+            ref = "HEAD"
+        if !defined(options.deep) || options.deep
+            deep = true
+        if path {
+            if path.slice(0,1) == "/"
+                path = path.slice(1)                                        // remove initial slash
+            if path.slice(-1) == "/"
+                path = path.slice(0,-1)                                     // remove terminal slash
+             if path != ""
+                params = params.concat(", path: ", "\\\"", path, "\\\"") }
+        else
+            path = ""
+        if path.length > 0 || deep
+            params = EncodeQuery("?", { recursive: true })                  // need recursive
+        else
+            params = ""
+        query = urlrest.concat("repos/", repodict.nameWithOwner, "/git/trees/", ref, params)
+        `(error, response) = await(js.w.fetch(
+            query, {
+            method: "get"
+            headers: {
+                "Accept":           "application/vnd.github.v3+json",
+                "Authorization":    "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitHub get fetch failed:", error))
+        else if response.status != 200
+            list(Error("GitHub: cannot retrieve file:", result.message, { status: response.status }))
+        else if !result
+            list(Error("GitHub empty result"))
+        else {
+            let (item, tree, dircache, patharray, parent, name) {
+                if result.truncated
+                    debuglog("GitHub repo blobs truncated by paging")
+                tree = {
+                    name:       path.split("/").pop()
+                    data:       {
+                                    platform: "GitHub"
+                                    semantics: "git"
+                                    pathsep: "/" }
+                    parents:    []
+                    children:   []
+               }
+                if path != ""
+                    tree.parents = new(path.split("/"))
+
+                // findir
+                // Given an array of directory path elements, return the directory dictionary
+                dircache = { }                                              // pathnames to dir dict
+                function findir(patharray, local dir, dirname) {
+                    if patharray.length == 0
+                        tree
+                    else {
+                        dirname = patharray.join("/")
+                        dir = dircache[dirname]
+                        if !dir {
+                            parent = findir(patharray.slice(0,-1))          // all-but-last element
+                            dir = {
+                                name: patharray.slice(-1).0
+                                children: [] }
+                            parent.children.push(dir)
+                            dircache[dirname] = dir
+                        }
+                        dir }
+                }
+
+                // record files in tree
+                for item in result.tree {
+                    if item.type == "tree"
+                        continue
+                    if !item.path.startsWith(path)
+                        continue                                            // filter by specified path
+                    if !deep && item.path.indexOf("/") >= 0
+                        continue                                            // only one level
+                    patharray = item.path.split("/").slice(tree.parents.length)
+                    name = patharray.slice(-1).0                            // last path element
+                    parent = findir(patharray.slice(0,-1))                  // all-but-last element
+                    parent.children.push({
+                        name: name
+                        mode: item.mode
+                        size: item.size
+                        hash: item.sha
+                    })
+                }
+                tree
+            }()
+        }
+    }
+    
+    // getblob
+    //
+    // Retrieve a blob using the specified query.
+    //
+    closure getblob(query) {
+        `(error, response) = await(js.w.fetch(
+            query, {
+            method: "get"
+            headers: {
+                "Accept":           "application/vnd.github.v3+json",
+                "Authorization":    "bearer ".concat(access.userPat)
+            } }))
+        if !error
+            `(error, result) = await(response.json())
+        if error
+            list(Error("GitHub: get failed:", error))
+        else if response.status != 200
+            list(Error("GitHub: cannot retrieve blob:", result.message, { status: response.status }))
+        else if !result
+            list(Error("GitHub: empty result"))
+        else {
+            if result.encoding == "base64"
+                result.content = atob(result.content)
+            list(false, {
+                name:           result.name
+                path:           result.path
+                hash:           result.sha
+                size:           result.size
+                type:           result.type
+                encoding:       result.encoding
+                content:        result.content
+            })
+        }
+    }
+    
+    // readfile
+    //
+    // Retrieve a named file within a commit. The filepath must be the path of the file within the 
+    // repo. Available options include:
+    //  {
+    //      ref:  <commit>      - branch, tag or commit hash, default to main branch
+    //  }
+    //
+    gepo.readfile = closure readfile(filepath, options, local ref, params, query, method, error, response, result) {
+        if !string(filepath)
+            return (list(Error("filepath must be a string:", filepath)))
+        ref = options.ref
+        if string(ref)
+            params = EncodeQuery("?", { ref:  ref })
+        else
+            params = ""
+        query = urlrest.concat("repos/", repodict.nameWithOwner, "/contents/", encodeURIComponent(filepath), params)
+        getblob(query)
+    }
+    
+    // showfile
+    //
+    // Retrieve just the content of a named file within a commit. This is just like readfile except 
+    // that it just gets the content.
+    //
+    gepo.showfile = closure showfile(filepath, options, local error, result) {
+        `(error, result) = readfile(filepath, options)
+        list(error, result.content)
+    }
+    
+    // showblob
+    //
+    // Retrieve a blob by hash, with no metadata--just content.
+    //
+    gepo.showblob = closure showblob(hash, local query, error, result) {
+        if !string(hash)
+            return (list(Error("file hash must be a string:", hash)))
+        query = urlrest.concat("repos/", repodict.nameWithOwner, "/git/blobs/", hash)
+        `(error, result) = getblob(query)
+        list(error, result.content)
+    }
+
+    // finis
+    
+    list(false, gepo)
+
+};
+
+
+/*
+ * gtopParseLinkHeader
+ *
+ *     Parse link header response from REST API, which provides information on pagination. Example
+ * Link header is as follows (newlines added):
+ *      <https://api.github.com/repositories/205580916/tags?per_page=2&page=1>; rel="prev",
+ *      <https://api.github.com/repositories/205580916/tags?per_page=2&page=3>; rel="next",
+ *      <https://api.github.com/repositories/205580916/tags?per_page=2&page=3>; rel="last",
+ *      <https://api.github.com/repositories/205580916/tags?per_page=2&page=1>; rel="first"
+ * for which it will output a dictionary:
+ *  {
+ *      prev : {
+ *           url      : "https://api.github.com/repositories/205580916/tags?per_page=2&page=1",
+ *          page     : 1 },
+ *      next : {
+ *          url      : "https://api.github.com/repositories/205580916/tags?per_page=2&page=3",
+ *          page     : 3 },
+ *      last : {
+ *          url      : "https://api.github.com/repositories/205580916/tags?per_page=2&page=3",
+ *          page     : 3 },
+ *      first: {
+ *          url      : "https://api.github.com/repositories/205580916/tags?per_page=2&page=1",
+ *          page     : 1 } }
+ *
+ */
+
+gtopParseLinkHeaderRegExp;
+
+function gtopParseLinkHeader(header, local segment, output) {
+    if !jsInstanceOf(gtopParseLinkHeaderRegExp, RegExp.prototype)
+        gtopParseLinkHeaderRegExp = RegExp('<([^?]+\\?[=\\w&?]+page=(\\d+))>;\\s*rel="(\\w+)"', 'g')
+    output = { }
+    while result = gtopParseLinkHeaderRegExp.exec(header)
+        output[result.3] = {
+            url: result.1
+            page: toint(result.2)
+        }
+    output
+};
+
+
+/*
+ * gtopInit
+ *
+ *     Initialize the gitops module.
+ *
+ */
+
+function gtopInit(local manifest) {
+
+    manifest = `(GitHubOps, GitHubRepo, gtopParseLinkHeader, gtopInit)
+
+    Naan.module.build(module.id, "gitops", function(modobj, compobj) {
+        require("./serviceGitHub.nlg")
+        compobj.manifest = manifest
+        modobj.exports.GitHubOps = GitHubOps
+    })
+
+}();

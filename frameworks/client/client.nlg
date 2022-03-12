@@ -1,0 +1,29 @@
+/*
+ * client.nlg
+ * Naanlib/frameworks/client
+ *
+ *     Root component for client-specific functionality, that communicates with servers.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * clirInit
+ *
+ *     Initialize the client module.
+ *
+ *
+ */
+
+function clirInit(local manifest) {
+    manifest = `(clirInit)
+
+    Naan.module.build(module.id, "client", function(modobj, compobj) {
+        require("../common/").LiveImport()
+        compobj.manifest = manifest
+    })
+} ();

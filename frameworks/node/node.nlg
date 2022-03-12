@@ -1,0 +1,81 @@
+/*
+ * node.nlg
+ * Naanlib/frameworks/node
+ *
+ *     Root component for node-specific functionality.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * NodeStreamLiner
+ *
+ *     Return a stream transformer for parsing into lines of text. The optional endings argument is
+ * either a RegExp or a string used to split the input into lines. Note that \r\n challenge is not
+ * addressed for other multiple-character line endings.
+ *
+ */
+
+closure NodeStreamLiner(endings, local liner) {
+    liner = xnew(stream.Transform, {objectMode: true})
+    if !endings
+        endings = RegExp("\r\n|\r|\n")
+    liner.endings = endings
+
+    liner._transform = function(chunk, encoding, done, local data, lines) {
+        data = chunk.toString()
+        if (liner._lastLineData)
+            data = strcat(liner._lastLineData, data)
+        lines = data.split(liner.endings)
+        liner._lastLineData = lines.splice(lines.length -1, 1)[0]
+
+        // The following handles an obscure case where a two-character \r\n line ending sequence is
+        // split by a chunk boundary. If our chunk has at least one line then we postpone the last
+        // line for processing with the next chunk.
+        if liner._lastLineData == "" && data.charAt(data.length-1) == "\r" && lines.length > 0
+            liner._lastLineData = lines.splice(lines.length -1, 1)[0].concat("\r")
+
+        lines.forEach(liner.push.bind(liner))
+        xcall(liner, done)
+    }
+
+    liner._flush = function (done) {
+        if (liner._lastLineData)
+            liner.push(liner._lastLineData)
+        liner._lastLineData = false
+        xcall(liner, done)
+    }
+
+    liner
+};
+
+
+/*
+ * nodrInit
+ *
+ *     Initialize the node module.
+ *
+ *
+ */
+
+function nodrInit(local manifest) {
+    manifest = `(NodeStreamLiner, nodrInit)
+
+    if !js.g
+        throw("module frameworks/node cannot be used from a browser")
+    Naan.module.build(module.id, "node", function(modobj, compobj) {
+        require("../common/").LiveImport()
+        compobj.manifest = manifest
+        function nodrReload() {
+            nodecp = js.r("child_process")
+            fs = js.r("fs")
+            os = js.r("os")
+            stream = js.r("stream")
+        }()
+        module.reload = nodrReload
+    })
+} ();

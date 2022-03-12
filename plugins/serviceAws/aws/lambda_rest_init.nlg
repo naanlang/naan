@@ -1,0 +1,58 @@
+/*
+ * lambda_rest_init.nlg
+ * serviceAws
+ *
+ *     Initialize the AWS Lambda function in Naan for REST.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * initPreload
+ *
+ */
+
+loglevel(3);
+
+
+/*
+ * versionCheck
+ *
+ *     Ensure that Node is at least as new as the specified version.
+ *
+ */
+
+function versionCheck(minver, local rxver, curver) {
+    rxver = RegExp("([0-9]+)[.]([0-9]+)[.]([0-9]+)")
+    minver = minver.match(rxver).map(function(x){Number.parseInt(x)})
+    curver = js.g.process.version.match(rxver).map(function(x){Number.parseInt(x)})
+    minver[1] < curver[1] || minver[1] == curver[1] && (minver[2] < curver[2] || minver[2] == curver[2] && minver[3] <= curver[3])
+};
+
+cond (
+    if not versionCheck("10.0.0") {
+        debuglog("NodeJS too old; version 10.0.0 required.")
+        js.r("process").exit(2)
+    }
+);
+
+
+/*
+ * process the request
+ *
+ */
+
+debuglog("about to respond");
+
+js.lambda.respond(null, {
+    statusCode: 200,
+    body: "Hello Cruel World!\n".concat(js.lambda.context.awsRequestId)
+    headers: {
+        'Access-Control-Allow-Origin': '*',
+    }
+});
+

@@ -1,0 +1,131 @@
+/*
+ * preferences.nlg
+ * naanlib/frameworks/common/preferences
+ *
+ *     A preference storage facility.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Preferences
+ *
+ *     Preferences object for persistent preferences outside of projects. This also opens the Nide
+ * database for local browser storage.
+ *
+ */
+
+closure Preferences(nicc, dbname, local prefs, error, data) {
+    `(error, data) = require("../storage/dbt_pouch.nlg").PouchDB(dbname)
+    if error {
+        ErrorDebuglog("Can't access Nide local browser database", error)
+        return (false)
+    }
+    nicc.db = data
+    `(error, data) = nicc.db.table("NideData")
+    if error {
+        ErrorDebuglog("Can't access NideData table", error)
+        return (false)
+    }
+    nicc.dbtable = data
+    prefs = new(object, this)
+    
+    // save
+    // Save preferences to pouchDB
+    prefs.save = function save() {
+        if prefs.doc {
+            prefs.doc.content = prefs.data
+            `(error, data) = nicc.dbtable.update(prefs.doc)
+            prefs.doc = data }
+        else {
+            `(error, data) = nicc.dbtable.add("NidePreferences", prefs.data)
+            prefs.doc = data }
+        if error
+            nicc.alert("<b>Error saving preferences</b><br>".concat(ErrorString(error)), { class: "alert-danger" })
+    }
+
+    // default
+    // Load default preferences
+    prefs.default = closure default(local pending) {
+        pending = new(nonce)
+        nicc.api.readFile("nide_options.cfg", function(error, req, event, local config) {
+            if error {
+                ErrorDebuglog("Can't read nide_options.cfg", error)
+                config = { } }
+            else
+                config = new(js.w.JSON.parse(req.responseText))
+            pending.signal(config)
+        })
+        pending.wait()
+    }
+
+    // load
+    // Load preferences from pouchDB
+    prefs.load = function load() {
+        `(error, data) = nicc.dbtable.get("NidePreferences")
+        if error {                                                          // missing preferences or other error
+            if error.status != 404
+                ErrorDebuglog("Can't load preferences", error)
+            prefs.data = { } }
+        else {
+            prefs.doc = data
+            prefs.data = data.content
+        }
+        data = default()
+        for key in data
+            if !prefs.data[key]
+                prefs.data[key] = data[key]                                 // bring in any new keys from configuration
+    }
+    prefs.load()
+    
+    // loadplugins
+    // Load listed plugins
+    prefs.loadplugins = function loadplugins(local folder, path, name) {
+        folder = "plugins/"
+        path = folder.concat("plugins.cfg")
+        pending = new(nonce)
+        nicc.api.readFile(path, function(error, req, event, local config) {
+            if error
+                ErrorDebuglog("Can't read ".concat(path), error)
+            else
+                prefs.plugins = new(js.w.JSON.parse(req.responseText))
+            pending.signal(config)
+        })
+        pending.wait()
+        for name in prefs.plugins.load {
+            path = folder.concat(name)
+            try {
+                require(path)
+            } catch {
+                if true
+                    ErrorDebuglog("Exception requiring: ", path, exception)
+            }
+        }
+    }
+
+    // finis
+    prefs
+};
+
+
+/*
+ * prefsInit
+ *
+ *     Initialize the preferences component.
+ *
+ */
+
+function prefsInit(local manifest) {
+    manifest = `(Preferences, prefsInit)
+
+    Naan.module.build(module.id, "preferences", function(modobj, compobj) {
+        require("../common/common.nlg")
+        compobj.manifest = manifest
+    })
+
+    module.exports.Preferences = Preferences
+} ();

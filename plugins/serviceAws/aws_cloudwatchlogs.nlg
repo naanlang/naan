@@ -1,0 +1,122 @@
+/*
+ * aws_cloudwatchlogs.nlg
+ * serviceAws
+ *
+ *     Access to the CloudWatchLogs services for AWS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * CloudWatchLogs
+ *
+ *     CloudWatch service functions.
+ *
+ */
+
+closure CloudWatchLogs(local cwlogs) {
+    cwlogs = new(object, this)
+
+    //
+    // login
+    //
+    cwlogs.login = closure login(creds) {
+        cwlogs.aws = xnew(awsSDK.CloudWatchLogs, {
+            apiVersion:         "2014-03-28",
+            accessKeyId:        creds.keyID,
+            secretAccessKey:    creds.keySecret,
+            region:             creds.region })
+    }
+    
+    //
+    // cwlQueryPager
+    //
+    // Perform a CWL paged query. This implements paging conventions specific to CWL. The callback
+    // should return the number of items found in the data, or false to stop looping.
+    //
+    closure cwlQueryPager(procname, params, remaining, doneCB) {
+        if !remaining
+            remaining = 10                                              // default retrieve limit
+        params.limit = remaining
+        QueryPager(cwlogs.aws, procname, params, function(data, local processed) {
+            processed = doneCB(data)
+            if processed
+                remaining -= processed
+            if processed && remaining > 0 && data.nextToken && data.nextToken != params.nextToken {
+                params.limit = remaining                                // set up for next iteration
+                params.nextToken = data.nextToken
+                true                                                    // continue looping
+            }
+        })
+    }
+    
+    //
+    // describeLogStreams
+    //
+    cwlogs.describeLogStreams = closure describeLogStreams(name, options,
+        local params, remaining, output, error)
+    {
+        params = {
+            logGroupName: name
+            descending: true
+            orderBy: LastEventTime
+        }
+        output = []
+        `(error) = cwlQueryPager(`describeLogStreams, params, options.limit, function(data) {
+            debuglog("describeLogStreams:", params.limit, data.logStreams.length, output.length)
+            if data.logStreams.length > 0
+                output = output.concat(new(data.logStreams))
+            data.logStreams.length
+        })
+        if error
+            output = false
+        list(error, output)
+    }
+
+    //
+    // getLogEvents
+    //
+    cwlogs.getLogEvents = closure getLogEvents(groupName, streamName, options
+        local params, remaining, output, error)
+    {
+        params = {
+            logGroupName: groupName
+            logStreamName: streamName
+        }
+        output = []
+        `(error) = cwlQueryPager(`getLogEvents, params, options.limit, function(data) {
+            debuglog("getLogEvents:", params.limit, data.events.length, output.length)
+            if data.events.length > 0
+                output = output.concat(new(data.events))
+            data.events.length
+        })
+        if error
+            output = false
+        list(error, output)
+    }
+
+    // finis
+    cwlogs
+}
+
+/*
+ * cwlogsInit
+ *
+ *     Initialize the CloudwatchLogs module.
+ *
+ */
+
+function cwlogsInit(local manifest) {
+    manifest = `(CloudWatchLogs, cwlogsInit)
+
+    Naan.module.build(module.id, "aws_cloudwatchlogs", function(modobj, compobj) {
+        require("./aws_utils.nlg")
+        compobj.manifest = manifest
+        modobj.exports.CloudWatchLogs = CloudWatchLogs
+    })
+
+} ();

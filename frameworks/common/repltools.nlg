@@ -1,0 +1,100 @@
+/*
+ * repltools.nlg
+ *
+ *     Developer tools for Naan REPLs.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * dtrace
+ *
+ *     Turn on low-level tracing for the duration of evaluating an expression.
+ *
+ */
+
+macro dtrace(xx, level, local sdl, result) {
+    sdl = loglevel()
+    if not level
+        level = 5
+    loglevel(level)
+    try {
+        result = eval(xx)
+    } finally {
+        loglevel(sdl)
+    }
+    result
+};
+
+
+/*
+ * debug
+ *
+ *     Enter the debugger just before evaluating the specified expression.
+ *
+ */
+
+macro debug(expr) {
+    if atom(expr)
+        first(expr)
+    else {
+        expr = list(list(Naan.debug.debugger, 1), expr)
+        second(eval(expr)) }
+};
+
+
+/*
+ * dcaller
+ *
+ *     Report the caller of the specified function for debugging. By default this ignores lambda
+ * functions, but you can pass true for argument two to report them.
+ *
+ */
+
+function dcaller(proc, lambdaOK, local x, found) {
+    for x in stacktrace()
+        if procedure(list(x.0)) {
+            if !lambdaOK && lambda(x.1)
+                continue
+            if found && !proc
+                return (x.1)                                                // found procedure name symbol
+            else if x.1 == dcaller
+                found = true
+            else if proc && x.1 == proc
+                proc = false }
+    false
+};
+
+
+/*
+ * ImportReplTools
+ *
+ *     Import the REPL tools on behalf of the caller.
+ *
+ */
+
+macro ImportReplTools() {
+    letimport(dtrace, debug, dcaller)
+};
+
+
+/*
+ * retoInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function retoInit(local manifest) {
+    manifest = `(dtrace, debug, dcaller, ImportReplTools, retoInit)
+
+    Naan.module.build(module.id, "repltools", function(modobj, compobj) {
+        require("./common.nlg")
+        compobj.manifest = manifest
+        modobj.exports.ImportReplTools = ImportReplTools
+    })
+} ();

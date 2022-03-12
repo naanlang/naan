@@ -1,0 +1,95 @@
+/*
+ * aws_lambda.nlg
+ * serviceAws
+ *
+ *     Access to lambda function management services for AWS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Lambda
+ *
+ *     Lambda service functions.
+ *
+ */
+
+closure Lambda(local lamb) {
+    lamb = new(object, this)
+
+    //
+    // login
+    //
+    lamb.login = closure login(creds) {
+        lamb.aws = xnew(awsSDK.Lambda, {
+            apiVersion:         "2015-03-31",
+            accessKeyId:        creds.keyID,
+            secretAccessKey:    creds.keySecret,
+            region:             creds.region })
+    }
+    
+    //
+    // getFunction
+    //
+    lamb.getFunction = closure getFunction(name, qualifier, local params, pending) {
+        params = {
+            FunctionName: name
+        }
+        if qualifier
+            params.Qualifier = qualifier
+        pending = new(nonce)
+        lamb.aws.getFunction(params, function(error, data) {
+            if error {
+                lambdaError = error
+                debuglog("aws.getFunction failed", error)
+            }
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+    
+    //
+    // updateFunctionCode
+    //
+    lamb.updateFunctionCode = closure updateFunctionCode(name, zipfile, local params, pending) {
+        params = {
+            FunctionName: name
+            ZipFile: zipfile
+        }
+        pending = new(nonce)
+        lamb.aws.updateFunctionCode(params, function(error, data) {
+            if error {
+                lambdaError = error
+                debuglog("aws.updateFunctionCode failed", error)
+            }
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    // finis
+    lamb
+}
+
+
+/*
+ * lambdaInit
+ *
+ *     Initialize the Lambda module.
+ *
+ */
+
+function lambdaInit(local manifest) {
+    manifest = `(lambdaInit, Lambda)
+
+    Naan.module.build(module.id, "aws_lambda", function(modobj, compobj) {
+        require("./serviceAws.nlg")
+        compobj.manifest = manifest
+        modobj.exports.Lambda = Lambda
+    })
+
+} ();

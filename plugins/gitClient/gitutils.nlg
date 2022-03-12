@@ -1,0 +1,1331 @@
+/*
+ * gitutils.nlg
+ * gitClient
+ *
+ *     Low-level utility operations for the git client.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+// testing
+// fs = App.nide.locate.connect("Host", "NideFS", "/Users/richardz/temp").1;
+
+// TO-DO items ###
+//      review pathsep for windows filesystem arrays
+//      implement revert
+//      implement stage and unstage
+//      implement gc
+//      check that staged files are refreshed properly
+//      we need a save operation to preserve the GitTree state in the .ngit folder
+
+
+/*
+ * synctree
+ *
+ * Update existing TO tree with information in FROM tree using a callback.
+ *
+ * The callback is invoked for these cases:
+ *
+ *      callback(1, newto, from, topath, frompath)      - FROM node is not yet in TO, but newto will
+ *                                                        be inserted if the callback returns true.
+ *
+ *      callback(-1, oldto, false, topath, frompath)    - The oldto node is not in from, and will be
+ *                                                        deleted if the callback returns true.
+ *
+ *      callback(0, to, from, topath, frompath)         - The node exists in both trees, so update TO
+ *                                                        as desired. Could be folder/file swap
+ *
+ * This sorts the children into a consistent order and the original order is not restored. If a file
+ * is replaced with a directory or vice versa then this is detectable in callback(0), which must
+ * check for this case.
+ *     When this finds a new FROM directory, it invokes the callback for the new node and then, if
+ * callback returns true, it invokes the callback for the existing FROM and new TO directories. This
+ * causes the new children to be added recursively.
+ *     When this finds a deleted TO node, it deletes the node immediately if the callback returns
+ * true. Otherwise for a directory node it invokes the callback again on each of its children from
+ * deepest upward. If the directory becomes empty then the callback is invoked again, offering the
+ * opportunity to remove the directory completely.
+ *
+ */
+
+closure synctree(to, from, callback, local fpathsep, tpathsep) {
+    // childcomp
+    //
+    // Compare children in tree array by name.
+    //
+    function childcomp(a, b) {
+        if (a.name < b.name)
+            -1
+        else if (a.name > b.name)
+            1
+        else
+            0 }
+
+    // delkids
+    //
+    // Recursively invoke the callback for the children of a deleted directory, returning true if it 
+    // should be deleted from its parent. If called with an empty directory or anything other than a
+    // directory then this immediately returns false. The callback is invoked from here only if the
+    // directory *becomes* empty.
+    //
+    function delkids(to, local tnode, tdex) {
+        if !to.children.length > 0
+            return (false)                                                  // not a directory or already empty
+        tdex = 0
+        loop {
+            tnode = to.children[tdex]
+            if !tnode
+                break
+            if callback(-1, tnode) || delkids(tnode)
+                to.children.splice(tdex, 1)                                 // remove existing node
+            else
+                ++tdex
+        }
+        if to.children.length == 0
+            callback(-1, to)                                                // notify it's empty
+        else
+            false
+    }
+
+    // strecur
+    //
+    // Iteratively and recursively sync two directories by comparing their children by name.
+    //
+    function strecur(to, from, tpathpar, fpathpar, local fnode, tnode, fdex, tdex, fpath, tpath) {
+        callback(0, to, from, tpathpar, fpathpar)                                      // update the directory pair
+        from.children.sort(childcomp)                                       // ensure we are in consistent order
+        to.children.sort(childcomp)
+        fdex = tdex = 0
+        loop {
+            fnode = from.children[fdex]
+            tnode = to.children[tdex]
+            if !fnode && !tnode
+                break                                                       // both lists exhausted
+            // determine child paths
+            if !tnode
+                tpath = false
+            else if !tpathpar || tpathpar == ""
+                tpath = tnode.name
+            else
+                tpath = tpathpar.concat(tpathsep, tnode.name)               // child path in to node
+            if !fnode
+                fpath = false
+            else if !fpathpar || fpathpar == ""
+                fpath = fnode.name
+            else
+                fpath = fpathpar.concat(fpathsep, fnode.name)               // child path in from node
+            // compare to and from
+            if !tnode || fnode.name < tnode.name {                          // found new node in FROM
+                ++fdex                                                      // FROM advances for next time
+                tnode = { name: fnode.name }
+                if fnode.children
+                    tnode.children = []                                     // empty starting point
+                if callback(1, tnode, fnode, tpath, fpath) {
+                    to.children.splice(tdex++, 0, tnode)                    // insert new child in TO
+                    if tnode.children
+                        strecur(tnode, fnode, tpath, fpath)                 // add the children of a new directory
+                } }
+            else if !fnode || fnode.name > tnode.name {                     // found missing node
+                if callback(-1, tnode, false, tpath) || delkids(tnode)
+                    to.children.splice(tdex, 1)                             // remove existing node
+                else
+                    ++tdex }
+            else {                                                          // found matching node
+                strecur(tnode, fnode, tpath, fpath)                         // (but might be file/folder conflict)
+                ++fdex
+                ++tdex }
+        }
+    }
+    
+    fpathsep = from.data.pathsep
+    tpathsep = to.data.pathsep
+    strecur(to, from, "", "")
+};
+
+
+/*
+ * GitTree
+ *
+ *     Trees for the git client. This is structured like a filesystem tree with extensions so that a
+ * hash can be stored with each file node (by path) for the current commit, the staging area, and the
+ * working tree. This implements the functionality of the git index. A tree is initialized with the
+ * filesystem and path to the repository root within that filesystem.
+ *     Note that a GitTree is associated with a specific filesystem, but not a specific repo. It is
+ * possible to fetch from one repo and commit to a different one. Also a GitTree is not a git client,
+ * but rather maintains the state of a particular filesystem and its relationship to commits in
+ * various repositories. GitTree methods are summarized here:
+ *
+ *  init()                          - initialize the repository if needed, ensuring it has a .ngit folder
+ *  refresh()                       - refresh gittree from the filesystem
+ *  sync(repotree)                  - synchronize gittree from the specified commit tree, returning an
+ *                                    array of obsolete file and folder paths to vacate
+ *  vacate(obsoletes)               - delete the obsolete file and folder paths from sync
+ *  discard(filelist)               - discard changes to the entire repo, or an array of paths
+ *  fetch(filelist, readproc)       - fetch any pending files using the readproc, limited to files in the
+ *                                    array if provided, and without overwriting user data
+ *  stage(filelist)                 - stage files in the index
+ *  unstage(filelist)               - unstage files from the index
+ *  readstage(shastage)             - read a staged file if it exists
+ *  status(options)                 - report status, optionally including untracked and ignored files
+ *  getcommit(options)              - get commit requirements info without changing anything
+ *
+--------------------------------------------------------------
+
+WIP Notes:
+ 
+ 1. Essential state to save is:
+    - affirmatively deleted files in tree
+    - staged files in tree
+ 2. Save state after it changes (refresh/stage/unstage)
+ 3. Conflict resolution plan is:
+    - Sync with new ref/stash and fetch all that does not conflict
+    - Show current status vs. "repo" so user can make changes
+ 4. Implement gc() to remove unused files from stage folder
+ 5. Stash not supported directly, but can be done with:
+    - explicit stash branches
+    - cloned projects
+ 
+--------------------------------------------------------------
+ *
+ * Format of the .ngit folder on the filesystem:
+ *      tree.json                   - stores gittree in JSON format
+ *      stage/
+ *          <file-0-sha>
+ *          <file-1-sha>
+ *
+ * The stash files contain an array of paths and hashes comprising the stashed contents.
+ *
+ */
+
+closure GitTree(local fs, reporoot, gtree, repodir, stagedir) {
+    gtree = new(object, this)
+    repodir = ".ngit"
+    stagedir = "stage"
+    
+    // fileHash
+    //
+    // Read a file from the filesystem, generate a hash, and then make the callback provided.
+    //
+    closure fileHash(fspath, callback) {
+        if !callback
+            return (syncAdapter(fileHash, fspath))
+        fs.readFile(fspath, false, function(error, strdata, local hash) {
+            if error
+                callback(error)
+            else
+                callback(false, hashSHA1("blob".concat(space, strdata.length, "\x00", strdata)))
+        })
+    }
+            
+    // nodeForPathArray
+    //
+    // Return the node for the path array within a directory.
+    //
+    function nodeForPathArray(directory, paths, local node) {
+        if paths.length == 0
+            return (directory)
+        for node in directory.children
+            if node.name == paths.0
+                return (nodeForPathArray(node, paths.slice(1)))
+        false
+    }
+    
+    // fspathForPathArray
+    //
+    // Return a filesystem path for the specified array of nodenames. This is a strange beast because
+    // path calculations are currently remoted (!) and this converts the array to an argument list so
+    // the remote is called in a way that gets forwarded. It's perhaps clever but not elegant.
+    //
+    closure fspathForPathArray(patharray) {
+        apply(`., list(fs.path, `join, cons(reporoot, totuple(patharray))))
+    }
+            
+    // pathToFSpath
+    //
+    // Return the filesystem path for a tree path.
+    //
+    closure pathToFSpath(treepath) {
+        fspathForPathArray(treepath.split("/"))
+    }
+    
+    // stageFSpath
+    //
+    // Return the path for the staged file having the specified hash, whether or not it exists.
+    //
+    function stageFSpath(shaStage) {
+        fs.path.join(gtree.repopath, stagedir, shaStage)
+    }
+            
+    // joinode
+    //
+    // Join a tree node to a parent path using the gittree "/" path separator.
+    //
+    function joinode(parpath, node) {
+        if !parpath || parpath == ""
+            node.name
+        else
+            parpath.concat("/", node.name)
+    }
+
+    // fsdelnode
+    //
+    // Delete a file or directory from the filesystem, updating the node as appropriate. This returns
+    // an error or false. It clears out directory children on success, so it should not be used if you
+    // want to keep any repo-only child info. (But in that case why are you deleting it?)
+    //
+    closure delnode(node, treepath, local error, result) {
+        `(error, result) = fs.delete(pathToFSpath(treepath))
+        if !error {
+            if node.fsdir
+                node.fsdir = undefined
+            if node.shaFS
+                node.shaFS = undefined
+            node.children = undefined                                   // not even repo-only children
+        }
+        error
+    }
+
+    // init
+    //
+    // Initialize the working tree as a repo and load any existing state information. This returns a
+    // standard `(error, result) tuple.
+    //
+    gtree.init = closure init(ifs, ireporoot, local error, result) {
+        fs = ifs
+        reporoot = ireporoot
+        gtree.ignores = GitIgnores(fs, reporoot)                        // manage ignores
+        gtree.repopath = fs.path.join(reporoot, repodir)
+        `(error, result) = fs.info(gtree.repopath)
+        if !error
+            `(error, result) = fs.mkdir(gtree.repopath)
+        if !error
+            `(error, result) = fs.mkdir(fs.path.join(gtree.repopath, stagedir))
+        if error                                                        // could not create repo folder
+            return (list(Error("Could not initialize local git repo folder", error)))
+        // ### load saved state here
+        list(false, { ok: true })
+    }
+
+    // refresh
+    //
+    // Refresh the gittree from the filesystem, returning a standard `(error, result) tuple. This
+    // obtains the current filesystem tree and updates the gittree from it. The cases and actions
+    // are as follows:
+    //      1. New file found. The file is added to the tree and hash update scheduled.
+    //      2. Modified file found. The file information is updated and hash update scheduled.
+    //      3. Missing file noticed. The missing file is marked missing but not removed if still in
+    //          the repository (i.e. has a repo hash.)
+    //      4. Directory found with existing file. A repo hash in the existing file is copied to the
+    //          new directory in that position, or otherwise the existing file is forgotten.
+    //      5. File found with existing directory. The filesystem hash in the new file is copied to
+    //          the existing directory if in the repo, or replaces the directory otherwise.
+    // New and missing directories are handled recursively like new and missing files. Ignores are
+    // processed by the separate GitIgnores helper class.
+    //
+    gtree.refresh = closure refresh(local error, fstree, errors) {
+        
+        // restage
+        //
+        // The staging area is tracked in the tree under <repodir> / <stagedir>, and a dictionary 
+        // of stage hashes is maintained in gtree.index. This enumerates the staged files, indexes
+        // their hashes, and ensures that all files marked staged in the tree actually refer to a
+        // valid index entry.
+        //
+        function restage(directory, local stage, node) {
+            gtree.index = { }
+            stage = nodeForPathArray(gtree.gittree, [repodir, stagedir])
+            for node in stage.children
+                if node.shaFS && node.name == node.shaFS {                  // has a hash that matches the name
+                    gtree.index[node.shaFS] = node                          // indexed
+                    node.shaStage = node.shaFS }                            // used in stage()
+            function restager(directory, node) {
+                for node in directory.children
+                    if node.children
+                        restager(node)
+                    else if node.shaStage && node.shaStage != "" && !gtree.index[node.shaStage]
+                        node.shaStage = undefined                           // stage storage not valid
+            } (directory)
+        }
+        
+        // dirRepoChildCount
+        // Count the transitive repo child of the specified directory node.
+        //
+        function dirRepoChildCount(directory, local count, node) {
+            count = 0
+            for node in directory.children {
+                if node.shaRepo
+                    ++count
+                if node.children
+                    count += dirRepoChildCount(node)
+            }
+            count
+        }
+
+        // updateFile
+        // Update a file node's hash and hash time, if needed.
+        //
+        closure updateFile(node, fspath, local error, hash, info) {
+            fspath = fs.path.join(reporoot, fspath)
+            `(error, info) = fs.info(fspath)
+            if error {
+                errors.push(error)
+                return (false) }                                            // don't add the new node
+            if info.type == "directory" {
+                errors.push(Error("directory found where file expected", fspath))
+                return (false) }                                            // don't add the new node
+            if node.shaFS_mtimeMs == info.mtimeMs
+                return (true)                                               // no need to update
+            `(error, hash) = fileHash(fspath)
+            if error {
+                errors.push(error)
+                return (false) }
+            node.shaFS = hash
+            node.shaFS_mtimeMs = info.mtimeMs
+            node.size = info.length
+            return (true)
+        }
+
+        `(error, fstree) = fs.tree(reporoot)
+        if error
+            return (list(Error("Cannot access local repository", error)))
+        if !gtree.gittree
+            gtree.gittree = {                                               // add an empty gittree
+                name: fstree.name
+                data: { platform: "ngit", semantics: "git", pathsep: "/" }
+                parents: fstree.parents
+                children: []
+            }
+        errors = gtree.ignores.update(fstree)
+        synctree(gtree.gittree, fstree, closure(change, tnode, fnode, tpath, fpath) {
+
+            if change > 0 {                                                 // new node found
+                if tnode.children {
+                    tnode.fsdir = true
+                    true }                                                  // add the new directory (which calls us back)
+                else
+                    updateFile(tnode, fpath)
+            } else if change < 0 {                                          // existing node deleted
+                if tnode.children {
+                    tnode.fsdir = false 
+                    tnode.children.length == 0 }                            // remove a missing directory if empty
+                else if tnode.shaRepo {
+                    if tnode.shaFS {
+                        tnode.shaFS = ""                                    // affirmatively deleted file
+                        tnode.shaFS_mtimeMs = undefined                     // re-hash if it comes back
+                        tnode.size = undefined }
+                    false }                                                 // false to keep in tree
+                else
+                    true                                                    // true to delete
+            } else {                                                        // update node
+                if fnode.children && !tnode.children {                      // file matched with filesystem directory
+                    tnode.children = []                                     // (will be called back for FROM children)
+                    tnode.fsdir = true
+                    tnode.shaFS = undefined }
+                else if !fnode.children && tnode.children {                 // directory matched with filesystem file
+                    if dirRepoChildCount(tnode) == 0
+                        tnode.children = undefined                          // directory not in repo or filesystem
+                    tnode.fsdir = undefined
+                    updateFile(tnode, fpath) }
+                else if !fnode.children && !tnode.children {                // existing file still present
+                    updateFile(tnode, fpath) }
+                else {
+                    tnode.fsdir = true }                                    // existing directory still present
+            }
+        })
+        restage(gtree.gittree)                                              // update stage state
+        if errors.length > 0
+            list(Errors("Errors during GitTree.refresh:", reporoot, errors))
+        else
+            list(false, { ok: true })
+    }
+    
+    // sync
+    //
+    // Sync the gittree from the specified repo tree without changing the filesystem, returning a
+    // list of obsolete files since the last repo tree that are still in the filesystem. This copies
+    // node information from the repo tree (representing a commit) to the gittree and removes any 
+    // gittree nodes that are no longer present in either the filesystem or the repo tree.
+    // Cases and actions are as follows:
+    //      1. New repo file found. It is added to the tree with the repo hash.
+    //      2. Existing repo file found. The repo hash is updated.
+    //      3. File only in filesystem. If the file was previously in the repo and unchanged, then 
+    //          add to the obsolete list. Otherwise remove any repo hash. 
+    //      4. File not in filesystem or repo. Remove the tree entry completely.
+    //      5. Add newly-empty directories to the obsolete list.
+    //      6. Repo file would replace filesystem folder. Directory node marked with repo hash and
+    //          thus repo file will be considered missing.
+    //      7. Repo folder would replace filesystem file. Convert node to directory if needed but
+    //          keep filesystem hash present, and add repo children (which will appear missing.)
+    // Files reported in the obsoletes array are those that were previously fetched from a repo but
+    // were unchanged on the filesystem, or are an empty directory that is not in the repo.
+    //
+    gtree.sync = closure sync(repotree, local obsoletes) {
+        obsoletes = []
+        synctree(gtree.gittree, repotree, function(change, tnode, fnode, tpath, fpath) {
+            if change > 0 {                                                 // new repo file found
+                if tnode.children
+                    true                                                    // add a repo directory (which calls us back)
+                else {
+                    tnode.shaRepo = fnode.hash
+                    tnode.repoLength = fnode.size
+                    // ### convert mode to type
+                    true } }
+            else if change < 0 {                                            // existing node not in repo
+                if tnode.children {
+                    if tpath == repodir
+                        return (false)                                      // ignore and keep
+                    if tnode.children.length == 0 {
+                        obsoletes.push(tpath)                               // remove empty directories from tree
+                        return (true) }
+                    return (false) }                                        // must have a child file we want
+                if tnode.shaRepo {                                          // file previously in repo
+                    if tnode.shaRepo == tnode.shaFS
+                        obsoletes.push(tpath)                               // unchanged previously-fetched file
+                    tnode.shaRepo = undefined
+                    false                                                   // in repo, keep in tree
+                } else if tnode.shaFS
+                    false                                                   // in filesystem, so keep in tree
+                else
+                    true }                                                  // not in filesystem or repo, so remove
+            else {                                                          // still in repo
+                if tnode.children {
+                    if fnode.children
+                        tnode.repodir = true
+                    else                                                    // trying to replace folder with file
+                        debuglog("GitTree.sync: cannot replace folder with file", tpath, "<-", fpath)
+                }
+                else if fnode.children {                                    // trying to replace file with folder
+                    if tnode.shaRepo == tnode.shaFS
+                        obsoletes.push(tpath)                               // unchanged previously-fetched file
+                    else
+                        debuglog("GitTree.sync: cannot replace file with folder", tpath, "<-", fpath)
+                }
+                else {                                                      // files correspond (may be changed)
+                    tnode.shaRepo = fnode.hash
+                    tnode.repoLength = fnode.size
+                }
+            }
+        })
+        obsoletes
+    }
+    
+    // vacate
+    //
+    // Delete from the filesystem a list of obsolete files and directories as returned by sync above.
+    // Each item is a pathname, representing either a file or a directory. This will try to delete 
+    // all items in the list even if errors occur, in which case an array of the errors is returned
+    // as an error.
+    //     The sync method has already removed the obsolete directory entries from gittree, so we do
+    // not need to do so here. If a node fails to delete then it will be discovered and restored on
+    // the next refresh.
+    //     This does not work in parallel because deleting children before parents would be complex,
+    // and this really should be checking for directories and deleting them deeply instead. That
+    // would require trimming the paths to remove any stray children that should not actually be
+    // there, but then it could use asyncArray and process the deletions in parallel. However I have 
+    // decided to punt these improvements for now instead.
+    //
+    gtree.vacate = closure vacate(obsoletes, local path, errors) {
+        errors = []
+        obsoletes.sort().reverse()                                          // ensure children precede parents
+        for path in obsoletes
+            if error = delnode(path)
+                errors.push(error)
+        if errors.length > 0
+            list(Error("Errors during GitTree.vacate:", reporoot, errors))
+        else
+            list(false, { ok: true })
+    }
+        
+    // discard
+    //
+    // Discard changed files and unneeded directories in the filesystem relative to the last synced
+    // repo. If a filelist array is provided then only the specified paths are discarded, and only
+    // if needed. If tostate is true then this only discards files that are staged. Otherwise this
+    // disards any files different from the repo. This returns a `(error, tofetch) tuple where the
+    // tofetch value is an array of files to be subsequently fetched.
+    //     Use this after a refresh and sync, and before a fetch, to revert a set of files back to
+    // their state in the repo. This will never delete untracked files, but it will discard changes
+    // made to the filesystem in tracked files.
+    //     The caller should call refresh before discarding to ensure that all file information is
+    // updated. Note that this does not replace the discarded files; that is done by calling fetch
+    // below. To restore a staged file instead of a repo call the readstage(hash) method in the
+    // fetch callback.
+    //
+    gtree.discard = closure discard(filelist, tostage, local tofetch, errors, indexFilelistPaths) {
+        tofetch = []
+        errors = []
+
+        // inFilelist
+        // Report true if the specified path is in the filelist or there is no filelist
+        function inFilelist(path) {
+            if !filelist
+                return                                                      // true
+            if !indexFilelistPaths {
+                indexFilelistPaths = { }
+                for item in filelist                                        // make an index of file paths to include
+                    indexFilelistPaths[item] = true
+            }
+            indexFilelistPaths[path]
+        }
+        
+        // testrep
+        // True iff the node should be replaced.
+        function testrep(node) {
+            if node.children
+                tostage && node.shaStage || !tostage && node.shaRepo
+            else
+                tostage && node.shaStage && node.shaStage != node.shaFS || !tostage && node.shaRepo && node.shaRepo != node.shaFS
+        }
+
+        // delrecur
+        // Recursively delete files and folders that we neeed to overwrite, returning true to keep
+        // the directory.
+        function delrecur(directory, parpath, local node, path, error, keeparent) {
+            for node in directory.children {
+                path = joinode(parpath, node)
+                if node.children {                                          // is a directory
+                    if !delrecur(node, path) || testrep(node) && inFilelist(path) {
+                        if node.fsdir                                       // not needed or being replaced by file in filelist
+                            if error = delnode(node, path)
+                                errors.push(error)
+                        tofetch.push(path) }
+                    else
+                        keeparent = true }                                  // needed, and either not being replaced or not in filelist
+                else {
+                    keeparent = true
+                    if testrep(node) && inFilelist(path) {                  // tracked and different
+                        if node.shaFS == "" 
+                            node.shaFS = undefined                          // was intentionally deleted, now missing
+                        else if error = delnode(node, path)                 // remove file to be overwritten
+                            errors.push(error)
+                        tofetch.push(path) } }
+            }
+            keeparent
+        }
+        
+        delrecur(gtree.gittree, "")
+        if errors.length > 0
+            list(Error("Errors during GitTree.discard:", reporoot, errors))
+        else
+            list(false, tofetch)
+    }
+
+    // fetch
+    //
+    // Fetch files using the specified readproc, returning a standard `(error, result) tuple. This
+    // traverses the tree and looks for files that are not in the working tree and not marked
+    // intentionally deleted. New directories are created as needed before the files are downloaded.
+    // This prefers to use local data instead of fetching from a repo. If a filelist is provided then
+    // it's an array of pathnames that limit the files actually fetched. The readproc is called as
+    // follows:
+    //
+    //      tree.fetch(paths[], closure(shaRepo, shaStage, treepath) {      // closure: will be called async
+    //          repo.showfile(shaRepo, ref)                                 // returns `(error, content)
+    //      }
+    //
+    //     Note that fetch does not replace existing files or directories on the filesystem! It only
+    // fetches files that should be there and can be copied without overwriting anything. Call the
+    // discard method if you want the filesytem to be overwritten to reflect the repo contents.
+    //     The plumbing is a bit complex so here is an overview. This first marks each directory in
+    // the gittree as "needed" if they may not exist but contain at least one transitive child to be
+    // fetched. Next this traverses the tree to add work items to create directories or fetch files.
+    // This creates a nonce for each directory being created so that children can wait for that
+    // before proceeding with their own work. Files that are already in the filesystem are indexed
+    // so that any needed duplicates can find them. Files that should be fetched are stored as work
+    // items and the first instance of each hash is indexed.
+    //     Next the fetch items in the worklist are updated to preferably copy a file from a prior
+    // work item, else copy from the filesystem or fetch from the repo. When a prior work item is
+    // found then it is linked as the source and given a nonce to indicate when it's ready. When an
+    // existing filesystem file is located then it's given a filesystem path to read.
+    //     Finally the list of workitems is executed asynchronously. For each item, if a directory
+    // parent is referenced then it waits for completion. Then either the directory is created or the
+    // the file is read from the filesystem or -- after waiting until it's ready -- the content is
+    // copied from the source. After the content is avaialble it is written to the destination and
+    // any waiting work items signaled. Nonces are signaled true on success or false to indicate an
+    // error occurred, in which case dependent work items are abandoned without error reports.
+    //
+    // Work item fields:
+    //  {
+    //      path                    - tree path for directory to create or file to write
+    //      node                    - node being fetched
+    //      mkdir                   - true for make a directory, otherwise fetch a blob
+    //      ready                   - if present, a nonce to signal success (true) or error (false)
+    //      dirwait                 - if present, pointer to nonce of parent directory being created
+    //      source                  - if present, the first work item having the same sha
+    //      fscopy                  - if present, the fs path of a file with the same sha
+    //  }
+    // 
+
+    gtree.fetch = closure fetch(filelist, readproc, local errors, worklist, indexFS, indexRepo, indexDirs, indexFilelistPaths) {
+        errors = []
+        worklist = []                                                       // list of blobs to fetch
+        indexFS = { }                                                       // index of available files on filesystem by SHA
+        indexRepo = { }                                                     // first fetch of a blob in worklist
+        indexDirs = { }                                                     // directories being created
+
+        // inFilelist
+        // Report true if the specified path is in the filelist or there is no filelist
+        function inFilelist(path) {
+            if !filelist
+                return                                                      // true
+            if !indexFilelistPaths {
+                indexFilelistPaths = { }
+                for item in filelist                                        // make an index of file paths to include
+                    indexFilelistPaths[item] = true
+            }
+            indexFilelistPaths[path]
+        }
+
+        // needrecur
+        // Recursively mark directories that are needed on the filesystem because they contain files
+        // that we will (attempt to) fetch.
+        function needrecur(directory, parpath, local path, needed, have) {
+            for node in directory.children {
+                path = joinode(parpath, node)
+                if node.children {
+                    if node.fsdir
+                        have = true                                         // was found on disk
+                    if needrecur(node, path)
+                        needed = true }
+                else if node.shaFS
+                    have = true                                             // we have a file child, so we must already exist
+                else if node.shaRepo && node.shaFS != "" && inFilelist(path)
+                    needed = true
+            }
+            directory.needed = needed && !have
+        }
+
+        // fetchrecur
+        // Recursive fetch planner. This visits our gittree and creates a work item for any files
+        // that need to be fetched.
+        function fetchrecur(directory, parpath, local parwork, dirwork, node, path, filework) {
+            parwork = indexDirs[parpath]                                    // non-false if directory being created
+            for node in directory.children {
+                path = joinode(parpath, node)
+                if node.children {
+                     if node.needed {                                       // directory needed for children
+                        node.needed = false
+                        dirwork = {
+                            mkdir: true
+                            path: path
+                            ready: new(nonce)
+                        }
+                        if parwork
+                            dirwork.dirwait = parwork.ready                 // wait for parent to be created
+                        indexDirs[path] = dirwork
+                        worklist.push(dirwork)
+                    }
+                    fetchrecur(node, path)
+                }
+                else {
+                    if node.shaFS
+                        indexFS[node.shaFS] = path                          // where to get this file, in case someone cares
+                    else if node.shaRepo && node.shaFS != "" && inFilelist(path) {
+                        filework = {
+                            path: path                                      // where to write this file
+                            node: node
+                        }
+                        if parwork
+                            filework.dirwait = parwork.ready                // must wait for directory creation
+                        if !indexRepo[node.shaRepo]
+                            indexRepo[node.shaRepo] = filework              // first work item for this hash
+                        worklist.push(filework)
+                    }
+                }
+            }
+        }
+
+        let (item, source) {
+            needrecur(gtree.gittre, "")                                     // mark needed directories
+            fetchrecur(gtree.gittree, "")                                   // generate worklist
+            for item in worklist {
+                if item.mkdir
+                    continue
+                source = indexRepo[item.node.shaRepo]
+                if source != item {
+                    if !source.ready
+                        source.ready = new(nonce)                           // signaled when complete
+                    item.source = source
+                } else if indexFS[item.node.shaRepo]
+                    item.fscopy = indexFS[item.node.shaRepo]                // get the file from the filesystem
+            }
+            asyncArray(worklist, 10, closure workitem(item, local error, result, content) {
+                if item.dirwait && !item.dirwait.wait()
+                    return                                                  // waited for parent directory creation, but it failed so give up
+                if item.mkdir
+                    `(error, result) = fs.mkdir(pathToFSpath(item.path))    // create the parent directory
+                else {
+                    if item.fscopy                                          // get local copy
+                        `(error, content) = fs.readFile(pathToFSpath(item.fscopy))
+                    else if item.source {
+                        if !item.source.ready.wait()
+                            return                                          // waited for source to fetch, but it failed so give up
+                        error = false
+                        content = source.content } 
+                    else                                                    // otherwise fetch blob content
+                        `(error, content) = readproc(item.node.shaRepo, item.node.shaStage, item.path) 
+                    if !error {
+                        if item.ready
+                            item.content = content                          // keep content as source for others
+                        `(error, result) = fs.writeFile(pathToFSpath(item.path), content)   // write blob content to filesystem
+                    }
+                }
+                if item.ready
+                    item.ready.signal(!error)                               // true iff successful
+                if error
+                    errors.push(error)
+                else
+                    item.node.shaFS = item.node.shaRepo                     // now in working tree
+            }).wait()
+            if errors.length > 0
+                list(Error("Errors during GitTree.fetch:", reporoot, errors))
+            else
+                list(false, { ok: true, worklist: worklist })
+        } ()
+    }
+
+    // stage
+    //
+    // Stage the specified files by ensuring they exist in the staging area and adding a shaStage
+    // hash to their gittree entries. This accepts an array of pathnames with "/" path separators 
+    // and returns a `(error, result) tuple.
+    //     A tree node tracks staging status in shaStage, which is undefined for not staged, a hash
+    // for staged added/modified, and "" for staged removal. Ignored files are never added, even if
+    // explicitly listed.
+    //     The caller should call refresh before staging to ensure that all file information is
+    // updated, and at some point afterward to capture all the new staging files. This checks if a
+    // newly staged file has the last hash recorded, and if not then this reports an error.
+    //
+    gtree.stage = closure stage(filelist, local errors, worklist, hashes, path, patharray, stage, item) {
+        //
+        // phase 1 = create list of files to copy to staging area
+        //
+        errors = []
+        worklist = []
+        hashes = new(gtree.index)
+        for path in filelist {
+            patharray = path.split("/")
+            if patharray && (stage = nodeForPathArray(gtree.gittree, patharray)) {
+                if stage.shaFS {
+                    item = {                                                // staged copy
+                        path: path
+                        patharray: patharray
+                        stage: stage
+                        exists: hashes[stage.shaFS]
+                    }
+                    if !item.exists
+                        hashes[stage.shaFS] = stage                         // file already in staging area, or will be
+                    worklist.push(item) }
+                else
+                    stage.shaStage = "" }                                   // staged removal
+            else
+                errors.push(Error("path not found:", path))
+        }
+        //
+        // phase 2 - copy all the files and verify they ended with correct hash
+        //
+        asyncArray(worklist, 10, closure stagecopy(item, local srcpath, destpath, error, result) {
+            if item.exists
+                return
+            srcpath = fspathForPathArray(item.patharray)
+            destpath = stageFSpath(item.stage.shaFS)
+            `(error, result) = fs.copy(srcpath, destpath)
+            if !error
+                `(error, result) = fileHash(destpath)                       // check if the source file changed
+            if !error && result != item.stage.shaFS {
+                `(error, result) = list(Error("file changing:", srcpath))
+                fs.delete(destpath)                                         // try to eliminate the wrongly-named file
+            }
+            if error
+                errors.push(error)
+            else
+                item.stage.shaStage = item.stage.shaFS
+        }).wait()
+        //
+        // phase 3 - update stage status for already-copied files
+        //
+        for item in worklist
+            if item.exists {
+                if item.exists.shaStage
+                    item.stage.shaStage = item.exists.shaStage              // either already staged or we copied successfully
+                else
+                    errors.push(Error("file missing from staging area", item.path))
+            }
+        //
+        // phase 4 - return results
+        //
+        if errors.length > 0
+            list(Error("Errors during GitTree.stage:", reporoot, errors))
+        else
+            list(false, { ok: true })
+    }
+    
+    // unstage
+    //
+    // Unstage the specified files by removing their tree entry pointing to the staging area. The
+    // files in the staging area may have multiple references and are removed by garbage collection
+    // below. This accepts an array of pathnames with "/" path separators and returns a standard
+    // `(error, result) tuple without performing i/o. It is not an error to unstage a file that is 
+    // not actually staged.
+    //
+    gtree.unstage = closure unstage(filelist, local path, patharray, stage) {
+        for path in filelist {
+            patharray = path.split("/")
+            if patharray && (stage = nodeForPathArray(gtree.gittree, patharray))
+                stage.shaStage = undefined
+        }
+        list(false, { ok: true })
+    }
+    
+    // readstage
+    //
+    // Read a staged file with the specified hash, returning a standard `(error, content) tuple.
+    //
+    gtree.readstage = closure readstage(shaStage) {
+         fs.readFile(stageFSpath(shaStage))
+    }
+        
+    // status
+    //
+    // Report the status of the working tree with respect to the last filesystem refresh and last
+    // synced commit. This returns an array of files having git status. Each element in the array has
+    // the following structure:
+    //      {
+    //          status: <status>,           // " M", "AM", "??", etc.
+    //          path: <path>
+    //      }
+    // The path is relative to the reporoot specified when the GitTree was created. The actual
+    // status values are two letters for the staging area and the working tree respectively:
+    //      " " - unmodified
+    //       ?  - untracked
+    //       !  - ignored
+    //       M  - modified
+    //       A  - added
+    //       D  - deleted
+    //       H  - same as head (only for working tree when modification staged)
+    //
+    // Options available are (with default values):
+    //  {
+    //      unchanged:  false               // show status of unchanged files
+    //      ignored:    false               // show status of ignored files and directories
+    //      untracked:  true                // show status of untracked files
+    //  }
+    //
+    gtree.status = function status(options, local statuslist) {
+        if !options
+            options = { untracked: true }
+        statuslist = []
+
+        // status1
+        // determine a status by comparing sha values
+        function status1(shaGit, shaOther, shaHead) {
+            if shaGit == shaOther
+                " "                                                         // unchanged
+            else if shaOther == "" || !shaOther
+                "D"                                                         // deleted
+            else if shaGit {
+                if shaHead && shaOther == shaHead
+                    "H"                                                     // same as head
+                else
+                    "M" }                                                   // modified
+            else
+                "A"                                                         // added
+        }
+
+        // statusrecur
+        // recursively examine tree for status
+        function statusrecur(directory, parpath, local node, statusLeft, statusRight) {
+            for node in directory.children {
+                statusLeft = statusRight = false                            // default is not listed
+                if node.ignored {
+                    if options.ignored
+                        statusLeft = statusRight = "!"                      // directory or file ignored
+                }
+                else if node.children
+                    statusrecur(node.children)                              // if not ignored directory is unlisted
+                else {
+                    // left compares repo with stage
+                    if node.shaStage
+                        statusLeft = status1(node.shaRepo, node.shaStage)
+                    else if node.shaRepo
+                        statusLeft = " "                                    // not staged but in repo
+                    else if options.untracked && node.shaFS
+                        statusLeft = "?"
+                    // right compares (stage or repo) with filesystem
+                    if node.shaStage
+                        statusRight = status1(node.shaStage, node.shaFS, node.shaRepo)
+                    else if node.shaRepo
+                        statusRight = status1(node.shaRepo, node.shaFS)
+                    else if options.untracked && node.shaFS
+                        statusRight = "?"
+                }
+                if statusLeft && statusRight && (options.unchanged || statusLeft != " " || statusRight != " ")
+                    statuslist.push({                                       // status is reportable
+                        path: joinode(parpath, node)
+                        status: strcat(statusLeft, statusRight)
+                    })
+            }
+        }
+        statusrecur(gtree.gittree, "")
+        statuslist
+    }
+    
+    // getcommit
+    //
+    // Determine requirements for a commit of the current state of the gittree relative to the last
+    // sync with a repo, i.e. what files are to be added/deleted/modified/moved and what the new
+    // repo tree will look like.
+    //     This is difficult functionality to generalize because the various git-based APIs out in
+    // the world all work a bit differently. GitHub wants either a new tree or a list of files to
+    // add or change. GitLab wants a list of changed files with actions. AWS wants a list of changes
+    // in each action category like put or delete. The solution chosen here is to return both a new
+    // tree representing the commit and a list of actions describing the changes since the current
+    // head. Here is the layout of the return data structure:
+    //
+    //  {
+    //      tree: {
+    //          name:   <repo name>
+    //          data:   { semantics: "git", pathsep: "/" [, platform: "GitHub"] }
+    //          children: [{
+    //              name:           <file-or-folder name>
+    //              // files:
+    //                  mode:       <file mode>
+    //                  hash:       <git SHA1 hash of the content>
+    //              // directories:
+    //                  children:   <array of child nodes>
+    //          } ...]
+    //      }
+    //      changes: [{
+    //          action:             <name of action: ADD | DELETE | MODIFY | MOVE>
+    //          path:               <path within repo>
+    //          prevpath:           <previous path within repo, only for MOVE>
+    //          hash:               <hash of content, except for DELETE>
+    //          source:             <path to read file from fs, except for DELETE>
+    //      } ...]
+    //  }
+    //
+    // Options controls operation as follows:
+    //
+    //  {
+    //      staged:         <true to commit just staged changes, otherwise just filesystem changes>
+    //      moveok:         <true iff MOVE is an allowed action, otherwise ADD and DELETE are used>
+    //  }
+    //
+    //
+    gtree.getcommit = function getcommit(options, local output) {
+        if !options
+            options = {
+                staged: true
+                moveok: true
+            }
+
+        // comrecur
+        // Recursively copy portions of tree that should be in commit.
+        function comrecur(input, parpath, chout, local node, nodout, path, action) {
+            for node in input {
+                nodout = { name: node.name }
+                path = joinode(parpath, node)
+                if node.children {                                          // add any children below
+                    nodout.children = []
+                    comrecur(node, nodout.children)
+                }
+                else if staged {                                            // take staged changes
+                    if node.shaStage {                                      // in staging area
+                        if node.shaStage == ""                              // staged removal
+                            output.actions.push({
+                                verb: "DELETE"
+                                path: path
+                                hash: node.shaRepo
+                            })
+                        else if node.shaRepo != node.shaStage {             // stage is different from repo
+                            nodout.hash = node.shaStage
+                            output.actions.push({
+                                action: if node.shaRepo "MODIFY" else "ADD"
+                                path: path
+                                hash: node.shaStage
+                                source: stageFSpath(node.shaStage) })
+                        } else if node.shaRepo
+                            nodout.hash = node.shaRepo                      // in repo but stage doesn't have change
+                    } else if node.shaRepo
+                        nodout.hash = node.shaRepo                          // in repo but not staged
+                } 
+                else if node.shaRepo {                                      // take filesystem changes (can't ADD)
+                    if node.shaFS {                                         // still on filesystem
+                        nodout.hash = node.shaFS
+                        if node.shaRepo != node.shaFS
+                            output.actions.push({
+                                verb: "MODIFY"
+                                path: path
+                                hash: node.shaStage
+                                source: path
+                            })
+                    }
+                    else                                                    // not on filesystem
+                        output.actions.push({
+                            verb: "DELETE"
+                            path: path
+                            hash: node.shaRepo
+                        })
+                }
+                if nodout.hash || nodout.children.length > 0
+                    chout.push(nodout)                                      // node still in commit
+            }
+        }
+
+        // matchToMove
+        // Change Add/Delete pairs to Move actions.
+        function matchToMove(local indexAction, action, sha, actions, mdex) {
+            indexAction = { }                                               // arrays of actions on same SHA, keyed by SHA value
+            for action in output.actions
+                if indexAction[action.hash]
+                    indexAction[action.hash].push(action)
+                else
+                    indexAction[action.hash] = [action]
+            for sha in indexAction {
+                actions = indexAction[sha]
+                for action in actions {
+                    if action.verb == "ADD" {
+                        mdex = actions.findIndex(function(action) {
+                             action.verb == "DELETE"                        // look for a matching source
+                        })
+                        if mdex >= 0 {
+                            action.verb = "MOVE"
+                            action.prevpath = actions[mdex].path
+                            actions[mdex].verb = "DEAD"                     // don't use this again
+                        }
+                    }
+                }
+            }
+            output.actions = output.actions.filter(function(action) {
+                action.verb != "DEAD"                                       // remove the dead items
+            })
+        }
+
+        // perform the analysis
+        output = {
+            tree: {
+                name: gtree.gittree.name
+                data: {
+                    semantics: "git"
+                    pathsep: "/" }
+                children: [] }
+            changes: []
+        }
+        comrecur(gtree.gittree, parpath, output.tree.children)
+        if options.moveok
+            matchToMove()
+        output
+    }
+
+    // gc
+    //
+    // Garbage-collect the staging area, removing any extra files no longer referenced from gittree.
+    // This returns an `(error, result) tuple.
+    //
+    gtree.gc = closure gc() {
+        // ### not implemented
+    }
+
+    // finis
+
+    gtree
+};
+
+
+/*
+ * GitIgnores
+ *
+ * column positioning:                          //                          //                      !
+ *     Maintain ignore pattern lists for a directory tree. The update method  searches a tree for
+ * .gitignore files, reads any it sees, loads the rules, and applies them in priority order to set
+ * ignore flags in the tree nodes. A file cache preserves the patterns to optimize processing, so
+ * different tree instances for the same directory structure can be used without penalty.
+ *     Rules apply to the directory in which their .gitignore file appears, including all sub-
+ * directories. Thus any given directory has a set of applicable ignore rules, comprised of the rules
+ * from the current and parent directories in deepest-first order. Directories are visited top-down,
+ * with the ruleset adjusted for any local additions. Each child of the directory is tested against
+ * the ruleset, in last-first, bottom-to-top order. Rules can be normal or negated, and as soon as a
+ * rule is found that matches the child, then processing is stopped and the child is ignored or not.
+ * After all children are processed then non-ignored directory children are processed recursively,
+ * possibly with revised rulesets based on ignore files deeper in the tree.
+ *     The rules cache operates by storing the rules defined by each file, along with the file path
+ * and modify date. When an ignore file is found then the cache is used if it exists with the same
+ * modify timestamp. Otherwise the ignore file is re-read, the rules rebuilt, and the result stored
+ * in the cache. Each time an ignore file is encounterd a found flag is marked. After the tree is
+ * processed, any cached rulesets without the found flag are removed.
+ *
+ */
+
+closure GitIgnores(fs, reporoot, local ignores, pathsep) {
+    ignores = new(object, this)
+    ignores.fileCache = { }                                                 // maps paths to rulesets
+
+    // clearCacheFlags
+    // Clear the found flags from all cached ignore files.
+    //
+    function clearCacheFlags(local path, file) {
+        for `(path, file) in ignores.fileCache
+            file.found = false
+    }
+    
+    // reclaimCacheEntries
+    // Reclaim space by removing unfound cache entries.
+    //
+    function reclaimCacheEntries(local path, file) {
+        for `(path, file) in ignores.fileCache
+            if !file.found
+                ignores.fileCache[path] = undefined
+    }
+    
+    // findRulefiles
+    // Find any rule files in the tree and queue them for asynchronous processing.
+    function findRulefiles(directory, queue, parpath, local node, nodepath) {
+        for node in directory.children {
+            nodepath = parpath.concat(pathsep, node.name)                   // path to this node
+            if node.children
+                findRulefiles(node, queue, nodepath)
+            else if node.name == ".gitignore"
+                queue.push({                                                // this one needs to be processed
+                    node: node
+                    path: nodepath
+                    parent: directory
+                })
+        }
+    }
+
+    // compileRules
+    // Compile the specified array of rule file lines into an array of minimatch rules, and store
+    // them in the specified destination dictionary. A possibly-empty array of errors is returned.
+    //
+    function compileRules(lines, dest, path, local errors, rules, rule) {
+        errors = []
+        rules = []
+        for `(line, ldex) in lines {
+            line = line.trim()
+            if line == "" || line.startsWith("#")
+                continue
+            rule = xnew(js.w.MinimatchLib.Minimatch, line, { matchBase: true, flipNegate: true })
+            if rule.makeRe
+                rules.push(rule)
+            else
+                errors.push(Error("invalid regular expression: ".concat(path, ":", ldex+1), {
+                    path: path
+                    line: ldex+1
+                    pattern: line
+                }))
+        }
+        dest.rules = rules
+        errors
+    }
+
+    // updateRulefile
+    // Update an ignore file's ruleset in the cache, return a possibly-empty error array.
+    closure updateRulefile(node, path, parent, local ruleFile, error, info, lines) {
+        path = fs.path.join(reporoot, path)
+        `(error, info) = fs.info(path)
+        if error || info.type == "directory"
+            return (error)                                                  // not valid
+        if !(ruleFile = ignores.fileCache[path])
+            ruleFile = ignores.fileCache[path] = { }
+        ruleFile.found = true
+        if ruleFile.mtimeMs == info.mtimeMs
+            return (false)                                                  // no need to update
+        ruleFile.mtimeMs = info.mtimeMs                                     // don't retry on error
+        `(error, lines) = fs.readLines(path)
+        if error
+            return (error)
+        compileRules(lines, ruleFile, path)
+    }
+    
+    // ignoredByRule
+    //
+    // True iff the pathname is ignored by the rules. What's tricky here is that rule.match() returns
+    // true if the pattern matches, which short-circuits rule execution. But if the rule is negated
+    // then the match says keep the file, which returns false.
+    //
+    function ignoredByRule(path, rules, local rdex, rule) {
+        rdex = rules.length
+        while --rdex >= 0 {
+            rule = rules[rdex]
+            if rule.match(path)
+                return (!rule.negate)                                       // it matches, and negate says to keep
+        }
+        return (false)
+    }
+    
+    // applyRules
+    // Apply the updated rules to the tree in priority order.
+    function applyRules(directory, rules, parpath, local node, nodepath, noderules) {
+        for node in directory.children {                                    // first pass: set ignore flags in our children
+            nodepath = parpath.concat(pathsep, node.name)
+            if ignoredByRule(nodepath, rules)
+                node.ignored = true
+            else
+                node.ignored = undefined
+        }
+        for node in directory.children                                      // second pass: process subdirectories
+            if node.children {
+                if node.ignored
+                    function ignorekids(directory, local node) {            // ignored directories are always ignored deep
+                        for node in directory.children {
+                            node.ignored = true
+                            if node.children
+                                ignorekids(node)
+                        }
+                    } (node)
+                else {
+                    nodepath = parpath.concat(pathsep, node.name)           // path to this node
+                    noderules = ignores.fileCache[nodepath].rules
+                    if noderules
+                        noderules = rules.concat(noderules)
+                    else
+                        noderules = rules
+                    applyRules(node, noderules, nodepath)
+                }
+            }
+    }
+
+    // update
+    //
+    // Update our ignore state, including reading ignore files, generating rules, setting flags, and
+    // and updating the cache as required. This returns a possibly-empty array of errors.
+    //
+    ignores.update = closure update(tree, local errors, queue) {
+        pathsep = from.data.pathsep
+        errors = []
+        queue = []
+        findRulefiles(tree, queue, "")
+        asyncArray(queue, 10, closure(file, local errlist) {
+            errlist = updateRulefile(file.node, file.path, file.parent)
+            if errlist
+                errors = errors.concat(errlist)
+        }).wait()
+        applyRules(tree, ignores.fileCache[""].rules, "")
+        errors
+    }
+
+    // finis
+    ignores
+};
+
+
+/*
+ * gcutInit
+ *
+ *     Initialize the gitops module.
+ *
+ */
+
+function gcutInit(local manifest) {
+
+    manifest = `(synctree, GitTree, GitIgnores, gcutInit)
+
+    Naan.module.build(module.id, "gitutils", function(modobj, compobj) {
+        compobj.manifest = manifest
+    })
+
+}();

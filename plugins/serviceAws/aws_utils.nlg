@@ -1,0 +1,86 @@
+/*
+ * aws_utils.nlg
+ * serviceAws
+ *
+ *     AWS SDK access utilities.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * queryPager
+ *
+ * Low-level paginator for AWS queries of the following form:
+ *     apiproc(params, [<args>,] callback(error, data))
+ * The caller/callback are responsible for initializing the params and adjusting them for each
+ * iteration. The callback should return false to stop looping.
+ *
+ */
+
+closure queryPager(apiobject, procname, params, xargs, doneCB, local pending, looping, result) {
+    if !apiobject[procname]
+        return (list(Error("queryPager method undefined:", procname)))
+    pending = new(nonce)
+    looping = true
+    while looping {                                                         // loop for multiple pages
+        pending.reset()
+        xapply(apiobject, procname, append(cons(params, xargs), cons(function (error, data) {
+            if error {
+                qpPagerError = error
+                debuglog(procname, "failed", error)
+                looping = false
+                pending.signal(list(error))
+            }
+            else {
+                looping = doneCB(data)
+                pending.signal(list(false, {ok: true}))
+            }
+        })))
+        result = pending.wait()
+    }
+    result       
+};
+
+
+/*
+ * QueryPager
+ *
+ * Paginator for AWS queries, called as:
+ *     QueryPager(apiobject, procname, params, [<args>,] function(data){})
+ *
+ */
+
+function QueryPager args {
+    closure(local apiobject, procname, params, xargs, doneCB) {
+        apiobject = pop(args)
+        procname = pop(args)
+        params = pop(args)
+        args = args.reverse()
+        doneCB = pop(args)
+        xargs = args.reverse()
+        queryPager(apiobject, procname, params, xargs, doneCB)
+    } ()
+};
+
+
+/*
+ * utilsInit
+ *
+ *     Initialize the Lambda module.
+ *
+ */
+
+function utilsInit(local manifest) {
+    manifest = `(queryPager, QueryPager, utilsInit)
+
+    Naan.module.build(module.id, "aws_utils", function(modobj, compobj) {
+        require("./serviceAws.nlg")
+        compobj.manifest = manifest
+        modobj.exports.QueryPager = QueryPager
+    })
+
+} ();

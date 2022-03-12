@@ -1,0 +1,386 @@
+/*
+ * workers.nlg
+ * Naanlib/frameworks/browser
+ *
+ *     Service worker and worker pools for the browser.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * ServiceWorker
+ *
+ *     Manage the service worker lifecycle.
+ *
+ */
+
+closure ServiceWorker(local serv, callback) {
+    serv = new(object, this)
+
+    //
+    // updateReg
+    //
+    // Registration has updated the service worker, so reestablish communication with the new one.
+    
+    closure updateReg(local mchan) {
+        if !serv.sw
+            return
+        mchan = xnew(js.w.MessageChannel)
+        serv.msgport = mchan.port2
+        serv.msgport.onmessage = workerMsg.proc
+        serv.sw.postMessage({ hereIsYourPort: mchan.port1 }, [mchan.port1])
+    }
+    
+    //
+    // workerMsg
+    //
+    // A message has come in from the service worker.
+    //
+    
+    closure workerMsg(msg) {
+        msg = msg.data
+        if msg.id == "fetch" {                                              // fetching a resource for the page
+            callback(false, {
+                message: "fetch"
+                seq: msg.seq
+                request: msg.request
+                version: msg.version
+            })
+        } else if msg.id == "text"
+            debuglog("sw[".concat(serv.scope, "]: "), msg.text)             // handy remote debug capability
+    }
+    
+    //
+    // defaultCB
+    //
+    //     Default callback if one is not specified.
+    
+    closure defaultCB(error, data) {
+        if error
+            return (ErrorDebugLog("service worker error", error))
+        debuglog("service worker", serv.scope.concat(":"), data.message, data.request.method, data.request.url)
+        if data.message == "fetch" {
+            serv.msgport.postMessage({
+                id: "response"
+                seq: data.seq
+                body: "body content stub - ".concat(data.request.method, " - ", data.request.url, " (", data.version, ")")
+                init: {
+                    status: 200,
+                    statusText: "OK"
+                }
+            })
+        }
+    }
+    
+    //
+    // reportResult
+    //
+    
+    closure makeResult(error, data) {
+        callback(error, data)
+        list(error, data)
+    }
+
+    //
+    // register
+    //
+    //     Register our service worker object for a specific scope.
+    
+    serv.register = closure register(scope, cb, local result) {
+        if !cb
+            cb = defaultCB
+        if serv.reg
+            unregister()
+        callback = cb
+        serv.scope = scope
+        if !scope
+            return (makeResult(Error("service worker scope required")))
+        if !js.w.navigator.serviceWorker
+            return (makeResult(Error("service workers not supported")))
+        js.w.navigator.serviceWorker.addEventListener("message", function(event) {
+            if event.data.msg == "Naan_need_fetch_port"
+                updateReg()
+        })
+        await(js.w.navigator.serviceWorker.register("sworker.js", { scope: scope }).then(function (reg) {
+            return (reg.update())
+        }).then(function (reg) {
+            serv.reg = reg
+            reg.update()
+            if reg.installing
+                serv.sw = reg.installing
+            else if reg.waiting
+                serv.sw = reg.waiting
+            else if reg.active
+                serv.sw = reg.active
+            updateReg()
+            reg.addEventListener("updatefound", function() {
+                serv.sw = serv.reg.installing                               // worker version was updated
+                updateReg()
+            })
+            result = makeResult(false, {
+                message: "opened"
+            })
+        }).catch(function (error) {
+            result = makeResult(Error("registration failed", error))
+            ErrorDebuglog("serv.register failed", result)
+        }))
+        result
+    }
+    
+    //
+    // unregister
+    //
+    //     Unregister our service worker.
+    
+    serv.unregister = closure unregister(local result) {
+        if !serv.reg
+            return (makeResult(Error("already not registered")))
+        await(serv.reg.unregister().then(function(success) {
+            serv.reg = false                                                // good or bad, don't try again
+            callback = defaultCB
+            if success
+                result = makeResult(false, {
+                    message: "closed"
+                })
+            else
+                result = makeResult(Error("unregister failed"))
+        }))
+        result
+    }
+
+    // finis
+    serv
+};
+
+
+/*
+ * ScopedServiceWorker
+ *
+ *     This implements service worker with multiple scope support, so that projects can register for
+ * a scope of the pathname space of the current website and redirect requests to PSM storage. This is
+ * useful for building and then using/testing a "website" in Naanide. For example, a console program
+ * can run in a worker thread, interact through the REPL, and access its built data using a SSW.
+ *
+ *     /run/<scope-path>/<filename>
+ *
+ * The installed JavaScript service worker will only intercept fetch requests with a pathname that
+ * begins with /run/.
+ *     All projects share a single ScopedServiceWorker instance, but each can specify its own scope
+ * so that it receives the content requests. This only supports the GET method for the time being.
+ *
+ */
+
+closure ScopedServiceWorker(local scoper, result) {
+    scoper = new(object, ScopedServiceWorker)
+    scoper.scopes = {}
+    scoper.serv = ServiceWorker()
+    result = scoper.serv.register("/", closure(error, data, local response, filepath, scope) {
+        if data.message == "fetch" {
+            response = {
+                id: "response"
+                seq: data.seq
+                init: {
+                    status: 200,
+                    statusText: "OK"
+                }
+            }
+            
+            // bad method
+            if data.request.method != "GET" {
+                response.init.status = 405
+                response.init.statusText = "Method Not Allowed"
+                scoper.serv.msgport.postMessage(response)
+                return
+            }
+            
+            // read resource
+            filepath = xnew(js.w.URL, data.request.url).pathname
+            filepath = DecodeURIComponent(filepath)                         // "/run/<scope>/path..."
+            filepath = filepath.slice(4)                                    // "/<scope>/path..."
+            error = true
+            for scope in scoper.scopes {
+                if filepath.startsWith(scope) {
+                    filepath = filepath.slice(scope.length+1)               // remove scope including "/"
+                    `(error, data) = call(scoper.scopes[scope], filepath, scope, response.init)
+                    break
+                }
+            }
+            if error === true
+                debuglog("ScopedServiceWorker: couldn't find scope", scope, "in", totuple(scoper.scopes))
+
+            // read resource failed
+            if error {
+                response.errorValue = error
+                response.errorText = ErrorString(error)
+                response.init.status = 404
+                response.init.statusText = "Not Found"
+                scoper.serv.msgport.postMessage(response)
+                return
+            }
+            
+            // read resource succeeded
+            response.body = data
+            scoper.serv.msgport.postMessage(response)
+            return
+        }
+    })
+    if result.0 {
+        ErrorDebuglog("ScopedServiceWorker failed", result)
+        return (result)
+    }
+
+    // register
+    //
+    // Register a scope with a pathname. The specified procedure will be called while files are
+    // fetched from that location.
+    
+    scoper.register = function register(scope, proc) {
+        scoper.scopes[scope] = proc
+    }
+        
+    // unregister
+    //
+    // Unregister a scope pathname.
+    
+    scoper.unregister = function unregister(scope) {
+        scoper.scopes[scope] = undefined
+    }
+
+    // destroy
+    //
+    //     Destroy the service worker.
+    
+    worker.destroy = function destroy() {
+        scoper.serv.unregister()
+        scoper.serv = false
+    }
+    
+    // finis
+    
+    list(false, scoper)
+};
+
+
+/*
+ * findTrackedScope
+ *
+ *     Find a tracked scope that matches the specified scope.
+ *
+ */
+
+closure findTrackedScope(track, scope, local exec) {
+    for exec in track.enumlist()
+        if exec.type == "ServiceWorkers" && exec.name == scope
+            return (exec)
+    false
+};
+
+
+/*
+ * TrackedScope
+ *
+ *     Create a tracked serviceWorker scope and ensure that our service worker is active. At the
+ * present time, if the scope already exists this uses the existing object and does not replace the
+ * filesystem used to fulfill requests. Seems like it should work, absent better ideas.
+ *     As of August 2021, it is evidently impossible for a service worker to learn the Content-Type 
+ * from the fetch request header, so we infer it from the file extension. All unknown or non-text
+ * extensions are assumed to be binary, and all text files are assumed to be UTF-8.
+ *
+ */
+
+closure TrackedScope(track, scope, fs, rootpath, local trope, result) {
+    trope = findTrackedScope(track, scope)
+    if trope
+        return (list(false, trope))
+    trope = runningExecutors.ExecutorBase(track, "ServiceWorkers", scope)
+    serviceWorker.register(scope, closure(filepath, scope, init,
+        local options, mimeType, error, data) {
+        mimeType = {
+            "css":  "text/css",
+            "csv":  "text/csv",
+            "htm":  "text/html",
+            "html": "text/html",
+            "ico":  "image/x-icon",
+            "ics":  "application/octet-stream",
+            "jpeg": "image/jpeg",
+            "jpg":  "image/jpeg",
+            "js":   "text/javascript",
+            "json": "application/json",
+            "mp3":  "audio/mpeg",
+            "mp4":  "video/mp4",
+            "nlg":  "text/plain",
+            "npk":  "application/json",
+            "svg":  "image/svg+xml",
+            "text": "text/plain",
+            "txt":  "text/plain",
+            "zip":  "application/octet-stream"
+        }[JSpath.extname(filepath).substring(1)]
+        if !mimeType
+            mimeType = "application/octet-stream"
+        if mimeType.startsWith("text/")
+            mimeType = mimeType.concat("; charset=UTF-8")
+        else
+            options = { encoding: "binary" }
+        init.headers = {
+            "Content-Type": mimeType
+        }
+        `(error, data) = fs.readFile(JSpath.join(rootpath, filepath), options)
+        if integer(data.length)
+            init.headers."Content-Length" = data.length
+        list(error, data)
+    })
+        
+    // destroy
+    //
+    //     Destroy the service worker.
+    
+    trope.destroy = function destroy() {
+        serviceWorker.unregister(scope)
+        scope = false
+    }
+
+    // finis
+
+    track.add(trope)
+    list(false, trope)
+};
+
+
+/*
+ * TrackServiceWorkers
+ *
+ *     Configure service workers to be tracked in the execution tracker.
+ *
+ */
+
+closure TrackServiceWorkers(track, local error) {
+    `(error, serviceWorker) = ScopedServiceWorker()
+    if error
+        ErrorDebugLog("TrackServiceWorkers: cannot load service worker", error)
+    track.register(TrackedScope, "V-Site")
+};
+
+
+/*
+ * workInit
+ *
+ *     Initialize the debugger page.
+ *
+ */
+
+function workInit(local manifest) {
+
+    manifest = `(ServiceWorker, ScopedServiceWorker, findTrackedScope, TrackedScope,
+        TrackServiceWorkers, workInit)
+
+    Naan.module.build(module.id, "workers", function(modobj, compobj) {
+        require("./browser.nlg")
+        compobj.manifest = manifest
+        modobj.exports.ServiceWorker = ServiceWorker
+        modobj.exports.TrackServiceWorkers = TrackServiceWorkers
+    })
+} ();

@@ -1,0 +1,13 @@
+{
+    "name": "@naanlang/naan",
+    "version": "1.0.0",
+    "author": "Richard C. Zulch",
+    "description": "Naan™ software platform",
+    "main": "./lib/core/naanlib.js",
+    "browser": "./dist/naanlib.min.js",
+    "license" : "MIT",
+    "scripts": {
+        "start": "node lib/node_repl.js",
+        "test": "node test/node_test.js"
+    }
+}

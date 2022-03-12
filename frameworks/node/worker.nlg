@@ -1,0 +1,560 @@
+/*
+ * worker.nlg
+ * Naanlib/frameworks/node
+ *
+ *     Nide worker controller.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * workCurrent
+ *
+ *     Attach a remote terminal interface to the current NodeJS thread.
+ *
+ */
+
+closure workCurrent(workerID, local current) {
+    current = new(object, this)
+    current.workerID = workerID
+    current.links = []
+    current.termif = xnew({
+        textout:    ONtextOut.proc
+        debugtext:  ONdebugText.proc
+        status:     ONstatus.proc
+        debugout:   ONdebugOut.proc
+        messageout: ONmessageOut.proc
+    })
+    
+    current.host =  js.t                                                    // our magic Naan controller reference
+    
+    // ONtextOut
+    // Process console text output by Naan.
+    
+    function ONtextOut(text) {
+        sendAll({
+            id: "textout",
+            text: text,
+        })
+    }
+    
+    // ONdebugText
+    // Process console debug text output by Naan.
+    
+    function ONdebugText(text, level) {
+        sendAll({
+            id: "debugtext",
+            text: text,
+            level: level
+        })
+    }
+    
+    // ONstatus
+    // Process status update output by Naan.
+    
+    function ONstatus(status) {
+        sendAll({
+            id: "status",
+            status: status
+        })
+    }
+    
+    // ONdebugOut
+    // Process debugger output.
+    
+    function ONdebugOut(data) {
+        sendAll({
+            id: "debugout",
+            data: data
+        })
+    }
+    
+    // ONmessageOut
+    // Process message output.
+    
+    function ONmessageOut(data) {
+        sendAll({
+            id: "targetout",
+            data: data
+        })
+    }
+
+    // removeLink
+    // Remove a link.
+    
+    function removeLink(link) {
+        current.links = current.links.filter(function(item) {
+            !(item.link eq link)
+        })
+    }
+        
+    // exitNotify
+    // Notify all links that we have terminated.
+    
+    function exitNotify(exitCode, local link) {
+        for link in current.links
+            link.exitWorker(exitCode)
+    }
+    
+    // sendAll
+    // Send a message to all links.
+    
+    function sendAll(msg, local link) {
+        for link in current.links
+            link.responder(msg)
+    }
+
+    //
+    // attach
+    //
+    //     Attach a link.
+    //
+    
+    current.attach = function attach(link, responder) {
+        removeLink(link)
+        current.links.push({
+            link: link                                                      // a link to us
+            responder: responder                                            // link's responder
+        })
+        if current.links.length == 1
+            current.host.Attach(current.termif)                             // attached while one link is active
+    }
+    
+    //
+    // detach
+    //
+    //     Detach a link.
+    //
+    
+    current.detach = function detach(link) {
+        removeLink(link)
+        if current.links.length == 0
+            current.host.Detach(current.termif)                             // attached while one link is active
+    }
+    
+    //
+    // msgin
+    //
+    //     Send a message to the host interface.
+
+    current.msgin = function msgin(msg) {
+        current.host.DispatchMessage(msg)
+    }
+
+    //
+    // echo
+    //
+    //     Echo a message to the *other* links.
+
+    current.echo = function echo(msg, thislink, local linkref) {
+        for linkref in current.links
+            if !(linkref.link eq thislink)
+                linkref.responder(msg)
+    }
+    
+    //
+    // vitalUpdate
+    //
+    //     Worker thread birth/death/enumeration.
+    
+    current.vitalUpdate = function vitalUpdate(msg) {
+        sendAll(msg)
+    }
+
+    // finis
+    current
+};
+
+
+/*
+ * workThread
+ *
+ *     Spawn a Naan worker in its own thread.
+ *
+ */
+
+closure workThread(workerID, startup, local worker, subChannel, deathWatcher) {
+    worker = new(object, this)
+    worker.workerID = workerID
+    worker.links = []
+
+    // create our worker thread
+
+    worker.thread = xnew(threads.Worker, JSpath.resolve(js.d, "node_worker.js"))
+    subChannel = xnew(threads.MessageChannel)
+    worker.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
+    worker.msgport = subChannel.port2
+
+    // removeLink
+    // Remove a link.
+    
+    function removeLink(link) {
+        worker.links = worker.links.filter(function(item) {
+            !(item.link eq link)
+        })
+    }
+        
+    // exitNotify
+    // Notify all links that we have terminated.
+    
+    function exitNotify(exitCode, local link) {
+        for link in worker.links
+            link.exitWorker(exitCode)
+        worker.links = []
+        deathWatcher(workerID)
+    }
+    
+    // sendAll
+    // Send a message to all links.
+    
+    function sendAll(msg, local link) {
+        for link in worker.links
+            link.responder(msg)
+    }
+
+    //
+    // onerror
+    //
+    //     An exception occurred on the worker thread. Since Naan catches all exceptions this should
+    // not occur normally.
+
+    worker.thread.on("error", function onerror(error) {
+        debuglog("worker terminated with error", workerID, error)
+        exitNotify(exitCode)
+    })
+    
+    //
+    // onexit
+    //
+    //     Note that the worker thread has terminated.
+
+    worker.thread.on("exit", function onexit(exitCode) {
+        exitNotify(exitCode)
+    })
+
+    //
+    // naanmsg
+    //
+    //     A message has been received from Naan running on the worker thread.
+    
+    worker.msgport.on("message", function naanmsg(msg, local startmsg) {
+        if msg.id == "loaded" {
+            startmsg = {
+                id: "start"
+                state: false                                                // resume state, if we have any
+                altcmd: false
+                dirpath: js.d
+            }
+            if startup.initcmds
+                startmsg.altcmd = startup.initcmds.concat("\n")
+            if startup.dirpath
+                startmsg.dirpath = startup.dirpath
+            worker.msgport.postMessage(startmsg)
+            worker.links[0].responder({                                     // only send this to first link
+                id: "started"                                               // don't want multiple initializers
+            }) }
+        else {
+            if msg.id == "status"
+                worker.lastStatus = milliseconds()
+            sendAll(msg) }                                                  // default is just return message to the client
+    })
+    
+    //
+    // terminate
+    //
+    //     Terminate this worker asap.
+    
+    worker.terminate = function terminate(local error, exitCode) {
+        `(error, exitCode) = await(worker.thread.terminate())
+        exitNotify(exitCode)
+    }
+
+    //
+    // attach
+    //
+    //     Attach a connection to our worker.
+    //
+    
+    worker.attach = function attach(link, responder) {
+        removeLink(link)
+        worker.links.push({
+            link: link                                                      // a link to us
+            responder: responder                                            // link's responder
+        })
+    }
+    
+    //
+    // detach
+    //
+    //     Detach a link from our worker.
+    //
+    
+    worker.detach = function detach(link) {
+        removeLink(link)
+    }
+
+    //
+    // msgin
+    //
+    //     Send a message to the worker thread.
+
+    worker.msgin = function msgin(msg) {
+        worker.msgport.postMessage(msg)
+    }
+    
+    //
+    // echo
+    //
+    //     Echo a message to the *other* links.
+
+    worker.echo = function echo(msg, thislink, local linkref) {
+        for linkref in worker.links
+            if !(linkref.link eq thislink)
+                linkref.responder(msg)
+    }
+    
+    //
+    // vitalWatch
+    //
+    //     Report our termination to the specified watcher.
+    
+    worker.vitalWatch = function vitalWatch(watcher) {
+        deathWatcher = watcher
+    }
+
+    // finis
+    worker
+};
+
+
+/*
+ * workLink
+ *
+ *     An object representing a specific connection and worker pair. Both workers and connections may
+ * have multiple links. This allows a worker to communicate with multiple connections and allows
+ * clients to create a new connection to talk with an existing worker.
+ *
+ */
+
+closure workLink(workco, conn, worker, sender, local link) {
+    link = new(object, this)
+
+    //
+    // closeConn
+    //
+    // Note that the connection has closed.
+    //
+    
+    link.closeConn = function closeConn() {
+        worker.detach(link)                                                 // stop receiving updates from worker
+    }
+        
+    //
+    // exitWorker
+    //
+    // Note that the worker has exited.
+    //
+    
+    link.exitWorker = function exitWorker(exitCode) {
+        sender("terminated", [false, {
+            workerID: worker.workerID                                       // notify client they've lost a worker
+            exitCode: exitCode
+        }])
+        workco.closeLink(link, conn, worker.workerID)
+        worker.detach(link)
+    }
+
+    // initialize
+
+    worker.attach(link, function msgout(data) {
+        sender("msgout", data)
+    })
+    sender("linked", [false, {
+        workerID: worker.workerID                                           // notify client they've gained a worker
+    }])
+
+    // finis
+
+    link
+};
+
+
+/*
+ * workController
+ *
+ *     Controller for workers. This knows about all the workers and links. If a connection dies then
+ * this tears down all links from the connection. If a worker dies then this tears down all links to
+ * that worker.
+ *
+ */
+
+closure workController(api, local workco) {
+    workco = new(object, this)
+    workco.serverID = "Workers"                                             // our serverID, used for communications
+    workco.workers = { }                                                    // dictionary of workers by workerID
+    workco.links = new(weakmap)
+    api.Register(workco.serverID, workco)
+    
+    // addLinkForConnection
+    // Add a link for a connection under its workerID.
+    
+    function addLinkForConnection(conn, workerID, link, local iddict) {
+        iddict = workco.links[conn]
+        if !iddict
+            workco.links[conn] = iddict = { }
+        iddict[workerID] = link
+    }
+        
+    // deleteLinkForConnection
+    // Remove a link for a connection under its workerID, or false.
+    
+    function deleteLinkForConnection(conn, workerID) {
+        if workco.links[conn][workerID]
+            workco.links[conn][workerID] = undefined
+    }
+
+    // makeSender
+    // Sender factory for specified connection and message.
+    
+    closure makeSender(conn, message) {
+        function sender(respOp, payload) {
+            conn.send({
+                clientID: message.clientID
+                serverID: message.serverID
+                workerID: message.workerID
+                respOp: respOp
+                payload: payload
+            })
+        }
+    }
+    
+    // makeLink
+    // Link the specified message, connection and worker.
+    
+    function makeLink(message, conn, local worker, link) {
+        worker = workco.workers[message.workerID]
+        link = workLink(workco, conn, worker, makeSender(conn, message))
+        addLinkForConnection(conn, message.workerID, link)
+    }
+    
+    // termination
+    // Note that a worker has terminated.
+    
+    function termination(workerID) {
+        workco.current.vitalUpdate({
+            id: "termination",                                              // note a thread has gone away
+            workerID: workerID
+        })
+        workco.workers[workerID] = undefined                                // it's like this worker has never been
+    }
+
+    //
+    // wsReceive
+    //
+    //     Process a message from the websocket API.
+    //
+
+    workco.wsReceive = function wsReceive(message, conn, local worker, link, error) {
+        if !message.workerID
+            error = Error("workerID required", message.workerOp)
+        else
+        {
+            worker = workco.workers[message.workerID]
+            link = workco.links[conn][message.workerID]
+            if message.workerOp == "msgin" {
+                if worker && message.payload {
+                    if !link
+                        makeLink(message, conn)                             // make sure we have a link for responses
+                    worker.msgin(message.payload)                           // send message to worker
+                    return } }
+            else if message.workerOp == "echo" {
+                if worker && message.payload {
+                    if !link
+                        makeLink(message, conn)                             // make sure we have a link for responses
+                    worker.echo(message.payload, link)                      // echo message to other links
+                    return } }
+            else if message.workerOp == "spawn" {
+                if !worker {                                                // create worker if needed
+                    if message.workerID == "NideServer"
+                        worker = workco.current = workCurrent(message.workerID)
+                    else
+                        worker = workThread(message.workerID, message.payload)
+                    workco.workers[message.workerID] = worker }
+                if !link
+                    makeLink(message, conn)                                 // make sure we have a link for responses
+                if message.workerID == "NideServer"
+                    workco.current.vitalUpdate({
+                        id: "workerlist",                                   // send the initial list of workers
+                        workerIDs: workco.workers.*
+                    })
+                else {
+                    worker.vitalWatch(termination)
+                    workco.current.vitalUpdate({
+                        id: "spawned",                                      // note a new worker thread
+                        name: message.payload.name
+                        workerID: message.workerID
+                    }) }
+                return }
+            else if message.workerOp == "terminate" {
+                if worker {
+                    if !link
+                        makeLink(message, conn)                             // make sure we have a link for responses
+                    worker.terminate()                                      // echo message to other links
+                    return } }
+            error = Error("invalid parameters", message.workerOp, message.workerID)
+        }
+        call(makeSender(conn, message), "error", [error])
+    }
+    
+    //
+    // wsClose
+    //
+    //     Note that the connection with the client was closed.
+    //
+    
+    workco.wsClose = function wsClose(conn, local workerID) {
+        for workerID in workco.workers {
+            link = workco.links[conn][workerID]
+            if link
+                link.closeConn()
+            deleteLinkForConnection(conn, workerID)
+        }
+    }
+    
+    //
+    // closeLink
+    //
+    //     Note that a link with the worker has closed.
+    //
+
+    workco.closeLink = function closeLink(link, conn, workerID) {
+        deleteLinkForConnection(conn, workerID)
+    }
+
+    // finis
+    workco
+};
+
+
+/*
+ * workInit
+ *
+ *     Initialize the worker controller.
+ *
+ */
+
+function workInit(local manifest) {
+
+    manifest = `(workCurrent, workThread, workLink, workController, workInit)
+
+    Naan.module.build(module.id, "worker", function(modobj, compobj) {
+        require("./node.nlg")
+        threads = js.r("worker_threads")                                    // ### should be on reload
+        compobj.manifest = manifest
+        modobj.exports.WorkerController = workController
+    })
+}();

@@ -1,0 +1,63 @@
+/*
+ * gitClient.nlg
+ * gitClient
+ *
+ *     A git client for API-based Git services.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * gitcRequireJS
+ *
+ *     Load a Javascript file from our origin with callback(error, xobject) when complete. If no 
+ * callback is provided then this blocks the caller and returns a standard `(result, error) tuple 
+ * when complete.
+ *
+ * gitcRequireJS("plugins/gitClient/minimatch.js")
+ *
+ */
+
+closure gitcRequireJS(script, callback, local scriptTag) {
+    if !callback
+        return (syncAdapter(gitcRequireJS, script))
+    scriptTag = js.w.document.createElement("script")
+    scriptTag.src = js.w.location.origin.concat("/", script)
+    scriptTag.onload = function (event) {
+        callback(false, scriptTag)
+        true
+    }
+    scriptTag.onerror = function (event) {
+        callback(Error("gitcRequireJS failed:", script))
+        true
+    }
+    js.w.document.body.appendChild(scriptTag)
+};
+
+
+/*
+ * gitcInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function gitcInit(local manifest) {
+    manifest = `(gitcRequireJS, gitcInit)
+
+    Naan.module.build(module.id, "gitClient", function(modobj, compobj) {
+        compobj.manifest = manifest
+    })
+    nideCommon = require("nideCommon/nideCommon.nlg")
+    letimport(nideCommon)
+    require("plugins/gitClient/clientops.nlg")
+    require("plugins/gitClient/gitutils.nlg")
+    gitcRequireJS("plugins/gitClient/minimatch.js", function(error, result) {
+        if error
+            ErrorDebugLog(error)
+    })
+} ();

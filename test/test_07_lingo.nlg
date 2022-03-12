@@ -1,0 +1,623 @@
+/*
+ * test_07_lingo.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2018-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Test Category 7 - Lingo
+ *
+ */
+
+RegisterTestCategory("Lingo", [
+    [ "4+3;", "7" ],                                                        // generic first test
+    [ "Dialect eq Dialect();>", "true" ],
+
+    //
+    // coalescing
+    //
+
+    [ "\"abc\" \"def\" \"ghi\" \"jkl\";", "\"abcdefghijkl\"" ],
+    [ "quote(a || b);>", "(|| a b)" ],
+    [ "quote(a || b || c);>", "(|| a b c)" ],
+    [ "quote(a || b || c || d);>", "(|| a b c d)" ],
+    [ "quote(a && b);>", "(&& a b)" ],
+    [ "quote(a && b && c);>", "(&& a b c)" ],
+    [ "quote(a && b && c && d);>", "(&& a b c d)" ],
+
+
+    //
+    // objects
+    //
+        
+    [ "function test1() {\n"
+        "    {a:33,b:44}                // hi there\n"
+        "};", "test1" ],
+    [ "getproc(test1);",
+        "function test1() {\n"
+        "    { a: 33, b: 44 }                                            // hi there\n"
+        "}" ],
+    [ "\"abc\".toUpperCase();", "\"ABC\"" ],
+    [ "{ a:print }.a(\"Hi\");  // test", "Hi|\"Hi\"" ],
+    [ "{ a:print }["a"](\"Hi\");", "Hi|\"Hi\"" ],
+    [ "{ a:quote(function(){print(\"High\")}) }.a();", "High|\"High\"" ],
+    [ "a.b -1;", "false" ],
+    [ "a.b-1;", "false" ],
+
+
+    //
+    // weakmaps
+    //
+    
+    [ "wm=new(weakmap);", "[object WeakMap]" ],
+    [ "weakmap(wm);", "true" ],
+    [ "weakmap({});", "false" ],
+    [ "aa = [4,5,6];", "[4, 5, 6]" ],
+    [ "oo = {a:3,b:4};", "{ a: 3, b: 4 }" ],
+    [ "tt = `(a,b,c);", "(a, b, c)" ],
+    [ "wm[aa] = 33;", "33" ],
+    [ "wm[oo] = 44;", "44" ],
+    [ "wm[tt] = 55;", "55" ],
+    [ "wm[3] = `(1,2,3);", "(1, 2, 3)" ],
+    [ "wm[\"three\"] = 4;", "4" ],
+    [ "wm[3.3] = 5;", "5" ],
+    [ "wm[symbolic] = 6;", "6" ],
+    [ "wm[aa];", "33" ],
+    [ "wm[oo];", "44" ],
+    [ "wm[tt];", "55" ],
+    [ "wm[3];", "(1, 2, 3)" ],
+    [ "wm[3.0];", "(1, 2, 3)" ],                                            // float converted on export
+    [ "wm[\"three\"];", "4" ],
+    [ "wm[3.3];", "5" ],
+    [ "wm[3.4];", "false" ],
+    [ "wm[symbolic];", "6" ],
+    [ "wm[unintern(\"symbolic\")];", "false" ],
+    [ "wm[2];", "false" ],
+    [ "wm[\"four\"];", "false" ],
+    [ "wm[[]];", "false" ],
+    [ "wm[{}];", "false" ],
+    [ "wm[`()];", "false" ],
+    [ "wm[oo] = undefined;", "undefined" ],
+    [ "wm[oo];", "false" ],
+    
+
+    //
+    // === and !== operators
+    //
+        
+    [ "pp = oo;", "{ a: 3, b: 4 }" ],
+    [ "{a:3,b:4} == oo;", "true" ],
+    [ "{a:3,b:4} != oo;", "false" ],
+    [ "{a:3,b:4} === oo;", "false" ],
+    [ "{a:3,b:4} !== oo;", "true" ],
+    [ "pp == oo;", "true" ],
+    [ "pp != oo;", "false" ],
+    [ "pp === oo;", "true" ],
+    [ "pp !== oo;", "false" ],
+    
+
+    //
+    // <=> operator
+    //
+        
+    [ "false <=> false;", "0" ],
+    [ "false <=> true;", "0" ],
+    [ "'a' <=> 'a';", "0" ],
+    [ "'a' <=> 'b';", "-1" ],
+    [ "'b' <=> 'a';", "1" ],
+    [ "1 <=> 0;", "1" ],
+    [ "0 <=> 1;", "-1" ],
+    [ "1 <=> 1;", "0" ],
+
+
+    //
+    // annotations
+    //
+    
+    [ "quote(a@b);>", "(deref (@ a) (`` b))" ],
+    [ "quote(a@[b]);>", "(deref (@ a) b)" ],
+    [ "quote(a@*);>", "(@* a)" ],
+    [ "quote(a@b = 5);>", "(Lib::set\\\[ (@ a true) (`` b) 5)" ],
+    [ "quote(a@[b] = 6);>", "(Lib::set\\\[ (@ a true) b 6)" ],
+    [ "quote(a@b += 7);>", "(Lib::preadjust (deref (@ a) (`` b)) + 7)" ],
+    [ "quote(++a@b);>", "(Lib::preadjust (deref (@ a) (`` b)) + 1)" ],
+    [ "quote(a@b++);>", "(Lib::postadjust (deref (@ a) (`` b)) + 1)" ],
+    [ "quote(@b);>", "(Lib::set\\\. Lingo::annotations (`` b) (`` b))" ],
+    [ "quote(@b = 3);>", "(Lib::set\\\. Lingo::annotations (`` b) 3)" ],
+
+    [ "quote(a@b);", "a@b" ],
+    [ "quote(a@[b]);", "a@[b]" ],
+    [ "quote(a@*);", "a@*" ],
+    [ "quote(a@b = 5);", "a@b = 5" ],
+    [ "quote(a@[b] = 6);", "a@[b] = 6" ],
+    [ "quote(a@b += 7);", "a@b += 7" ],
+    [ "quote(++a@b);", "++a@b" ],
+    [ "quote(a@b++);", "a@b++" ],
+    
+    [ "function jim(x) { \"you are annotated with \".concat(x, \"!\") };", "jim" ],
+    [ "call(`@, a);", "false" ],
+    [ "a@*;", "false" ],
+    [ "a@joe;", "false" ],
+    [ "a@joe = 55;", "55" ],
+    [ "a@*;", "(\"joe\")" ],
+    [ "a@joe;", "55" ],
+    [ "jim = 8;", "8" ],
+    [ "@joe = 3;@jim;function testat() { print(\"annotest\") };", "3|jim|testat" ],
+    [ "cdr(testat.proc.1);", "{\n"
+        "    joe       : 3,\n"
+        "    jim       : jim,\n"
+        "    .sourcemap: {\n"
+        "        count         : 5,\n"
+//      "        map           : [(0, 23), 0, 9, 2, 7],\n" -- maps currently omitted
+        "        comments      : [] } }" ],
+    [ "testat@jim(true);", "\"you are annotated with true!\"" ],
+
+
+    //
+    // lists, objects & arrays
+    //
+    
+    [ "divide(71, 3);", "(23 . 2)" ],
+    [ "[3,4+5];", "[3, 9]" ],
+    [ "{a:3,b:4+5};", "{ a: 3, b: 9 }" ],
+
+    [ "`(1, 2, {a:3,b:4}, 5);", "(1, 2, { a: 3, b: 4 }, 5)" ],
+    [ "`(1, 2, {a:3,b:4}, 5);>", "(1 2 Dictionary{2} 5)" ],
+    [ "`(1, 2, {a:3,b:4+5}, 6);", "(1, 2, { a: 3, b: 4+5 }, 6)" ],
+    [ "`(1, 2, {a:3,b:4+5}, 6);>", "(1 2 Dictionary{2} 6)" ],
+
+    [ "`(1 2 [3,4+5] 6);>", "(1 2 Array[2] 6)" ],
+    [ "`(1 2 [3,4+5] 6);", "(1, 2, [3, 4+5], 6)" ],
+    [ "`(1 2 [3,4+5] 6).2.1;", "4 + 5" ],
+    [ "quote(2*3+4*5);", "2*3 + 4*5" ],
+
+    [ "macro(x){x.c=5}({a:3,b:4});", { errors: "can't modify NaanConst::Dictionary{2} from Test-Lingo" } ],
+    [ "macro(x){x[1]=6}([3,4,5]);", { errors: "can't modify NaanConst::Array[3] from Test-Lingo" } ],
+
+    [ "js.*;", '("n", "o", "d", "g", "r", "t")' ],
+    
+    [ "[1,2,3].concat(4,5,6);", "[1, 2, 3, 4, 5, 6]" ],
+    [ "[1,2,3].concat([4,5,6]);", "[1, 2, 3, 4, 5, 6]" ],
+
+    [ "[1,4,9].reduce(function(a,b){Math.max(a,b)});", "9" ],
+    [ "[1,4,9].reduce(function(a,b){Math.max(a,b)}, 10);", "10" ],
+    [ "[].reduce(function(a,b){Math.max(a,b)}, 10);", "10" ],
+    [ "[].reduce(function(a,b){Math.max(a,b)});", "false" ],
+    [ "[{x:\"a\"},{x:\"b\"},{x:\"c\"}].reduce(function(a,b,c,d){{x:a.x.concat(tostring(b.x))}});", "{ x: \"abc\" }" ],
+    
+    [ "function(oo){oo._id=3}({a:4});", "3" ],
+    [ "function(xx,oo){oo._id=3}(true,{a:4});", "3" ],
+    
+    [ "[1,quote(2+3),4].find(function(el){el==list(`+,2,3)});", "2 + 3" ],
+    [ "[1,quote(2+3),4].find(function(el){el==5});", "undefined" ],
+
+
+    //
+    // ! operator and friends
+    //
+
+    [ "not true;", "false" ],
+    [ "!true;", "false" ],
+    [ "not false;", "true" ],
+    [ "!false;", "true" ],
+    [ "not 0;", "false" ],
+    [ "!0;", "false" ],
+    [ "quote(!0);>", "(not 0)" ],
+    [ "quote(not aa);", "!aa" ],
+    [ "quote(!aa);", "!aa" ],
+    [ "quote(!aa);>", "(not aa)" ],
+    [ "quote(!aa>bb);", "!aa>bb" ],
+    [ "quote(!aa>bb);>", "(not (> aa bb))" ],
+    [ "quote(!a*b);", "!a*b" ],
+    [ "quote(!(a*b));", "!a*b" ],
+    [ "quote((!a)*b);", "(!a) * b" ],
+    [ "quote(!a||b);", "!a || b" ],
+    [ "quote(!(a||b));", "!(a || b)" ],
+
+    [ "Dialect.redefine(`!, function(x, local accum) { accum = x, while x-- > 1 accum *= x, accum });", "!" ],
+    [ "-1!;", "-1" ],
+    [ "3*-10!+2;", "-10886398" ],
+    [ "100!;", "93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000" ],
+    [ "quote(3*-10!+2);>", "(+ (* 3 (- (! 10))) 2)" ],
+    [ "quote(100!);", "100!" ],
+    [ "quote(100!);>", "(! 100)" ],
+
+
+    //
+    // adjusters
+    //
+    
+    [ "vv = 3;", "3" ],
+    [ "++vv;", "4" ],
+    [ "vv;", "4" ],
+    [ "vv++;", "4" ],
+    [ "vv;", "5" ],
+    [ "--vv;", "4" ],
+    [ "vv;", "4" ],
+    [ "vv--;", "4" ],
+    [ "vv;", "3" ],
+    [ "vv += 2;", "5" ],
+    [ "vv -= 2;", "3" ],
+    [ "vv *= 2;", "6" ],
+    [ "vv /= 2;", "3" ],
+
+    [ "oo = {a:3};", "{ a: 3 }" ],
+    [ "oo.a;", "3" ],
+    [ "++oo.a;", "4" ],
+    [ "oo.a;", "4" ],
+    [ "oo.a++;", "4" ],
+    [ "oo.a;", "5" ],
+    [ "--oo.a;", "4" ],
+    [ "oo.a;", "4" ],
+    [ "oo.a--;", "4" ],
+    [ "oo.a;", "3" ],
+    [ "oo.a += 2;", "5" ],
+    [ "oo.a -= 2;", "3" ],
+    [ "oo.a *= 2;", "6" ],
+    [ "oo.a /= 2;", "3" ],
+
+    [ "aa = [2,3];", "[2, 3]" ],
+    [ "++aa[1];", "4" ],
+    [ "aa[1];", "4" ],
+    [ "aa[1]++;", "4" ],
+    [ "aa[1];", "5" ],
+    [ "--aa[1];", "4" ],
+    [ "aa[1];", "4" ],
+    [ "aa[1]--;", "4" ],
+    [ "aa[1];", "3" ],
+    [ "aa[1] += 2;", "5" ],
+    [ "aa[1] -= 2;", "3" ],
+    [ "aa[1] *= 2;", "6" ],
+    [ "aa[1] /= 2;", "3" ],
+
+
+    //
+    // if else
+    //
+    
+    [ "quote(function() {"
+        "if 2 {"
+        "    if c == \"w\" 3 }});>", "(function lambda false ((identity 2) ((== c \"w\") 3)))" ],
+
+    [ "quote("
+        "try { 1 } catch {"
+        "    if 2 {"
+        "        if c == \"w\" 3}});>", "(catch (1) (((identity 2) ((== c \"w\") 3))) false)" ],
+
+    [ "quote(function() {"
+        "loop {"
+        "    if 2 {"
+        "        if c == \"w\" 3 else 4,"
+        "        break }}});>", "(function lambda false (loop false (((identity 2) (((== c \"w\") 3) 4) (break)))))" ],
+    
+    [ "quote("
+        "function() {"
+        "   loop {"
+        "       if 1 {"
+        "           2, if false"
+        "               break"
+        "       }, 3, break } });>", "(function lambda false (loop false (((identity 1) 2 ((identity false) (break)))) 3 (break)))" ],
+           
+    [ "quote(function(){if 1 { 2, if 3 { if 4 5 } else 6 } else 7 });",
+           "function () {\n"
+           "    if 1 {\n"
+           "        2\n"
+           "        if 3 {\n"
+           "            if 4\n"
+           "                5 }\n"
+           "        else\n"
+           "            6 }\n"
+           "    else\n"
+           "        7\n"
+           "}" ],
+           
+    [ "quote(function(){if 1 { if 3 { if 4 5 } else 6 } else 7 });",
+           "function () {\n"
+           "    if 1\n"
+           "        if 3 {\n"
+           "            if 4\n"
+           "                5 }\n"
+           "        else\n"
+           "            6\n"
+           "    else\n"
+           "        7\n"
+           "}" ],
+
+    [ "quote(cond(if 1 { if 2 3 else 4 }));>", "(cond ((identity 1) ((identity 2) 3) 4))" ],
+    [ "quote(try { 1 } catch { if 1 { if 2 3 else 4 } });>", "(catch (1) (((identity 1) ((identity 2) 3) 4)) false)" ],
+    [ "quote(try { 1 } catch { if 2 3 });>", "(catch (1) (((identity 2) 3)) false)" ],
+    [ "quote(try { 1 } catch { if 2 3, if 4 5 });>", "(catch (1) (((identity 2) 3) ((identity 4) 5)) false)" ],
+
+    [ "cond(if 1 2, if 3 4);", "2" ],
+    [ "cond(if false 2, if 3 4);", "4" ],
+    [ "quote(cond(if 1 2, if 3 4));>", "(cond ((identity 1) 2) ((identity 3) 4))" ],
+
+    [ "quote(cond(if 3==2 a++));>", "(cond ((== 3 2) (Lib::postadjust a + 1)))" ],
+    [ "quote(cond(if 3==2, ++a));>", "(cond ((== 3 2) (Lib::preadjust a + 1)))" ],
+    [ "quote(cond(if (3==2) a++));>", "(cond ((== 3 2) (Lib::postadjust a + 1)))" ],
+    [ "quote(cond(if (3==2) ++a));>", "(cond ((== 3 2) (Lib::preadjust a + 1)))" ],
+
+    [ "quote(cond(if a==b 9));>", "(cond ((== a b) 9))" ],
+    [ "quote(cond(if a==b, -9));>", "(cond ((== a b) -9))" ],
+    [ "quote(cond(if (a==b) 9));>", "(cond ((== a b) 9))" ],
+    [ "quote(cond(if (a==b) -9));>", "(cond ((== a b) -9))" ],
+    
+    [ "quote(if a == b 3);>", "(cond ((== a b) 3))" ],
+    [ "quote(if a == b 3 else 4);>", "(cond ((== a b) 3) ((identity true) 4))" ],
+    [ "function() { if a == b 3 };>", "(function lambda false ((== a b) 3))" ],
+    [ "function() { if a == b 3 else 4 };>", "(function lambda false ((== a b) 3) 4)" ],
+    [ "function() { loop { if a == b a++ else break } };>",
+        "(function lambda false (loop false (((== a b) (Lib::postadjust a + 1)) (break))))" ],
+    [ "function() { loop { if a == b break else a++ } };>",
+        "(function lambda false (loop false (((== a b) (break)) (Lib::postadjust a + 1))))" ],
+    [ "function(x) { loop { x = (if a == b a++ else break) } };>",
+        "(function lambda (x) (loop false (= x (cond ((== a b) (Lib::postadjust a + 1)) ((identity true) (break))))))" ],
+    [ "function(x) { loop { x = (if a == b a++ else break), printline(x) } };>",
+        "(function lambda (x) (loop false (= x (cond ((== a b) (Lib::postadjust a + 1)) ((identity true) (break)))) (printline x)))" ],
+
+    
+    //
+    // while
+    //
+    
+    [ "x=0; while (x < 10) { print(x, space), x=x+1 };", "0 1 2 3 4 5 6 7 8 9|0|true" ],
+    [ "function(x) { x=0, while x < 10 { print(x++, space) } }();", "0 1 2 3 4 5 6 7 8 9|true" ],
+    
+    [ "quote(while 3==2 a++);>", "(while false ((not (== 3 2))) (Lib::postadjust a + 1))" ],
+    [ "quote(while 3==2, ++a);>", "(while false ((not (== 3 2))) (Lib::preadjust a + 1))" ],
+    [ "quote(while (3==2) a++);>", "(while false ((not (== 3 2))) (Lib::postadjust a + 1))" ],
+    [ "quote(while (3==2) ++a);>", "(while false ((not (== 3 2))) (Lib::preadjust a + 1))" ],
+
+    [ "quote(while a==b 9);>", "(while false ((not (== a b))) 9)" ],
+    [ "quote(while a==b, -9);>", "(while false ((not (== a b))) -9)" ],
+    [ "quote(while (a==b) 9);>", "(while false ((not (== a b))) 9)" ],
+    [ "quote(while (a==b) -9);>", "(while false ((not (== a b))) -9)" ],
+
+    //
+    // for
+    //
+    
+    [ "for x in `(a b c) print(x);>", "abc|Dictionary{8}" ],
+    [ "function() { loop { if x > 3 break, 4 } };>", "(function lambda false (loop false ((> x 3)) 4))" ],
+    [ "function () { for xx in [a,b,c] { if true { if xx eq 3, break }, print(xx) } }();>", "abc|Dictionary{7}" ],
+    [ "function (x) { loop try { 1, if x continue, 2, break } catch { 3 } }();", "2" ],
+        
+    [ "miter=iterate(`(a,b,c), `x);", "{\n"
+        "    target  : (a, b, c),\n"
+        "    final   : final_value,\n"
+        "    traverse: (a, b, c),\n"
+        "    index   : -1,\n"
+        "    last    : 2,\n"
+        "    next    : tuple_next_value }" ],
+    [ "miter.next(miter);miter.value;miter.next(miter);miter.value;miter.next(miter);miter.value;miter.next(miter);",
+        "false|a|false|b|false|c|true" ],
+    [ "quote(for x in `(a b c) print(x));>",
+        "(for (let lambda (iter) "
+        "(= iter (iterate (`` (a b c)) (`` x))) "
+        "(loop false ((`. iter \"next\" (iter)) (`. iter \"final\" (iter))) "
+            "(= x (`. iter \"value\")) "
+            "(print x))))" ],
+    [ "for x in `(a b c) print(x);>", "abc|Dictionary{8}" ],
+    [ "quote(function () { for xx in [a,b,c] { if true { if xx eq 3, break }, print(xx) } });>",
+        "(function lambda false (for (let lambda (iter) "
+        "(= iter (iterate Array[3] (`` xx))) "
+        "(loop false ((`. iter \"next\" (iter)) (`. iter \"final\" (iter))) "
+            "(= xx (`. iter \"value\")) "
+            "(((identity true) ((eq xx 3) (break)))) "
+            "(print xx)))))" ],
+    [ "function () { for xx in [a,b,c] { if true { if xx eq 3, break }, print(xx) } }();>",
+        "abc|Dictionary{7}" ],
+    [ "quote(for `(v,i) in `(a b c) print(v,i));>",
+        "(for (let lambda (iter) "
+        "(= iter (iterate (`` (a b c)) (`` (v i)))) "
+        "(loop false ((`. iter \"next\" (iter)) (`. iter \"final\" (iter))) "
+            "(= (v i) (`. iter \"value\")) "
+            "(print v i))))" ],
+    [ "for `(v,i) in `(a b c) print(v,i,\"-\");>", "a0-b1-c2-|Dictionary{8}" ],
+    [ "for `(v,i) in [a, b, c] print(v,i,\"-\");>", "a0-b1-c2-|Dictionary{7}" ],
+    [ "for `(k,v,i) in {a:3,b:4,c:5 } print(k,v,i,\"-\");>", "a30-b41-c52-|Dictionary{8}" ],
+    [ "for `kk in {a:3,b:4,c:5 } print(kk);>", "abc|Dictionary{8}" ],
+    [ "function (local xx) { for xx in [a,b,c] print(xx), for xx in `(d,e,f) print(xx) }();>",
+        "abcdef|Dictionary{8}" ],
+    [ "for x in xnew({a:3,b:4,g:6}) print(x);>", "abg|Dictionary{8}"],
+    [ "for 3 in `(a, b, c) print(x);>",
+        { errors: "invalid iteration variable at (1, 5) found 3" } ],
+    [ "for x in xnew() print(x);>", "Dictionary{6}"],
+    [ "for x in Array(e, f, g) print(x);>", "efg|Dictionary{7}"],
+    [ "for x in false print(x);>", "Dictionary{5}"],
+    [ "for x in { } print(x);>", "Dictionary{7}"],
+
+    //
+    // procedures
+    //
+    
+    [ "function() { function p(f) { call(f) }, p(function() { print(\"hi\") }) }();", "hi|\"hi\"" ],
+    [ "closure() { function p(f) { call(f) }, p(function() { print(\"hi\") }) }();", "hi|\"hi\"" ],
+    [ "function () { function p(f) { print(call(f,0)) }, p(function(x) { x-1}), p(function(x) {x+1}) }();", "-11|1" ],
+    [ "closure () { closure p(f) { print(call(f,0)) }, p(function(x) { x-1}), p(function(x) {x+1}) }();", "-11|1" ],
+    
+    [ "closure(){ function(local id) { id = 3, print([id][0]) }()}();", "3|3" ],
+    [ "closure(){ function(local id) { id = 5, print({id:id}.id) }()}();", "5|5" ],
+
+    [ "function x() { function() {} () };", "x" ],
+
+    [ "let (joe) { joe } (5);", "5" ],
+    [ "let namelet(joe) { joe };>", "(let namelet (joe) joe)" ],
+    [ "namelet(7);", "(namelet, 7)" ],
+    
+    [ "function(){function jim(){ print(\"1\"),function jim(){print(\"2\")}, jim()}, jim()}();", "12|\"2\"" ],
+    [ "closure(){function jim(){ print(\"1\"),function jim(){print(\"2\")}, jim()}, jim()}();", "12|\"2\"" ],
+    [ "function(){function jim(){print(\"1\")},function jim(){print(\"2\")}, jim()}();",
+        { errors: "exception: internal,duplicate procedure name jim in lambda" } ],
+    [ "closure(){function jim(){print(\"1\")},function jim(){print(\"2\")}, jim()}();",
+        { errors: "exception: internal,duplicate procedure name jim in lambda" } ],
+    [ "function(){function jim(){print(\"1\")}(),function jim(){print(\"2\")}, jim()}();",
+        { errors: "exception: internal,duplicate procedure name jim in lambda" } ],
+        
+    [ "function(){{spawn:function(){[{ok:true}]}}};", "function () {\n"
+        "    {\n"
+        "        spawn: function () {\n"
+        "            [\n"
+        "                { ok: true }]\n"
+        "        }\n"
+        "         }\n"
+        "}" ],
+
+    // dynamic vs. lexical binding
+    
+    [ "function& aaa(f) { ccc() };", "aaa" ],
+    [ "function bbb(f) { ccc() };", "bbb" ],
+    [ "function ccc() { f };", "ccc" ],
+    [ "aaa(3);", "3" ],
+    [ "bbb(3);", "f" ],
+    
+    [ "function& ddd(f) { print(f), function  iii(f) { print(f), ccc() }(5) } (2);", "25|2" ],
+    [ "function  eee(f) { print(f), function  iii(f) { print(f), ccc() }(7) } (4);", "47|f" ],
+    [ "function  fff(f) { print(f), function& iii(f) { print(f), ccc() }(9) } (6);", "69|f" ],
+
+    [ "function  (f, local jjj) { print(f), function jjj(f) { print(f), ccc() }, jjj(21) } (22);", "2221|f" ],
+    [ "function& (f, local jjj) { print(f), function jjj(f) { print(f), ccc() }, jjj(23) } (24);", "2423|24" ],
+    
+    [ "function  (g, local f) { f = 17, function  f(g) { print(f, g), ccc() },  f(25) } (26);", "1725|f" ],
+    [ "function& (g, local f) { f = 19, function  f(g) { print(f, g), ccc() },  f(27) } (28);", "1927|f" ],
+    [ "function& (g)          { f = 21, function  f(g) { print(f, g), ccc() },  f(29) } (30);", "2129|f" ],
+    [ "function& (g, local f) { f = 23, function ff(g) { print(f, g), ccc() }, ff(29) } (30);", "2329|23" ],
+
+    [ "function& (local f) { f = 3, function a(){++f}, function b(){++f}, a(), b(), ccc() } ();", "5" ],
+    [ "function  (local f) { f = 7, function a(){++f}, function b(){++f}, a(), b(), ccc() } ();", "f" ],
+
+    [ "function (local hh) { function& in1() { hh }, function& in2(local hh) { hh = 55, in1() }() } ();", "55" ],
+
+    [ "function ttt() { print(f) };", "ttt" ],
+    [ "let(f) { f = 11, ttt() } ();", "f|f" ],
+    [ "let&(f) { f = 13, ttt() } ();", "13|13" ],
+
+
+    //
+    // return/break/continue (sometimes with try/catch/finally)
+    //
+    
+    [ "function() { try { print(\"a\"), return(22) } catch { if 1 print(\"b\") } finally { print(\"c\") }, print(\"d\") }();",
+        "ac|22" ],
+    [ "function() { try { print(\"a\") } catch { if 1 print(\"b\") } finally { print(\"c\"), return(44) }, print(\"d\") }();",
+        "ac|44" ],
+
+    [ "function() { try { print(\"a\"),throw(\"x\") } catch { if 1 {print(\"b\")} } finally { print(\"c\") }, print(\"d\") }();",
+        "abcd|\"d\"" ],
+    [ "function() { try { print(\"a\"),throw(\"x\") } catch { if 1 {print(\"b\"),return(33)} } finally { print(\"c\") }, print(\"d\") }();",
+        "abc|33" ],
+
+    [ "function() { try { function() { try { print(\"a\"), throw(\"b\") } finally { print(\"c\") } }() } finally { print(\"d\") }}();",
+        { errors: "exception: b", text: "acd" } ],
+    [ "function() { try { function() { try { print(\"a\"), throw(\"b\") } finally { return(\"c\") } }() } finally { print(\"d\") }}();",
+        "ad|\"c\"" ],
+
+    [ "function() { loop { print(\"a\"), break, print(\"b\") }, print(\"c\") }();",
+        "ac|\"c\"" ],
+    
+    [ "function(x) {x=0, loop {if ++x>5 break,print(x),if x==5 continue,print(\"-\")}, print(\"|\")}();'",
+        "1-2-3-4-5||\"|\"" ],
+    [ "function(x) {x=0, loop :outer { loop :inner {if ++x>5 break :inner,print(x),if x==5 continue,print(\"-\")}, print(\">\"), break}, print(\"|\")}();",
+        "1-2-3-4-5>||\"|\"" ],
+    [ "function(x) {x=0, loop :outer { loop :inner {if ++x>5 break :outer,print(x),if x==5 continue,print(\"-\")}, print(\">\"), break}, print(\"|\")}();'",
+        "1-2-3-4-5||\"|\"" ],
+    [ "function(x) {x=0, loop :outer { loop :inner {if ++x>5 break,print(x),if x==5 continue :outer ,print(\"-\")}, print(\">\"), break}, print(\"|\")}();'",
+        "1-2-3-4-5>||\"|\"" ],
+
+    [ "function(local x) { for x in [1,2,3] { print(x), if x == 3 return(4) }, print(\"0\") }();",
+        "123|4" ],
+
+    [ "function(local x) { loop :outer { for x in [1,2,3] { print(x), if x == 3 break :outer }, print(\"0\") }, return(4) }();",
+        "123|4" ],
+
+    [ "function(local x) { for :outer x in [1,2,3] loop { print(x), continue :outer, print(\"0\") }, return(4) }();",
+        "123|4" ],
+
+    [ "function(local x) { x = [3,2,1], while :outer x.length > 0 loop { print(x.pop()), continue :outer, print(\"0\") }, return(4) }();",
+        "123|4" ],
+
+    [ "function() { loop { try { print(1), break } catch { if true print(2) }, print(3) }, print(4) }();", "14|4" ],
+    [ "function(local x) { x = 0, loop { try { print(1), if x++ < 3 continue } catch { if true print(2) }, print(3), break }, print(4) }();", "111134|4" ],
+
+    [ "function(){let(){print(\"let\"),return}(), print(\"func\")}();;", "let" ],        // nospread
+    [ "function(){let(a){print(\"let\"),return}(), print(\"func\")}();;", "let" ],       // spread
+
+    //
+    // unparsing
+    //
+    
+    [ "function&(a) { `(b, 33) };>", "(function\\& lambda (a) (`` (b 33)))" ],
+    [ "function&(a) { `(b, 33) };", "function& (a) {\n"
+        "    `(b, 33)\n"
+        "}" ],
+    
+    [ "let&(a) { `(b, 33) };>", "(let\\& lambda (a) (`` (b 33)))" ],
+    [ "let&(a) { `(b, 33) };", "let& (a) {\n"
+        "    `(b, 33)\n"
+        "}" ],
+
+    [ "function (a) { if 1 { print(1) } };", "function (a) {\n"
+        "    if 1\n"
+        "        print(1)\n"
+        "}" ],
+
+    [ "function (a) { if 2 { print(1), print(2) } };", "function (a) {\n"
+        "    if 2 {\n"
+        "        print(1)\n"
+        "        print(2) }\n"
+        "}" ],
+
+    [ "function (a) { if 3 { print(1), print(2), print(3) } };", "function (a) {\n"
+        "    if 3 {\n"
+        "        print(1)\n"
+        "        print(2)\n"
+        "        print(3) }\n"
+        "}" ],
+
+    //
+    // primitive method hooks
+    //
+    
+    [ "sudo(tuple@tmember=function tuplemember (x, y) { member(y,x) });>", "tuplemember" ],
+    [ "`(a,b,c).tmember(b);", "(b, c)" ],
+    [ "`(a,b,c).tmember(d);", "false" ],
+    [ "`(3,4,5).tmember(2+2);", "(4, 5)" ],                                 // must evaluate argument
+    [ "`(3,4,5).tmember(function(){print(`+),4}());", "+|(4, 5)" ],         // but only once
+    [ "`(print,3,4).tmember(print);", "print(3, 4)" ],                      // and don't eval the target
+
+    [ "sudo(array@test=function arraytest args { apply(printline, args) });", "arraytest" ],
+    [ "[1,2,3].test;", "Array[3]|[1, 2, 3]" ],
+    [ "[1,2,3].test(4);", "Array[3]4|4" ],
+    
+    //
+    // object unparsing
+    //
+    
+    [ "closure myob(initv, local myob) {\n"
+        "    myob = new(object)\n"
+        "    myob.value = initv\n"
+        "    myob.\\.tostring = function \\.tostring(obj) {\n"
+        "        \"myob-\".concat(myob.value) }\n"
+        "    myob };",
+        "myob" ],
+    [ "myob(3);>", "Object{2}" ],
+    [ "myob(3);", "myob-3" ],
+    
+    //
+    // dialects
+    //
+    
+    [ "dt = Dialect.derive('test');", "Object{22}" ],
+    [ "dt.redefine(`^, function(x,y,local z) {z=1,while y-- > 0 z *= x,z});", "^" ],
+    [ "$$ = dt.parse(new(textstream, '2^9;'));", "(false, 2^9)" ],
+    [ "eval($$);", "(false, 512)" ],
+    [ "dt.destroy();", "true" ],
+    [ "dt.destroy();", "false" ],
+]);

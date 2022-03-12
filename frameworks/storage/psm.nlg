@@ -1,0 +1,326 @@
+/*
+ * psm.nlg
+ * frameworks/storage
+ *
+ *     PSM - Project Storage Manager.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+ 
+/*
+ * MakePSMutil
+ *
+ *     Filesystem utility object for operations common to all (or most) filesystems. This returns
+ * the new object, which is lightweight so this can be used on the fly.
+ *
+ */
+
+closure MakePSMutil(fs, local util) {
+    util = new(object, this)
+    util.fs = fs
+
+    // uniqueName
+    //
+    // Create a unique name at the specified path using the provided base name by incrementing
+    // suffixes. If copy is specified then that suffix is applied if not already present. The
+    // return value the new name.
+
+    closure uniqueName(path, base, copy, local newname, error, info, current) {
+        newname = base
+        loop {
+            `(error, info) = fs.info(fs.path.join(path, newname))
+            if error
+                return (newname)                                            // success on error
+            if copy {
+                current = RegExp("(.+ ".concat(copy, ") ([0-9]*)$")).exec(newname)      // <newname> <copy> <number>
+                if current
+                    newname = current.1.concat(" ", toint(current.2)+1)
+                else if (current = RegExp("(.+ ".concat(copy, ")$")).exec(newname))     // <newname> <copy>
+                    newname = current.1.concat(" 2")
+                else
+                    newname = newname.trim().concat(" ", copy) }
+            else {
+                current = RegExp("(.+) ([0-9]*)$").exec(newname)            // <newname> <number>
+                if current
+                    newname = current.1.concat(" ", toint(current.2)+1)
+                else
+                    newname = newname.trim().concat(" 2") }
+        }
+    }
+    
+    // treeDirUpdate
+    //
+    // Update a directory within an existing tree data structure. The result is a standard tuple with
+    // (error, changes) where the changes are added/deleted/changed. This assumes that children changed
+    // if their info is different
+    
+    util.treeDirUpdate = closure treeDirUpdate(treepath, dirpath, tree, callback, local error, inpath, treedir, files) {
+        if !callback
+            return (syncAdapter(treeDirUpdate, treepath, dirpath, tree))
+        if !dirpath.startsWith(treepath)
+            return (callback(Error("treeDirUpdate: dirpath must match treepath", treepath, dirpath)))
+        inpath = dirpath.slice(treepath.length)                            // inpath is now what extends into tree
+        treedir = function findir(node, path, local segment, child) {
+            segment = path.pop()
+            if !segment || segment == ""
+                return (node)
+            for child in node.children
+                if child.name == segment
+                    return (findir(child, path))
+            false
+        } (tree, inpath.split(tree.data.pathsep).reverse())
+        if !treedir
+            return (callback(Error("treeDirUpdate: can't find directory within tree", inpath)))
+        `(error, files) = fs.dirList(dirpath, { head: true })
+        if error
+            return (callback(error))
+        //
+        // compare new files with existing treedir children
+        //
+        let (original, updated, odex, udex, added, deleted, changed, newchildren, newchild, dirkids) {
+            original = treedir.children
+            updated = files.children
+            odex = udex = 0
+            added = []
+            deleted = []
+            changed = []
+            newchildren = []
+            while odex < original.length || udex < updated.length {
+                if odex >= original.length || original[odex].name > updated[udex].name
+                {                                                           // insert updated into original
+                    newchild = updated[udex]
+                    if newchild.info.type == "directory"
+                        newchild.children = "pending"                       // convert to tree format
+                    newchildren.push(newchild)
+                    added.push(updated[udex++])
+                }
+                else if udex >= updated.length || original[odex].name < updated[udex].name
+                    deleted.push(original[odex++])                          // remove original
+                else {
+                    dirkids = original[odex].children
+                    if dirkids {
+                        if updated[udex].info.type != "directory"
+                            dirkids = undefined                             // change original directory -> file
+                    } else {
+                        if updated[udex].info.type == "directory"
+                            dirkids = "pending"                             // change file -> directory
+                    }
+                    if original[odex].info != updated[udex].info
+                        || dirkids !== original[odex].children {            // info or children, new or changed
+                        original[odex].children = dirkids
+                        changed.push(original[odex])
+                        original[odex].info = updated[udex].info }
+                    newchildren.push(original[odex])
+                    ++odex
+                    ++udex
+                }
+            }
+            treedir.children = newchildren
+            callback(false, {
+                added: added
+                deleted: deleted
+                changed: changed
+            })
+        } ()
+    }
+
+    // treeAddFiles
+    //
+    // Add an array of files to an existing tree. We cannot be sure of reproducing the exact original
+    // collation order, because it was determined by the original creator of the tree, but at least
+    // we don't care what it was. This silently omits any additions that have a directory path that
+    // conflicts with a file. This does not perform i/o and there is no useful return value.
+    
+    util.treeAddFiles = closure treeAddFiles(files, tree) {
+        // Return the node for a directory path, creating as needed
+        function find(dirpath) {
+            function subfind(node, path, local segment, child) {
+                segment = path.pop()
+                if !segment || segment == ""
+                    return (node)                                           // found the node
+                for child in node.children
+                    if child.name == segment
+                        return (subfind(child, path))
+                child = {                                                   // need new directory
+                    name: segment
+                    chidren: []
+                }
+                if !node.children
+                    return (false)                                          // file in the way
+                else if !array(node.children)
+                    node.children = [child]                                 // enumeration was pending, etc.
+                else
+                    node.children.push(child)                               // node.children left unsorted
+                return (subfind(child, path))
+            } (tree, dirpath.split(tree.data.pathsep).reverse())
+        }
+
+        // addPaths
+        //
+        // Add an array of paths to the directories in the trees.
+        function addPaths(files, local filepath, sepdex, dirpath, filename, dirnode, dirnodepath) {
+            // sort files to increasing order
+            for filepath in files {                                         // create dirdex array of directories and their children
+                sepdex = filepath.lastIndexOf(tree.data.pathsep)
+                if sepdex < 0 {
+                    dirpath = ""
+                    filename = filepath }
+                else {
+                    dirpath = filepath.slice(0, sepdex)
+                    filename = filepath.slice(sepdex+1) }
+                if !dirnode || dirnodepath != dirpath {
+                    dirnode = find(dirpath)
+                    dirnodepath = dirpath }
+                if !dirnode {
+                    debuglog("treeAddFiles: cannot add", filepath)
+                    continue                                                // can't add this file
+                }
+                dirnode.children = dirnode.children.concat({
+                        name: filename
+                        deleted: "yes"
+                    })
+            }
+        } (files)
+    }
+
+    // newFolder
+    //
+    // Create a new folder with auto-naming to be unique at the path. The result is a standard
+    // (error, newname) tuple.
+
+    util.newFolder = closure newFolder(path, name, callback) {
+        if !callback
+            return (syncAdapter(newFolder, path, name))
+        if !name
+            name = "untitled folder"
+        fs.mkdir(fs.path.join(path, uniqueName(path, name)), callback)
+    }
+
+    // newFile
+    //
+    // Create a new file with auto-naming to be unique at the path. The result is a standard
+    // (error, newname) tuple.
+
+    util.newFile = closure newFile(path, name, callback) {
+        if !callback
+            return (syncAdapter(newFile, path, name))
+        if !name
+            name = "file"
+        fs.writeFile(fs.path.join(path, uniqueName(path, name)), "", false, callback)
+    }
+
+    // duplicate
+    //
+    // Duplicate a file or folder with auto-naming to be unique in the directory. The result is a
+    // standard (error, newname) tuple.
+
+    util.duplicate = closure duplicate(path, name, copy, callback, local srcpath, newname) {
+        if !callback
+            return (syncAdapter(duplicate, path, name, copy))
+        if name
+            srcpath = fs.path.join(path, name)
+        else {
+            srcpath = path
+            name = fs.path.basename(path)
+            path = fs.path.dirname(path)
+        }
+        if !copy
+            copy = "copy"
+        newname = uniqueName(path, name, copy)
+        fs.copy(srcpath, newname, false, callback)
+    }
+    
+    // deepcopy
+    //
+    // Perform a deep copy of an array of sources from the current filesystem and specified inpath to
+    // the outfs filesystem and specified outpath. The input path is used to find the source files,
+    // however it is not added to the output. The result is a standard error tuple, where the errors
+    // are an array if  any occur.
+
+    util.deepcopy = closure deepcopy(inpath, sources, outfs, outpath, options, callback, local errors, copies) {
+        if !callback
+            return (syncAdapter(deepcopy, inpath, sources, outfs, outpath, options))
+        if !array(sources) || !string(inpath) || !string(outpath)
+            return (callback(Error("deepcopy: invalid arguments")))
+        errors = []
+        copies = []
+        sources = new(sources)                                              // don't modify the original!
+        asyncArray(sources, 10, closure mklist(entry, index, elements, local srcpath, destpath, error, folder, node) {
+            srcpath = fs.path.join(inpath, entry)
+            `(error, folder) = fs.dirList(srcpath)
+            if error && error.code != "ENOTDIR"
+                return (errors.push(error))
+            destpath = outfs.path.join(outpath, entry)                      // "." if both empty strings
+            if !error {
+                if destpath != "."
+                    `(error, node) = outfs.mkdir(destpath)                  // may already exist but we don't care
+                if error
+                    return (errors.push(error))                             // don't do children if we can't form destination
+                for node in folder.children
+                    sources.push(fs.path.join(entry, node.name))            // omit inpath from sources
+            }
+            else
+                copies.push({                                               // copy the file 
+                    source: srcpath
+                    dest: destpath
+                })
+        }).wait()
+        asyncArray(copies, 10, closure cpfiles(entry, index, elements, local error, data, instat, outstat) {
+            `(error, instat) = fs.info(entry.source)
+            if !error {
+                `(error, outstat) = outfs.info(entry.dest)
+                if !error && (instat.md5 && instat.md5 == outstat.md5 || instat.mtimeMs <= outstat.mtimeMs)
+                    return                                                  // file unchanged
+                `(error, data) = fs.readFile(entry.source, { encoding: "binary"})
+                if !error
+                    `(error, data) = outfs.writeFile(entry.dest, data, { encoding: "binary"})
+            }
+            if error
+                errors.push(error)
+        }).wait()
+        if errors.length > 0
+            callback(errors)
+        else
+            callback(false, { ok: true })
+    }
+
+    // finis
+    util
+};
+
+
+/*
+ * MakePSM
+ *
+ *     Create a new PSM manager.
+ *
+ */
+
+closure MakePSM(dbname, local psm) {
+    ResourceManager(dbname, "PSM_locations/")
+};
+
+
+/*
+ * psmInit
+ *
+ *     Initialize the psm component.
+ *
+ */
+
+function psmInit(local manifest) {
+
+    manifest = `(MakePSMutil, MakePSM, psmInit)
+
+    Naan.module.build(module.id, "psm", function(modobj, compobj) {
+        require("./storage.nlg")
+        require("./resources.nlg")
+        compobj.manifest = manifest
+        modobj.exports.MakePSM = MakePSM
+        modobj.exports.MakePSMutil = MakePSMutil
+    })
+} ();

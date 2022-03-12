@@ -1,0 +1,450 @@
+/*
+ * test_04_numerics.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Test Category 4 - numerics
+ *
+ */
+
+RegisterTestCategory("numerics", [
+    [ "4+3;", "7" ],                                                        // generic first test
+
+
+    //
+    // numeric representations
+    //
+    
+    [ "quote(1);>", "1" ],
+    [ "quote(-1);>", "-1" ],
+    [ "quote(1.0);>", "1.0" ],
+    [ "quote(-1.0);>", "-1.0" ],
+    [ "car(1);>", "1" ],
+    [ "car(-1);>", "-1" ],
+    [ "car(0x0f);>", "0xf" ],                                               // leading zeros not preserved ###
+    [ "second(1);>", "false" ],
+    [ "second(-1);>", "false" ],
+    [ "second(0x0f);>", "Dictionary{1}" ],
+    [ "third(1);>", "false" ],
+    [ "third(-1);>", "false" ],
+    [ "third(0x0f);>", "false" ],
+    [ "rest(1);>", "false" ],
+    [ "rest(-1);>", "false" ],
+    [ "rest(0x0f);>", "Dictionary{1}" ],                                    // rest field tag indicates hex escape
+
+
+    //
+    // addition/subtraction bigint numerics
+    //
+    //     These tests look for off-by-one errors in carrying and borrowing. The internal Leemon
+    // representation for -1 is [32767], for -2 is [32766, 32767], for 32767 is [32767, 0], etc.
+    //
+
+    [ "0+0;", "0" ],
+    [ "0+1;", "1" ],
+    [ "0+-1;", "-1" ],
+    [ "0-1;", "-1" ],
+    [ "0- -1;", "1" ],
+
+    [ "1+0;", "1" ],
+    [ "1+1;", "2" ],
+    [ "1+-1;", "0" ],
+    [ "1-0;", "1" ],
+    [ "1-1;", "0" ],
+    [ "1- -1;", "2" ],
+
+    [ "-1+0;", "-1" ],
+    [ "-1+1;", "0" ],
+    [ "-1+-1;", "-2" ],
+    [ "-1-0;", "-1" ],
+    [ "-1-1;", "-2" ],
+    [ "-1- -1;", "0" ],
+
+    [ "0+2;", "2" ],
+    [ "0+-2;", "-2" ],
+    [ "0-2;", "-2" ],
+    [ "0- -2;", "2" ],
+
+    [ "1+2;", "3" ],
+    [ "1+-2;", "-1" ],
+    [ "1-2;", "-1" ],
+    [ "1- -2;", "3" ],
+
+    [ "-1+2;", "1" ],
+    [ "-1+-2;", "-3" ],
+    [ "-1-2;", "-3" ],
+    [ "-1- -2;", "1" ],
+
+    [ "2+0;", "2" ],
+    [ "2+1;", "3" ],
+    [ "2+-1;", "1" ],
+    [ "2-0;", "2" ],
+    [ "2-1;", "1" ],
+    [ "2- -1;", "3" ],
+
+    [ "-2+0;", "-2" ],
+    [ "-2+1;", "-1" ],
+    [ "-2+-1;", "-3" ],
+    [ "-2-0;", "-2" ],
+    [ "-2-1;", "-3" ],
+    [ "-2- -1;", "-1" ],
+
+    [ "32767+0;", "32767" ],
+    [ "32767+1;", "32768" ],
+    [ "32767+-1;", "32766" ],
+    [ "32767-0;", "32767" ],
+    [ "32767-1;", "32766" ],
+    [ "32767- -1;", "32768" ],
+
+    [ "-32767+0;", "-32767" ],
+    [ "-32767+1;", "-32766" ],
+    [ "-32767+-1;", "-32768" ],
+    [ "-32767-0;", "-32767" ],
+    [ "-32767-1;", "-32768" ],
+    [ "-32767- -1;", "-32766" ],
+    
+    [ "-32768+0;", "-32768" ],
+    [ "-32768+1;", "-32767" ],
+    [ "-32768+-1;", "-32769" ],
+    [ "-32768-0;", "-32768" ],
+    [ "-32768-1;", "-32769" ],
+    [ "-32768- -1;", "-32767" ],
+
+    [ "0+32767;", "32767" ],
+    [ "0+-32767;", "-32767" ],
+    [ "0-32767;", "-32767" ],
+    [ "0- -32767;", "32767" ],
+
+    [ "1+32767;", "32768" ],
+    [ "1+-32767;", "-32766" ],
+    [ "1-32767;", "-32766" ],
+    [ "1- -32767;", "32768" ],
+
+    [ "-1+32767;", "32766" ],
+    [ "-1+-32767;", "-32768" ],
+    [ "-1-32767;", "-32768" ],
+    [ "-1- -32767;", "32766" ],
+
+
+    //
+    // multiplication/division bigint numerics
+    //
+
+    [ "0*0;", "0" ],
+    [ "0*1;", "0" ],
+    [ "1*0;", "0" ],
+    [ "1*1;", "1" ],
+    [ "1*-1;", "-1" ],
+    [ "-1*1;", "-1" ],
+    [ "-1*-1;", "1" ],
+
+    [ "0/0;", { errors: "divide by zero" } ],
+    [ "0/1;", "0" ],
+    [ "1/0;", { errors: "divide by zero" } ],
+    [ "1/1;", "1" ],
+    [ "1/-1;", "-1" ],
+    [ "-1/1;", "-1" ],
+    [ "-1/-1;", "1" ],
+
+    [ "32767*2;", "65534" ],
+    [ "32768*2;", "65536" ],
+    [ "32768/-1;", "-32768" ],
+    [ "32767/-1;", "-32767" ],
+
+    [ "-32767*2;", "-65534" ],
+    [ "-32768*2;", "-65536" ],
+    [ "-32768/-1;", "32768" ],
+    [ "-32767/-1;", "32767" ],
+
+    [ "65534/2;", "32767" ],
+    [ "65536/2;", "32768" ],
+    [ "-65534/2;", "-32767" ],
+    [ "-65536/2;", "-32768" ],
+    [ "65534/-2;", "-32767" ],
+    [ "65536/-2;", "-32768" ],
+    [ "-65534/-2;", "32767" ],
+    [ "-65536/-2;", "32768" ],
+
+
+    //
+    // divide/modulo bigint numerics
+    //
+    //     Naan uses Euclidean division and modulo, so for modulo(dividend, divisor), the result is
+    // always positive and periodic through zero. The quotient resulting  from a calculation of
+    // dividend/divisor (equivalently numerator/denominator) is consistent with the modulo by the
+    // following relations:
+    //
+    //     quotient = {
+    //          divisor > 0: floor( dividend / divisor )
+    //          divisor < 0: ceiling ( dividend / divisor )
+    //     }
+    //     modulo = dividend - divisor * quotient
+    //     dividend = divisor * quotient + modulo
+    //
+    // For example, the following apply to -5/3 and mod(-5,3):
+    //
+    //     quotient  = floor( -5 / 3 )
+    //               = -2
+    //     remainder = -5 - 3 * -2
+    //               = 1
+    //
+    // For more information, see:
+    //      https://en.wikipedia.org/wiki/Modulo_operation
+    //      https://en.wikipedia.org/wiki/Euclidean_division
+    //
+
+    [ "divide(667, 3);>", "(222 . 1)" ],
+    [ "divide(667, -3);>", "(222 . 1)" ],
+    [ "divide(-667, 3);>", "(223 . 2)" ],
+    [ "divide(-667, -3);>", "(223 . 2)" ],
+
+    [ "mod(5, 3);", "2" ],
+    [ "mod(5, -3);", "2" ],
+    [ "mod(-5, 3);", "1" ],
+    [ "mod(-5, -3);", "1" ],
+
+
+    //
+    // floats
+    //
+    
+    [ "0.0/0.0;", "NaN" ],
+    [ "1.0/0.0;", "Infinity" ],
+    [ "-1.0/0.0;", "-Infinity" ],
+    [ "Math.log10(9007199254740991);", "15.954589770191003" ],
+    [ "toint(tofloat(Number.MAX_SAFE_INTEGER)) == Number.MAX_SAFE_INTEGER;", "true" ],
+    [ "tofloat(Number.MAX_SAFE_INTEGER+1) == tofloat(Number.MAX_SAFE_INTEGER+2);", "true" ],
+    [ "Number.MAX_SAFE_INTEGER+1 == Number.MAX_SAFE_INTEGER+2;", "false" ],
+    [ "tofloat(Number.MAX_SAFE_INTEGER);", "9007199254740991.0" ],
+    [ "Number.MIN_SAFE_INTEGER;", "-9007199254740991" ],
+    [ "tofloat(Number.MIN_SAFE_INTEGER);", "-9007199254740991.0" ],
+    [ "Math.pow(2,1024);", "Infinity" ],
+    [ "Math.log10(Math.pow(2,1023));", "307.95368556425274" ],
+    [ "Math.log10(Number.MAX_VALUE);", "308.25471555991675" ],
+    [ "Math.log2(Math.pow(2,1023));", "1023" ],
+    [ "Math.log2(Math.pow(2,1024));", "Infinity" ],
+    [ "tofloat(Math.pow(2,512) * Math.pow(2,512));", "Infinity" ],
+    [ "tofloat(Math.pow(2,512) * -Math.pow(2,512));", "-Infinity" ],
+    [ "tofloat(Math.pow(2,-537) * Math.pow(2,-537));", "5e-324" ],
+    
+    
+    //
+    // bignums and Uint8Arrays
+    //
+    
+    [ "ba = xnew(js.g.Uint8Array, [32, 48]);", "[Uint8Array 32,48]" ],
+    [ "$$ = toint(ba);", "8240" ],
+    [ "xnew($$);", "[Uint8Array 32,48]" ],
+
+    [ "ba = xnew(js.g.Uint8Array, [55, 32, 48]);", "[Uint8Array 55,32,48]" ],
+    [ "$$ = toint(ba);", "3612720" ],
+    [ "xnew($$);", "[Uint8Array 55,32,48]" ],
+
+    [ "xnew(5553);", "[Uint8Array 21,177]" ],
+    [ "xnew(-5553);", "[Uint8Array 21,177]" ],
+    [ "ba = xnew(js.g.Uint8Array, [21,177]);", "[Uint8Array 21,177]" ],
+    [ "$$ = toint(ba);", "5553" ],
+
+    //
+    // bitwise operators
+    //
+    
+    [ "bitand(5, 1);", "1" ],
+    [ "bitand(-5, 1);", "1" ],
+    [ "bitand(5, -1);", "5" ],
+    [ "bitand(-5, -1);", "-5" ],
+    [ "bitand(5, 1.0);", "1.0" ],
+    [ "bitand(-5, 1.0);", "1.0" ],
+    [ "bitand(5, -1.0);", "5.0" ],
+    [ "bitand(-5, -1.0);", "-5.0" ],
+    
+    [ "bitor(8, 2);", "10" ],
+    [ "bitor(-8, 2);", "-6" ],
+    [ "bitor(8, -2);", "-2" ],
+    [ "bitor(-8, -2);", "-2" ],
+    [ "bitor(8, 2.0);", "10.0" ],
+    [ "bitor(-8, 2.0);", "-6.0" ],
+    [ "bitor(8, -2.0);", "-2.0" ],
+    [ "bitor(-8, -2.0);", "-2.0" ],
+    
+    [ "bitxor(8, 2);", "10" ],
+    [ "bitxor(-8, 2);", "-6" ],
+    [ "bitxor(8, -2);", "-10" ],
+    [ "bitxor(-8, -2);", "6" ],
+    [ "bitxor(8, 2.0);", "10.0" ],
+    [ "bitxor(-8, 2.0);", "-6.0" ],
+    [ "bitxor(8, -2.0);", "-10.0" ],
+    [ "bitxor(-8, -2.0);", "6.0" ],
+    
+    [ "bitnot(7);", "-8" ],
+    [ "bitnot(-7);", "6" ],
+    [ "bitnot(7.0);", "-8.0" ],
+    [ "bitnot(-7.0);", "6.0" ],
+
+    [ "shiftleft(7,0);", "7" ],
+    [ "shiftleft(7,0.0);", "7.0" ],
+    [ "shiftleft(7,-1);", "7" ],
+    [ "shiftleft(7,-1.0);", "-2147483648.0" ],
+
+    [ "shiftleft(7,4);", "112" ],
+    [ "shiftleft(7,40);", "7696581394432" ],
+    [ "shiftleft(7,4.0);", "112.0" ],
+    [ "shiftleft(7,40.0);", "1792.0" ],
+    
+    [ "shiftleft(-7,4);", "-112" ],
+    [ "shiftleft(-7,40);", "-7696581394432" ],
+    [ "shiftleft(-7,4.0);", "-112.0" ],
+    [ "shiftleft(-7,40.0);", "-1792.0" ],
+
+    [ "shiftright(7,0);", "7" ],
+    [ "shiftright(7,0.0);", "7.0" ],
+    [ "shiftright(7,-1);", "7" ],
+    [ "shiftright(7,-1.0);", "0.0" ],
+
+    [ "shiftright(23042,4);", "1440" ],
+    [ "shiftright(23042,40);", "0" ],
+    [ "shiftright(23042,4.0);", "1440.0" ],
+    [ "shiftright(23042,40.0);", "90.0" ],
+    
+    [ "shiftright(-23042,4);", "-1441" ],
+    [ "shiftright(-23042,40);", "-1" ],
+    [ "shiftright(-23042,4.0);", "-1441.0" ],
+    [ "shiftright(-23042,40.0);", "-91.0" ],
+
+
+    //
+    // Javascript Number functions
+    //
+    
+    [ "55.isInteger();", "true" ],
+    [ "55 .isInteger();", "true" ],
+    [ "55.5 .isInteger();", "false" ],
+    
+    [ "33 .toString(16);", "\"21\"" ],
+    [ "33 .toString(16);", "\"21\"" ],
+    [ "xcall(Number, toString, 33, 16);", "\"21\"" ],
+    [ "xapply(Number, toString, list(33, 16));", "\"21\"" ],
+    
+    [ "Number.isFinite(1.0/0.0);", "false" ],
+    [ "Number.isNaN(1.0/0.0);", "false" ],
+    [ "Number.isNaN(0.0/1.0);", "false" ],
+    [ "Number.isNaN(0.0/0.0);", "true" ],
+    
+    [ "(1.0/3.0).toPrecision(4);", "\"0.3333\"" ],
+    [ "xcall(Number, toPrecision, 1.0/3.0, 4);", "\"0.3333\"" ],
+    [ "xapply(Number, toPrecision, list(1.0/3.0, 4));", "\"0.3333\"" ],
+    
+    
+    //
+    // numeric types
+    //
+    
+    [ "float(1);", "false" ],
+    [ "float(1.0);", "true" ],
+    [ "integer(1);", "true" ],
+    [ "integer(1.0);", "false" ],
+
+    [ "numeric();", "false" ],
+    [ "numeric(1);", "true" ],
+    [ "numeric(1.0);", "true" ],
+    [ "numeric(1, 2);", "true" ],
+    [ "numeric(1.0, 2.0);", "true" ],
+    [ "numeric(1, 2.0);", "true" ],
+    [ "numeric(1, \"abc\");", "false" ],
+    [ "numeric(1.0, \"abc\");", "false" ],
+
+    
+    //
+    // Comparisons
+    //
+    
+    [ "getproc(`>);", "[Builtin greater]" ],
+    [ "getproc(`<);", "[Builtin lesser]" ],
+    [ "getproc(`equal);", "[Builtin equal]" ],
+    [ "getproc(`==);", "[Builtin equal]" ],
+
+    [ "1 > false;", "false" ],
+    [ "1 >= false;", "false" ],
+    [ "1 == false;", "false" ],
+    [ "1 <= false;", "false" ],
+    [ "1 < false;", "false" ],
+    
+    [ "false > 1;", "false" ],
+    [ "false >= 1;", "false" ],
+    [ "false == 1;", "false" ],
+    [ "false <= 1;", "false" ],
+    [ "false < 1;", "false" ],
+    
+    [ "1 > 2;", "false" ],
+    [ "1 >= 2;", "false" ],
+    [ "1 == 2;", "false" ],
+    [ "1 <= 2;", "true" ],
+    [ "1 < 2;", "true" ],
+    [ "1 == 1;", "true" ],
+    [ "1.0 == 1;", "true" ],
+    
+    [ "2 > 1;", "true" ],
+    [ "2 >= 1;", "true" ],
+    [ "2 == 1;", "false" ],
+    [ "2 <= 1;", "false" ],
+    [ "2 < 1;", "false" ],
+    [ "2 == 2;", "true" ],
+    [ "2.0 == 2;", "true" ],
+    [ "2 == 2.0;", "true" ],
+
+    [ "1.0 > false;", "false" ],
+    [ "1.0 >= false;", "false" ],
+    [ "1.0 == false;", "false" ],
+    [ "1.0 <= false;", "false" ],
+    [ "1.0 < false;", "false" ],
+    
+    [ "false > 1.0;", "false" ],
+    [ "false >= 1.0;", "false" ],
+    [ "false == 1.0;", "false" ],
+    [ "false <= 1.0;", "false" ],
+    [ "false < 1.0;", "false" ],
+    
+    [ "1.0 > 2.0;", "false" ],
+    [ "1.0 >= 2.0;", "false" ],
+    [ "1.0 == 2.0;", "false" ],
+    [ "1.0 <= 2.0;", "true" ],
+    [ "1.0 < 2.0;", "true" ],
+    [ "1.0 == 1.0;", "true" ],
+    [ "1.0 eq 1.0;", "true" ],
+
+    [ "2.0 > 1.0;", "true" ],
+    [ "2.0 >= 1.0;", "true" ],
+    [ "2.0 == 1.0;", "false" ],
+    [ "2.0 <= 1.0;", "false" ],
+    [ "2.0 < 1.0;", "false" ],
+    [ "2.0 != 1.0;", "true" ],
+    [ "2.0 == 2.0;", "true" ],
+    [ "2.0 eq 2.0;", "true" ],
+
+    [ "1 > 2.0;", "false" ],
+    [ "1 >= 2.0;", "false" ],
+    [ "1 == 2.0;", "false" ],
+    [ "1 <= 2.0;", "true" ],
+    [ "1 < 2.0;", "true" ],
+    [ "1 != 2.0;", "true" ],
+    [ "1 == 1.0;", "true" ],
+    [ "1 eq 1.0;", "false" ],
+
+    [ "2 > 1.0;", "true" ],
+    [ "2 >= 1.0;", "true" ],
+    [ "2 == 1.0;", "false" ],
+    [ "2 <= 1.0;", "false" ],
+    [ "2 < 1.0;", "false" ],
+    [ "2 != 1.0;", "true" ],
+    [ "2 == 2.0;", "true" ],
+    [ "2 eq 2.0;", "false" ]
+]);

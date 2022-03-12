@@ -1,0 +1,180 @@
+/*
+ * node_util.nlg
+ *
+ *     Generic node utility functions for the NodeJS environment.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * MultipartBody
+ *
+ * column positioning:                          //                          //                      !
+ *     Create a multipart Form body from the specified dictionary, returning a buffer. Any xobject in
+ * the dictionary is coded as an octet. If you want a different filename, include an options object
+ * that defines that filename.
+ *
+ *The result is a dictionary as follows:
+ *  {
+ *      body: <Buffer>
+ *      header: {
+ *          Content-Type: "multipart/form-data; boundary=<boundary>"
+ *      }
+ *  }
+ *
+ *
+ */
+
+function MultipartBody(dict, options, local boundary, parts, key, data, filename) {
+    boundary = "xx-xx-xx-xx-xx"
+    parts = []
+    for `(key, data) in dict {
+        if xobject(data) {
+            if options[key]
+                filename = options[key]
+            else
+                filename = key
+            parts.push(xnew(js.g.Buffer.from, "--".concat(boundary, "\r\n",
+                "Content-Disposition: form-data; name=\"", key, "\"; filename=\"", filename, "\"\r\n",
+                "Content-Type:application/octet-stream\r\n\r\n"), "utf8"))
+            parts.push(xnew(js.g.Buffer.from, data, "binary"))
+            parts.push(xnew(js.g.Buffer.from, "\r\n", "utf8"))
+        }
+        else {
+            parts.push(xnew(js.g.Buffer.from, "--".concat(boundary, "\r\n",
+                "Content-Disposition: form-data; name=\"", key,
+                "\"; \r\n\r\n", data, "\r\n"), "utf8"))
+        }
+    }
+    parts.push(xnew(js.g.Buffer.from, "--".concat(boundary, "--\r\n"), "utf8"))
+    data = js.g.Buffer.concat(parts)
+    {
+        body: data
+        headers: {
+            "Content-Type": "multipart/form-data; boundary=".concat(boundary)
+            "Content-Length": data.length
+        }
+    }
+};
+
+
+/*
+ * EncodeQuery
+ *
+ *     Encode a dictionary of query terms into a query string for a URI.
+ *
+ */
+
+function EncodeQuery(prefix, items, local result, item) {
+    result = []
+    for item in items
+        result.push(js.g.encodeURIComponent(item).concat("=", js.g.encodeURIComponent(items[item])))
+    result = result.join("&")
+    if prefix && result.length > 0
+        prefix.concat(result)
+    else
+        result
+};
+
+
+/*
+ * JsonParse
+ *
+ *     Parse a string as JSON, returning a result tuple instead of an exception.
+ *
+ */
+
+function JsonParse(data) {
+    try {
+        data = js.g.JSON.parse(data)
+        list(false, data)
+    } catch {
+        if true
+             list(exception)
+    }
+};
+
+
+/*
+ * JsonStringify
+ *
+ *     Convert an object to a JSON string, returning a result tuple instead of an exception.
+ *
+ */
+
+function JsonStringify(data) {
+    try {
+        data = js.g.JSON.stringify(data)
+        list(false, data)
+    } catch {
+        if true
+             list(exception)
+    }
+};
+
+
+/*
+ * RandomBytes
+ *
+ *     Return the specified number of random bytes.
+ *
+ */
+
+function RandomBytes(bytes) {
+    if !xobject(crypto)
+        crypto = js.r("crypto")
+    crypto.randomBytes(bytes)
+};
+
+
+/*
+ * UUID
+ *
+ *     Return a new v4 variant 1 UUID, which is the random variety. It will be a 36-character string.
+ *
+ */
+ 
+function UUID(local rando, cc) {
+    rando = RandomBytes(36)                                                 // length of UUID
+    "00000000-0000-4000-8000-000000000000".replace(RegExp("[018]", "g"), function(cc, offset) {
+        if cc == "4"
+            cc = 4
+        else if cc == "8"
+            cc = bitor(8, bitand(rando[offset], 3))
+        else
+            cc = bitand(rando[offset], 15)
+        "0123456789abcdef".charAt(cc)
+    })
+};
+
+
+/*
+ * nodeUtilInit
+ *
+ * Initialize NodeJS utilities.
+ *
+ */
+
+function nodeUtilInit(local manifest) {
+    manifest = `(MultipartBody, EncodeQuery, JsonParse, JsonStringify, RandomBytes, UUID, nodeUtilInit)
+
+    Naan.module.build(module.id, "node_util", function(modobj, compobj) {
+        require("nodeLib.nlg")
+        compobj.manifest = manifest
+        modobj.exports.JsonParse = JsonParse
+        modobj.exports.JsonStringify = JsonStringify
+        modobj.exports.UUID = UUID
+        function postload() {
+            nodeFs = js.r("fs")
+            nodePath = js.r("path")
+            nodeHttps = js.r("https")
+            nodeStream = js.r("stream")
+            nodeCp = js.r("child_process")
+        }()
+        module.postload = postload
+    })
+}();

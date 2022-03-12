@@ -1,0 +1,510 @@
+/*
+ * debug_util.nlg
+ * Naan IDE - guiDebugger plugin
+ *
+ *     Naan IDE GUI debugger utilities.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+/*
+ * libVarExpand
+ *
+ *     Remote-resident support procedure to expand a symbol and its value into expanded values of its
+ * children. This is passed a value because we might be doing a lookup for a stack context, not the
+ * symbol's currently-bound context. The result is a dictionary shown below that has a "more" key
+ * defined with an array of children, if any exist.
+ *     The purpose of this function is to report two levels of data for a listbox, so that the first
+ * level can be exposed by the user immediately, and then the second level updated before the user
+ * can expose further depth.
+ *     The preceding argument determines how far this recurses below the specified symbol and value.
+ * Normally the caller provides an empty dictionary and this responds by filling in "more" with an
+ * array of children having the same structure. If preceding is false then this responds by setting
+ * more to true if it can have children. A previous result can be provided as the preceding argument
+ * to control which children are expanded. Setting "visible: true" in a dictionary causes the element
+ * and its children to be expanded.
+ *     If a child has more than 100 elements then an intermediate array of chunks are defined to page
+ * the results, where the first N-1 chunks have 100 children and the last has the remainder.
+ *
+ * Here is the output structure:
+ *  {
+ *      symbol:     <string>                    // symbol, or index/key in collection
+ *      value:      <string>                    // specified value, e.g. Array[3]
+ *      more:       <array>                     // optional: array of children, or true
+ *      chunk:      true                        // defined for generated chunks
+ *      chunked:    true                        // defined in parent if immediate children are chunked
+ *      visible:    true                        // defined if the item is visible
+ *  }
+ *
+ */
+
+function libVarExpand(sym, value, preceding, local debugNub, output, keylist, chunksize, nchunks) {
+    //
+    // extype
+    // Annotate a dictionary with type information for the symbol and value.
+    //
+    function extype(dict, sym, value) {
+        if symbol(sym) && !interned(sym) && sym !== false
+            dict.symtype = "uninterned"
+        else
+            dict.symtype = typeof(sym)
+        if symbol(value) && !interned(value) && value !== false
+            dict.valtype = "uninterned"
+        else if symbol(value) && builtin(value.proc) || builtin(value)
+            dict.valtype = "builtin"
+        else if procedure(value)
+            dict.valtype = "procedure"
+        else
+            dict.valtype = typeof(value)
+    }
+
+    debugNub = car(compress("debugNub"))                                    // get remote debugNub's value, which is the nub
+    output = { }
+    extype(output, sym, value)
+    output.symbol = sym.tostring
+    if procedure(value) {                                                   // procedure tuple
+        output.value = debugNub.procstring(value, { namespace: false, fullname: false })
+        output.procedure = true
+        return (output)
+    }
+    output.value = tostring(value, {quote:true})
+    if array(value)
+        keylist = value.map(function(item,index){index})                    // 0..n
+    else if tuple(value)
+        keylist = value.toarray.map(function(item,index){index})            // 0..n
+    else if dictionary(value) || object(value)
+        keylist = keys(value)
+    else
+        return (output)                                                     // cannot go deeper
+    if !preceding {
+        output.more = true                                                  // there is more below, but
+        return (output)                                                     // we've reached the recursion limit
+    }
+    output.visible = preceding.visible
+    chunksize = 100
+    nchunks = (length(keylist)+chunksize-1) / chunksize
+    if !array(preceding.more)
+        preceding = false                                                   // just fill in our children
+    else if preceding.chunked
+        preceding = new(preceding.more)                                     // a copy of chunk array we can modify
+    else
+        preceding = [{                                                      // fake chunk
+            symbol: 0
+            chunk: true
+            more: new(preceding.more)
+            visible: preceding.visible
+        }]
+    output.more = new(Array(nchunks)).map(function(item, index, local kdex, preceding1, count, key) {
+        kdex = index * chunksize
+        count = length(keylist) - kdex
+        if count > chunksize
+            count = chunksize
+        item = {
+            symbol: kdex
+            value: "[".concat(kdex, " ... ", kdex+count-1, "]")
+            chunk: true                                                     // note that this is a "chunk"
+        }
+        preceding1 = preceding.shift()                                      // get corresponding chunk
+        if !output.visible
+            preceding1 = false                                              // just fill in our children
+        else if preceding1.visible
+            item.visible = true                                             // chunk is visible
+        item.more = []
+        while --count >= 0 {
+            key = keylist[kdex++]
+            item.more.push(libVarExpand(key, value[key], preceding1.more.shift()))
+        }
+        item
+    })
+    if nchunks <= 1
+        output.more = output.more[0].more                                   // collapse the chunks
+    else
+        output.chunked = true
+    output
+};
+
+
+/*
+ * libBreakInfo
+ *
+ *     Return information about a breakpoint.
+ *
+ */
+
+function libBreakInfo(bpid, local debugNub, bp, comp, position) {
+    debugNub = car(compress("debugNub"))
+    bp = debugNub.breakInfo(bpid)
+    if !bp
+        return (false)
+    comp = debugNub.codemgr.procComponent(bp.proc)
+    position = comp.textpos(bp.proc, bp.task)
+    if !position
+        return (false)
+    {
+        bpid:       bpid
+        enable:     bp.enable
+        count:      bp.hitcount
+        procname:   bp.proc.1
+        modname:    comp.modname
+        compname:   comp.compname
+        first:      position.first
+        last:       position.last
+        line:       position.line
+    }
+};
+
+
+/*
+ * DebugRemote
+ *
+ *     Remote evaluation helper object.
+ *
+ */
+
+closure DebugRemote(commander, local remoter, here, there, library) {
+    remoter = new(object, this)
+    here = new(object)
+    there = {}
+    library = list(libVarExpand, libBreakInfo)
+        
+    // modcomp
+    //
+    // Report modules and components. It is essential that this be self-contained because it is sent
+    // to the remote and executed there.
+    //
+    here.modcomp = function modcomp(local result, id, mod) {
+        result = []
+        for `(id, mod) in modlist()
+            result.push({
+                id: id
+                created: mod.created
+                locpath: mod.locpath
+                components: mod.components.*.toarray
+            })
+        result
+    }
+    
+    // catchGlobalEnable
+    //
+    // Enable or disable exception traps globally.
+    
+    here.catchGlobalEnable = function catchGlobalEnable(enablex) {
+        debugNub = car(compress("debugNub"))
+        debugNub.catchGlobalEnable(enablex)
+    }
+
+    // breakGlobalEnable
+    //
+    // Global breakpoint enable/disable.
+    //
+    here.breakGlobalEnable = function breakGlobalEnable(enable, local debugNub) {
+        debugNub = car(compress("debugNub"))                                // get remote debugNub's value, which is the nub
+        debugNub.breakGlobalEnable(enable)
+    }
+
+    // breakAdd
+    //
+    // Add or update a breakpoint.
+    //
+    here.breakAdd = function breakAdd(modname, compname, lineno, column, expr, local debugNub) {
+        debugNub = car(compress("debugNub"))
+        debugNub.breakAdd(modname, compname, lineno, column, expr)
+    }
+
+    // breakClear
+    //
+    // Remove a breakpoint at a location.
+    //
+    here.breakClear = function breakClear(modname, compname, lineno, column, local debugNub) {
+        debugNub = car(compress("debugNub"))
+        debugNub.breakClear(modname, compname, lineno, column)
+    }
+
+    // breakDelete
+    //
+    // Remove a breakpoint by ID.
+    //
+    here.breakDelete = function breakDelete(bpid, local debugNub) {
+        debugNub = car(compress("debugNub"))
+        debugNub.breakDelete(bpid)
+    }
+
+    // breakAble
+    //
+    // Enable/disable a breakpoint by ID.
+    //
+    here.breakAble = function breakAble(bpid, enable, local debugNub) {
+        debugNub = car(compress("debugNub"))
+        debugNub.breakAble(bpid, enable)
+    }
+
+    // breakList
+    //
+    // List current breakpoints.
+    //
+    here.breakList = function breakList(local debugNub, bp, output) {
+        debugNub = car(compress("debugNub"))
+        output = []
+        for bp in debugNub.breakList()
+            output.push(libBreakInfo(bp.bpid))
+        output
+    }
+
+    // breakInfo
+    //
+    // Get info about the specified breakpoint ID.
+    //
+    here.breakInfo = function breakInfo(bpid) {
+        libBreakInfo(bpid)
+    }
+
+    // callstack
+    //
+    // Report current callstack.
+    //
+    here.callStack = function callStack(local debugNub) {
+        debugNub = car(compress("debugNub"))
+        debugNub.callStack()
+    }
+    
+    // frameinfo
+    //
+    // Report information about the nth frame in the callStack.
+    //
+    here.frameinfo = function frameinfo(nth, local debugNub, frame, proctask, comp, position) {
+        debugNub = car(compress("debugNub"))
+        frame = debugNub.nthFrame(nth)
+        proctask = debugNub.procTask(frame)
+        comp = debugNub.codemgr.procComponent(proctask.0)
+        position = comp.textpos(proctask.0, proctask.1)
+        {
+            procname:   proctask.0.1
+            modname:    comp.modname
+            compname:   comp.compname
+            first:      position.first
+            last:       position.last
+            line:       position.line
+        }
+    }
+    
+    // scopeinfo
+    //
+    // Return a representation of variables in the nth frame of the callstack. The result is an array
+    // of scopes starting with the local and ascending through the parents. Each scope is reported as
+    // a dictionary with the full procedure name and an array of variables defined on that procedure.
+    // Each variable in the array has the symbol, its current value as a short string, and if not a
+    // closure then the previous value of the symbol higher on the callstack. The more key is defined
+    // if the value can be further explored, and contains one more level of value dictionaries with
+    // additional more keys where applicable.
+    //     The optional visible array is a preceding result of this function, where "visible=true"
+    // can be applied to nested values to add recursive depth.
+    //
+    here.scopeinfo = function scopeinfo(nth, visible,
+        local debugNub, frame, procsym, parent, proc, lex1, ex1, params, content, scope, level, level1)
+    {
+        debugNub = car(compress("debugNub"))
+        frame = debugNub.nthFrame(nth)
+        procsym = frame.3.1
+        parent = procsym@\.parent
+        while parent {
+            proc = parent.proc
+            lex1 = proc.2                                                   // argument list
+            if atom(lex1) && lex1
+                params = list(lex1, car(lex1))                              // nospread
+            else {
+                params = false
+                while tuple(lex1) {                                         // spread
+                    ex1 = pop(lex1)
+                    if ex1
+                        push(list(ex1, car(ex1)), params)
+                }
+            }
+            push(reverse(params), parents)
+            parent = parent@\.parent
+        }
+        parents = reverse(parents)
+        push(frame.2, parents)                                              // list procedure locals first
+        parent = procsym                                                    // prime the parent chain with the child
+        visible = new(visible)                                              // don't modify original
+        content = []
+        while parent {
+            proc = parent.proc
+            level = {
+                procscope: debugNub.procstring(proc)
+                variables: []
+            }
+            level1 = visible.shift()
+            scope = pop(parents)                                            // tuple of (symbol, value [, previous ])
+            if tuple(scope) {
+                if atom(car(scope))
+                    scope = list(scope)                                     // was nospread
+                level.variables = scope.toarray.filter(function(item) {
+                    item && item.0                                          // eliminate "local", which is false
+                }).map(function(item, local child, child1) {
+                    child1 = level1.variables.shift()
+                    if !child1
+                        child1 = { }                                        // always do one level below this
+                    child = libVarExpand(item.0, item.1, child1)
+                    if proc.0 != `closure
+                        child.previous = tostring(item.2, {quote:true})
+                    child
+                })
+            }
+            content.push(level)
+            parent = parent@\.parent
+        }
+        content
+    }
+    
+    // watchInfo
+    //
+    // Return a representation of the evaluated watch expressions. The result is an array watches
+    // Each watch is reported as a dictionary with the "symbol", which is the watch expression, and
+    // the current value as a short string.  The more key is defined  if the value can be further
+    // explored, and contains one more level of value dictionaries with additional more keys where 
+    // applicable.
+    //     The optional visible array is a preceding result of this function, where "visible=true"
+    // can be applied to nested values to add recursive depth. A stack frame index can be specified
+    // to evaluate an expression in that context.
+
+    here.watchInfo = function watchInfo(visible, nth,
+        local debugNub, values, content, watch, child1, error, value, level, expr)
+    {
+        debugNub = car(compress("debugNub"))
+        values = debugNub.evalWatchesInFrame(nth)
+        visible = new(visible)                                              // don't modify original
+        content = []
+        for watch in debugNub.watches {
+            child1 = visible.shift()                                        // any "more" data for the watch
+            if !child1
+                child1 = { }                                                // always do one level below this
+            `(error, expr, value) = values.shift()
+            level = libVarExpand(expr, value, child1)
+            if error
+                level.error = error
+            if watch.source
+                level.source = watch.source                                 // original source text of expression
+            content.push(level)
+        }
+        content
+    }
+
+    // watchWrite
+    //
+    // Delete the nth watch expression.
+
+    here.watchWrite = function watchWrite(nth, text) {
+        debugNub = car(compress("debugNub"))
+        if nth <= debugNub.watches.length
+            debugNub.watches[nth] = {
+                source: text
+            }
+    }
+
+    // watchDelete
+    //
+    // Delete the nth watch expression.
+    
+    here.watchDelete = function watchDelete(nth) {
+        debugNub = car(compress("debugNub"))
+        debugNub.watches.splice(nth, 1)
+    }
+
+    // futureslist
+    //
+    // List the current futures.
+    
+    here.futureslist = function futureslist(local debugNub, output, future, record, procsym) {
+        debugNub = car(compress("debugNub"))
+        output = []
+        for future in futures() {
+            if member(debugNub.pauser, future.waiting)
+                continue                                                    // omit the debugger
+            record = {
+                start: future.start
+                count: future.count
+                delay: future.delay
+            }
+            if procedure(future.execute) {
+                procsym = future.execute.1
+                record.execute = strcat(future.execute.0, space, procsym.namespace.tostring, "::", debugNub.procname(procsym))
+            }
+            else if future.execute
+                record.execute = tostring(future.execute)
+            if future.waiting {
+                record.waiting = future.waiting.toarray.map(function(item) {
+                    procsym = item.1
+                    strcat(item.0, space, procsym.namespace.tostring, "::", debugNub.procname(procsym))
+                })
+            }
+            output.push(record)
+        }
+        output
+    }
+
+    // compsources
+    //
+    // List the sourcecode for a component.
+    
+    here.compsources = function compsources(modname, compname, local debugNub, comp) {
+        debugNub = car(compress("debugNub"))
+        comp = debugNub.codemgr.component(modname, compname)
+        comp.string()
+    }
+
+    // .undefined
+    // Execute methods remotely, returning a standard `(error, data) tuple.
+    
+    remoter[".undefined"] = closure remoter args {
+        closure (selector, arglist, local error, context, result) {
+            if !there[selector] {                                           // not over there yet
+                proc = here[selector]
+                if !proc
+                    return(list(Error("DebugRemote.remoter: invalid selector", selector)))
+                if !remoter.context {
+                    `(error, context) = commander.context()
+                    if !error
+                        `(error, result) = context.evalq(Naan.module.chns("running"))
+                    if error
+                        return(list(Error("DebugRemote.remoter: failed to make context", error)))
+                    `(error, result) = context.eval(false, library)
+                    if error
+                        return(list(Error("DebugRemote.remoter: failed to transfer library", error)))
+                    remoter.context = context
+                }
+                `(error, result) = remoter.context.eval(false, list(here[selector].1))
+                if error
+                    return(list(Error("DebugRemote.remoter: method transfer failed", error)))
+                there[selector] = true                                      // it's over there
+            }
+            `(error, result) = remoter.context.eval(cons(selector, arglist))
+            if error
+                return(list(Error("DebugRemote.remoter: method eval failed", error)))
+            return(list(false, result))
+        } (args.0, args.-1)
+    }
+
+    // finis
+    remoter
+}
+
+
+
+/*
+ * dutInit
+ *
+ *     Initialize the debugger panel.
+ *
+ */
+
+function dutInit(local manifest) {
+
+    manifest = `(libVarExpand, libBreakInfo, DebugRemote, dutInit)
+
+    Naan.module.build(module.id, "debugutil", function(modobj, compobj) {
+        compobj.manifest = manifest
+    })
+}();

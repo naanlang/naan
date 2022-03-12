@@ -1,0 +1,52 @@
+/*
+ * storage.nlg
+ * Naanlib/frameworks/storage
+ *
+ *     Root component for database and filesystem functionality.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * storInit
+ *
+ *     Initialize the storage module.
+ *
+ *
+ */
+
+function storInit(local manifest) {
+    manifest = `(storInit)
+
+    Naan.module.build(module.id, "storage", function(modobj, compobj) {
+        require("../common/common.nlg").LiveImport()
+        require("../common/watching.nlg")
+        compobj.manifest = manifest
+        LoadComponentOnDemand(list(DbConnector, ListBrowserDBs, PouchDB), "./dbt_pouch.nlg")
+
+
+        // storReload
+        //
+        // Initialize environment functionality when we reload.
+        //
+        function storReload(local wsg) {
+            wsg = js.w || js.s || js.g                                      // any global: browser or web worker or nodejs
+            jspath = js.r("path")
+            if js.w || js.s {
+                JsLoadScript("frameworks/browser/pouchdb/pouchdb.min.js", "PouchDB")
+                pouchdb = wsg.PouchDB
+                indexedDB = wsg.indexedDB
+            }
+            else {
+                pouchdb = js.r("pouchdb")
+                indexedDB = false
+            }
+        }()
+        module.reload = storReload
+
+    })
+} ();

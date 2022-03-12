@@ -1,0 +1,172 @@
+/*
+ * node_https.nlg
+ *
+ *     Https operations for NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * HttpsGetJson
+ *
+ *     Perform an HTTPS get on a host with JSON decoding.
+ *
+ */
+
+closure HttpsGetJson(hostname, pathname, query, local https, options, pending, req) {
+    if query
+        pathname = EncodeQuery(pathname.concat("?"), query)
+    debuglog("HttpsGetJson", hostname, pathname)
+    options = {
+        hostname: hostname
+        port: 443
+        path: pathname
+        method: "GET"
+    }
+    pending = new(nonce)
+    req = nodeHttps.request(options, function (res) {
+        res.on("data", function (data, local error) {
+            `(error, data) = JsonParse(data)
+            if error
+                error = Error("HttpsGetJson:", hostname, pathname, error)
+            pending.signal(list(error, data))
+        })
+    })
+    req.on("error", function(error) {
+        error = Error("HttpsGetJson failed:", hostname, pathname, error)
+        pending.signal(list(error))
+    })
+    req.end()
+    pending.wait()
+};
+
+
+/*
+ * HttpsDownloadFile
+ *
+ * column positioning:                          //                          //                      !
+ *     Download a file from an HTTPS endpoint using the GET method and store it on the local
+ * filesystem. This returns a standard result tuple.
+ *
+ */
+
+closure HttpsDownloadFile(hostname, pathname, query, filepath,
+    local dirpath, error, pending, writeStream, options, req)
+{
+    filepath = nodePath.resolve("/tmp", filepath)
+    if query
+        pathname = EncodeQuery(pathname.concat("?"), query)
+    debuglog("HttpsDownloadFile", hostname, pathname, filepath)
+    options = {
+        hostname: hostname
+        port: 443
+        path: pathname
+        method: "GET"
+    }
+    pending = new(nonce)
+    req = nodeHttps.request(options, function(resp) {
+        if resp.statusCode != 200
+            return (pending.signal(list(Error("HttpsDownloadFile cannot read:", resp.statusCode))))
+        `(error) = await(nodeFs.promises.mkdir(nodePath.dirname(filepath), { recursive: true }))
+        if error
+            return (pending.signal(list(Error("HttpsDownloadFile cannot create directory:", nodePath.dirname(filepath), error))))
+        writeStream = nodeFs.createWriteStream(filepath)
+        writeStream.on("error", function(error) {
+            error = Error("HttpsDownloadFile cannot write file:", filepath, error)
+            pending.signal(list(error))
+        })
+        resp.on("close", function() {
+            pending.signal(list(false, { ok: true }))
+        })
+        resp.pipe(writeStream)
+    })
+    req.on("error", function(error) {
+        error = Error("HttpsDownloadFile request failed:", hostname, pathname, error)
+        pending.signal(list(error))
+    })
+    req.end()
+    pending.wait()
+};
+
+
+/*
+ * HttpsUploadFile
+ *
+ *     Upload a local filesystem file to an HTTPS endpoint using POST, returning a standard result tuple.
+ *
+ */
+
+closure HttpsUploadFile(hostname, pathname, query, fieldname, filepath,
+    local error, buffer, form, fields, multipart, readStream, pending, options, req)
+{
+    if query
+        pathname = EncodeQuery(pathname.concat("?"), query)
+    debuglog("HttpsUploadFile", hostname, pathname, filepath)
+    `(error, buffer) = ReadFile(filepath, "binary")
+    if error
+        return (list(Error("HttpsUploadFile cannot read file:", filepath, error)))
+    form = {}
+    form[fieldname] = buffer
+    fields = {}
+    fields[fieldname] = nodePath.basename(filepath)
+    multipart = MultipartBody(form, fields)
+    readStream = nodeStream.Readable.from(multipart.body)
+    options = {
+        hostname: hostname
+        port: 443
+        path: pathname
+        method: "POST"
+        headers: multipart.headers
+    }
+    pending = new(nonce)
+    req = nodeHttps.request(options, function(resp) {
+        resp.on("data", function (data, local error) {
+            `(error, data) = JsonParse(data)
+            if error || data.error_code {
+                if error
+                    error = Error("HttpsUploadFile unexpected response:", hostname, pathname, error)
+                else
+                    error = Error("HttpsUploadFile rejected:", hostname, pathname, data)
+                data = false
+            }
+            pending.signal(list(error, data))
+        })
+        resp.on("close", function(local error) {
+            error = Error("HttpsUploadFile no response:", hostname, pathname, resp.statusCode)
+            pending.signal(list(error))
+        })
+    })
+    req.on("error", function(error) {
+        error = Error("HttpsUploadFile request failed:", hostname, pathname, error)
+        pending.signal(list(error))
+    })
+    readStream.pipe(req)
+    readStream.on("close", function() {
+        req.end()
+    })
+    pending.wait()
+};
+
+
+/*
+ * nodeHttpsInit
+ *
+ * Initialize NodeJS HTTPS operations.
+ *
+ */
+
+function nodeHttpsInit(local manifest) {
+    manifest = `(HttpsGetJson, HttpsDownloadFile, HttpsUploadFile, nodeHttpsInit)
+
+    Naan.module.build(module.id, "node_https", function(modobj, compobj) {
+        require("node_util.nlg")
+        compobj.manifest = manifest
+        modobj.exports.HttpsGetJson = HttpsGetJson
+        modobj.exports.HttpsDownloadFile = HttpsDownloadFile
+        modobj.exports.HttpsUploadFile = HttpsUploadFile
+    })
+}();

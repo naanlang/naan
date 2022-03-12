@@ -1,0 +1,87 @@
+/*
+ * jszip.nlg
+ *
+ *     Naan wrapper for the JSZip library.
+ *
+ * Origin:
+ *     https://stuk.github.io/jszip/
+ *
+ * License:
+ *     MIT
+ *
+ * Installation:
+ *     download from http://github.com/Stuk/jszip/zipball/master
+ *     include the file dist/jszip.js or dist/jszip.min.js
+
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+ 
+/*
+ * JSZip
+ *
+ *     Construct a JSZip wrapper object.
+ *
+ */
+
+closure JSZip(local jszip) {
+    jszip = new(object)
+        
+    // reload
+    // Load the library if needed, and throw an exception if unavailable.
+    
+    function reload() {
+        if !jszip.jslib {
+            jszip.jslib = JsLoadScript(module.locpath.concat("/jszip.js"), "JSZip")
+            if !jszip.jslib
+                throw("JSZip library unavailable")
+        }
+    }
+
+    // version
+    // Return flags showing what features are supported in the current JavaScript environment.
+    jszip["..version"] = function get_version() {
+        reload()
+        jszip.jslib.version
+    }
+    
+    // support
+    // Return flags showing what features are supported in the current JavaScript environment.
+    jszip["..support"] = function get_support() {
+        reload()
+        new(jszip.jslib.support)
+    }
+
+    // create
+    // Create an archive instance.
+    jszip.create = function create() {
+        reload()
+        xnew(jszip.jslib)
+    }
+
+    // finis
+    
+    jszip
+};
+
+
+/*
+ * jszipInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function jszipInit(local manifest) {
+    manifest = `(JSZip, jszipInit)
+
+    Naan.module.build(module.id, "jszip", function(modobj, compobj) {
+        require("./project.nlg")
+        compobj.manifest = manifest
+        module.exports.JSZip = JSZip
+    })
+} ();

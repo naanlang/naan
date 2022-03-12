@@ -1,0 +1,52 @@
+/*
+ * node_repl_init.nlg
+ * Naanlib
+ *
+ *     Initialize the Naan repl in Node.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2018-2021 by Richard C. Zulch
+ *
+ */
+
+loglevel(2);
+
+
+/*
+ * debug
+ *
+ *     Handy utility to enter the debugger just before an expression is evaluated.
+ *
+ */
+
+macro debug(expr) {
+    if atom(expr)
+        first(expr)
+    else {
+        expr = list(list(Naan.debug.debugger, 1), expr)
+        second(eval(expr)) }
+};
+
+
+/*
+ * dcaller
+ *
+ *     Report the caller of the specified function for debugging. By default this ignores lambda
+ * functions, but you can pass true for argument two to report them.
+ *
+ */
+
+function dcaller(proc, lambdaOK, local x, found) {
+    for x in stacktrace()
+        if procedure(list(x.0)) {
+            if !lambdaOK && lambda(x.1)
+                continue
+            if found && !proc
+                return (x.1)                                                // found procedure name symbol
+            else if x.1 == dcaller
+                found = true
+            else if proc && x.1 == proc
+                proc = false }
+    false
+};

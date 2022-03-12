@@ -1,0 +1,234 @@
+/*
+ * gitter.nlg
+ * Naanlib/frameworks/node
+ *
+ * Git command line wrapper for NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Gitter
+ *
+ *     Access to the Git source control system. Methods take a callback, which if not provided will
+ * cause execution to block until complete. The return value is always a tuple of (error, data).
+ *
+ */
+
+closure Gitter(fs, local gitt) {
+    gitt = new(object, this)
+    gitt.roots = {}
+    
+    // repoRoot
+    //
+    // Compute the path from the fs root to the repo root.
+    
+    closure repoRoot(repopath, callback, local execOptions) {
+        if !callback
+            return (syncAdapter(repoRoot, repopath))
+        if gitt.roots[repopath]
+            asyncResult(callback, false, gitt.roots[repopath])
+        execOptions = {
+            cmdargs: ["rev-parse", "--show-toplevel"]
+            execops: {
+                cwd: repopath
+            }
+            outLE: "\x00"                                                   // lines delimited by nulls
+        }
+        fs.execLines("git", execOptions, function(error, output) {
+            if !error && output.stdout.length >= 1 {
+                gitt.roots[repopath] = output.stdout.0.trim()
+                callback(false, gitt.roots[repopath])                       // the first line of output is repo path
+            }
+            else
+                callback(Error("git rev-parse failed", error))
+        })
+    }
+    
+    // bridgePath
+    //
+    // Compute the bridge path to an absolute repopath (which can point inside a repo) from the
+    // phyiscal repo root. If these are the same, or an error occurs, then the result is "".
+    //
+    
+    function bridgePath(repopath, local top) {
+        top = repoRoot(repopath).1
+        if top && repopath.startsWith(top) && repopath.length > top.length
+           top = repopath.slice(top.length+1).concat("/")                   // move leading "/" of bridge path to trailing
+        else
+            ""                                                              // we are looking at the root, or an error
+    }
+
+    // log
+    //
+    // Report the git log history of a file in the current repository as an array of commits.
+    // Each element in the array has the following structure:
+    //      {
+    //          hash:   <hash>,             // abbreviated hash
+    //          author: <author name>
+    //          email:  <author email>
+    //          date:   <author date>       // can call Date(<author date>)
+    //          message: <message>          // full text, subject and body
+    //      }
+    // Options are:
+    //      {
+    //          pathspec                    // string or array of strings identifying files to log
+    //      }
+    //
+    // Sample git output to illustrate the code:
+    //      git log --pretty=format:"%h|%an|%ae|%aI|%B" -- nide_init.nlg
+    //      f2b54c8|Richard Zulch|richardz@zulchserver.zulch.org|2018-01-29T21:41:01-08:00|<message>
+    //
+    gitt.log = closure log(repopath, options, callback, local execOptions, result) {
+        if !callback
+            return (syncAdapter(log, repopath, options))
+        if !string(repopath)
+            return (asyncResult(callback, Error("invalid path:", repopath)))
+        repopath = fs.path.resolve(fs.rootpath, repopath)
+        execOptions = {
+            cmdargs: ["log", "-z", "--pretty=format:%H|%an|%ae|%aI|%B"]
+            execops: {
+                cwd: repopath
+            }
+            outLE: "\x00"                                                   // lines delimited by nulls
+        }
+        if options.pathspec
+            execOptions.cmdargs = execOptions.cmdargs.concat("--", options.pathspec)
+        result = []
+        execOptions.outproc = function(output, liner, kill, local line, fields) {
+            while (line = liner.read()) {
+                fields = line.split("|")
+                result.push({
+                    hash: fields.0
+                    author: fields.1
+                    email: fields.2
+                    date: fields.3
+                    message: fields.slice(4).join("|")                      // adds back any embedded | in messages
+                }) }
+        }
+        fs.execLines("git", execOptions, function(error, output) {
+            if output.stderr
+                debuglog("git log stderr:", output.stderr.join("\n"))
+            if error
+                callback(Error("git log failed", error))
+            else if output.stderr && result.length == 0
+                callback(Error("git log:", output.stderr.join("\n")))
+            else
+                callback(false, result)
+        })
+    }
+
+    // status
+    //
+    // Report the git status of the current respository as an array of files. The reported paths are
+    // relative to the specified repopath, which may be inside the actual git repo.
+    // Each element in the array has the following structure:
+    //      {
+    //          status: <status>,           // " M", "AM", "??", etc.
+    //          path: <path>
+    //      }
+    // Options are:
+    //      {
+    //          pathspec                    // string or array of strings identifying base dir
+    //      }
+    //
+    gitt.status = closure status(repopath, options, callback, local bridge, execOptions, result) {
+        if !callback
+            return (syncAdapter(status, repopath, options))
+        if !string(repopath)
+            return (asyncResult(callback, Error("invalid path:", repopath)))
+        repopath = fs.path.resolve(fs.rootpath, repopath)
+        bridge = bridgePath(repopath)
+        execOptions = {
+            cmdargs: ["status", "-z", "--porcelain"]
+            execops: {
+                cwd: repopath
+            }
+            outLE: "\x00"                                                   // lines delimited by nulls
+        }
+        if options.pathspec
+            execOptions.cmdargs = execOptions.cmdargs.concat("--", options.pathspec)
+        result = []
+        execOptions.outproc = function(output, liner, kill, local line, path) {
+            while (line = liner.read())
+                if line != "" {
+                    path = line.substring(3)
+                    if path.startsWith(bridge) {                            // must start with bridge to be within repopath
+                        path = path.slice(bridge.length)
+                        result.push({
+                            status: line.substring(0,2)
+                            path: path
+                        })
+                    }
+                }
+        }
+        fs.execLines("git", execOptions, function(error, output) {
+            if output.stderr
+                debuglog("git status stderr:", output.stderr.join("\n"))
+            if error
+                callback(Error("git status failed", error))
+            else if output.stderr && result.length == 0
+                callback(Error("git status:", output.stderr.join("\n")))
+            else
+                callback(false, result)
+        })
+    }
+    
+    // showfile
+    //
+    // Retrieve the content of a specific file and revision. The file pathspec must be the path of
+    // the file within the repo.
+    
+    gitt.showfile = closure showfile(repopath, options, callback, local execOptions, result) {
+        if !callback
+            return (syncAdapter(showfile, repopath, options))
+        if !string(repopath)
+            return (asyncResult(callback, Error("invalid path:", repopath)))
+        if !string(options.pathspec) || !string(options.hash)
+            return (asyncResult(callback, Error("both pathspec and hash required:", options.pathspec, options.hash)))
+        repopath = fs.path.resolve(fs.rootpath, repopath)
+        execOptions = {
+            cmdargs: ["show", options.hash.concat(":", bridgePath(repopath), options.pathspec)]
+            execops: {
+                cwd: repopath
+            }
+        }
+        nodecp.execFile("git",
+            execOptions.cmdargs,
+            execOptions.execops,
+            function(err, stdout, stderr) {
+                if err
+                    callback(Error("git failed", err, stderr))
+                else
+                    callback(false, stdout)
+            }
+        )
+    }
+
+    // finis
+    list(false, gitt)
+};
+
+
+/*
+ * gittInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function gittInit(local manifest) {
+
+    manifest = `(Gitter, gittInit)
+
+    Naan.module.build(module.id, "gitter", function(modobj, compobj) {
+        require("./node.nlg")
+        compobj.manifest = manifest
+        modobj.exports.Gitter = Gitter
+    })
+
+} ();

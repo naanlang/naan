@@ -1,0 +1,1229 @@
+/*
+ * build.nlg
+ * Naanlib/frameworks/project/
+ *
+ * Build operations on any filesystem.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Build Operations
+ *
+ *     A build object operates as a make utility to incrementally copy or process files from sources
+ * to outputs, doing nothing when everything is caught up. A dictionary contains a rules list, which
+ * is series of groups, each defining inputs and outputs, files and folders, dependencies, and the 
+ * tasks to perform for each of those operations.
+ *     A build begins with the operation to be performed, which is an arbitrary string label that is
+ * defined in the rules list. Every group is then evaluated in order, one at a time. If a group has
+ * tasks defined for that operation then those tasks are added to the work list, but only if the
+ * destination or a dependency for that task is missing or out-of-date. Once all groups are evaluated
+ * then the worklist is executed in parallel until all tasks are completed. Note that the worklist
+ * never changes in response to task execution, and tasks are always performed in group order.
+ *
+ * Ruleset:
+ *      filedefs    - definitions for license / version / buildnumber files
+ *      run         - how to run the built target
+ *      groups      - an array of groups as defined below
+ *     [minprefix]  - the prefix string to insert before minified files, default ""
+ *     [templates]  - optional template(s) for multiple source output like catenate
+ *
+ * Groups:
+ *      group       - a single combination of sources, operations, tasks, and output
+ *      input       - an input folder path, relative to srcpath, prefixed to sources
+ *      sources     - an array of source files to be processed, relative to srcpath
+ *      output      - an output folder path, relative to destpath
+ *     [destcheck]  - array of files/dirs to check against source(s)
+ *     [destfile]   - single filename for output from multiple sources across groups
+ *     [minprefix]  - the prefix to insert before minified files, default ""
+ *      operations  - a dictionary of operations that can be performed on the group
+ *                    e.g. debug / release / test / distribute
+ *      tasks       - the task(s) for an operation to execute in sequence
+ *                    e.g. copy / version / unzip / license
+ *      srcpath     - the source path in common to all sources
+ *      destpath    - the destination path in common to all outputs
+ *
+ * Templates:
+ *           A dictionary where each key is a destfile as described above, and the data for the key
+ *     is the path to a template file relative to srcpath. When a template file exists for multiple-
+ *     file output then it should contain substitution variables where the content should be placed
+ *     in the form $insource$ for each named component. The insource is the source file with the 
+ *     group's input path prefixed to it.
+ *          If the template file begins with $$ then that is removed and version substitutions are
+ *     performed before the template file components are inserted. Otherwise the template file is
+ *     literal and no substitutions, aside from the components, is performed.
+ *          If no template file is specified then the components are joined with newlines inserted
+ *     between them.
+ *
+ * Tasks:
+ *      copy        - just copy the file to the output folder
+ *      version     - apply version variable substitution
+ *      license     - apply license variable substitution
+ *      unzip       - unzip an archive into a file; currently must be only task in the group
+ *      minimize    - apply JavaScript compression and mangling
+ *      naanpack    - convert to Naan package format
+ *      jspack      - convert to Naan JavaScript format
+ *      syntax      - syntax check and copy
+ *      catenate    - copy multiple input files into a single output file
+ *      zip         - compressed catenate
+ *
+ * Dictionary structure:
+ *      {
+ *          licfile: <license file, path relative to srcpath>
+ *          verfile: <version file, path relative to srcpath>
+ *          buildno: <build number file, path relative to srcpath>
+ *          run: {
+ *              "open": "Nide_LaunchMac.tool",
+ *              "args": []
+ *          }
+ *          groups: [
+ *              {                                                           // group 1 - unlicensed files
+ *                  input: <path relative to srcpath, prepended to sources>
+ *                  sources: <array of files relative to srcpath>
+ *                  output: <path relative to destpath>
+ *                  operations: {
+ *                      debug: ["copy"],
+ *                      release: ["minify", "zip"]
+ *                  }
+ *              },
+ *              {                                                           // group 2 - licensed files
+ *                  input: <path relative to srcpath, prepended to sources>
+ *                  sources: <other array of relative to srcpath>
+ *                  output: <path relative to destpath>
+ *                  destcheck: <file or directory in destpath to use for out-of-date checking>
+ *                  operations: {
+ *                      debug: ["license", "version"],
+ *                      release: ["license", "version", "minify", "zip"]
+ *                  }
+ *              }
+ *          ]
+ *      }
+ *
+ * build = Builder(rulesDict, operation, fs, srcpath, destpath)             // create a builder object
+ * build.increment()                                                        // increment the build counter
+ * build.make()                                                             // run the build
+ * build.clean()                                                            // clear all output folders
+ *
+ */
+
+
+/*
+ * Builder
+ *
+ *     Build objects for making builds. A build object is preconfigured with rules, an operation,
+ * source path, and destination path. After that the build can be invoked with make or clean.
+ * Operations are specified up front for simplicity. You can always make multiple build objects to
+ * perform different operations.
+ *     Actually running or cleaning a build requires a filesystem parameter, in order to access the
+ * files being built. This can be changed with each call to make or clear. The return value from 
+ * Builder and the methods is a standard `(error, data) result tuple. When multiple errors occur the
+ * error value can be an array, and potentially a large one.
+ *
+ */
+
+closure Builder(rules, operation, fs, srcpath, destpath, local build, group, newgroup) {
+    build = new(object, this)
+    build.srcpath = srcpath
+    build.destpath = destpath
+    build.tasks = {                                                         // all tasks counter
+        copy: 0,
+        version: 0,
+        license: 0,
+        unzip: 0,
+        minimize: 0
+        naanpack: 0
+        jspack: 0
+        syntax: 0
+        catenate: 0
+        zip: 0
+    }
+    build.solotasks = {                                                     // solo-only tasks
+        copy: true,
+        unzip: true
+    }
+
+    if rules.licfile
+        build.licfilepath = JSpath.join(build.srcpath, rules.licfile)       // get special file paths
+    if rules.verfile
+        build.verfilepath = JSpath.join(build.srcpath, rules.verfile)
+    if rules.buildno
+        build.buildnopath = JSpath.join(build.srcpath, rules.buildno)
+    if rules.templates {                                                    // templates for catenates
+        let (tpath, writepath) {
+            build.tepaths = { }                                             // template for each catenate output
+            for tpath in rules.templates {
+                writepath = JSpath.join(build.destpath, tpath)
+                build.tepaths[writepath] = JSpath.join(build.srcpath, rules.templates[tpath])
+            }
+            build.testats = { }
+        }()
+    }
+    if rules.minprefix
+        build.minprefix = rules.minprefix
+    
+    build.runway = rules.run
+
+    build.groups = []                                                       // parse out the groups
+    for group in rules.groups
+        if group.operations[operation] {                                    // build operation-specific ruleset
+            newgroup = new(group)
+            newgroup.tasks = group.operations[operation]
+            newgroup.operations = undefined
+            build.groups.push(newgroup)
+        }
+
+    build.nextgno = 0
+    for group in build.groups {                                             // check rules for validity
+        if group.destcheck && group.destcheck.length != group.sources.length
+            return (list(Error("sources[] and destcheck[] don't match in group".concat(tostring(group.groupno)))))
+        if not group.tasks.length > 0
+            return (list(Error("group".concat(tostring(group.groupno), " has no tasks"))))
+        if group.groupno < build.nextgno
+            return (list(Error("invalid or duplicate group number: ".tostring(group.groupno))))
+        build.nextgno = group.groupno+1
+        for task in group.tasks {
+            if not string(task)
+                return (list(Error("tasks must be strings, not the", typeof(task), "found in rules for", operation)))
+            else if not build.tasks[task]
+                return (list(Error("unknown task", task, "in rules for", operation)))
+            else if build.solotasks[task] && group.tasks.length != 1
+                return (list(Error("task", task, "cannot combine with other tasks in a group for", operation)))
+            else
+                ++build.tasks[task]                                         // keep track of what we are using
+        }
+    }
+
+    //
+    // parseSubstitutionLines
+    //
+    // Parse an array of lines containing string substitutions. The lines of test have definitions
+    // for variables with the following format:
+    //      # comments starting with pound sign are ignored
+    //      $VariableName$
+    //      <substitute text, one or more lines>
+    //      $AnotherVariableName$
+    //      <substitute text, one or more lines>
+    //      [File EOF]
+    //
+    // Note that the newlines before and after the substitute text are not included. This returns a
+    // a dictionary of variables and replacement text. The defs argument is optional, and defines a
+    // substitution dictionary applied to the replacement text defined in this file.
+    //
+    function parseSubstitutionLines(lines, defs, local ignoregex, varegex, line, find, subs, curvar, sub) {
+        subs = { }
+        ignoregex = RegExp("^#")
+        varegex = RegExp("^[$]([^$]+)[$]")
+        for line in lines {
+            if ignoregex.exec(line)
+                continue
+            if find = line.match(varegex) {
+                curvar = find[1]
+                subs[curvar] = ""
+            } else if curvar {
+                if subs[curvar] == ""
+                    subs[curvar] = subs[curvar].concat(line)
+                else
+                    subs[curvar] = subs[curvar].concat("\n", line)
+            }
+        }
+        if defs {                                                           // substitute using the provided definitions
+            for curvar in subs
+                for sub in defs
+                    subs[curvar] = subs[curvar].replace(RegExp("[$]".concat(sub, "[$]"), "g"), defs[sub])
+        }
+        subs
+    }
+
+    //
+    // readSubstitutionFile
+    //
+    // Read a file that defines string substitutions. A substitution-def-file has definitions for
+    // variables with the following format:
+    //      # comments starting with pound sign are ignored
+    //      $VariableName$
+    //      <substitute text, one or more lines>
+    //      $AnotherVariableName$
+    //      <substitute text, one or more lines>
+    //      [File EOF]
+    //
+    // Note that the newlines before and after the substitute text are not included. This returns a
+    // standard `(error, subs) result tuple where subs is a dictionary of variables and replacement
+    // text. The defs argument is optional, and defines a substitution dictionary applied to the
+    // replacement text defined in this file.
+    //
+    function readSubstitutionFile(localpath, defs, local error, lines) {
+        `(error, lines) = fs.readLines(localpath)
+        if error {                                                          // failed to read the file
+            build.errorlist.push(error)
+            return (list(error))
+        }
+        list(false, parseSubstitutionLines(lines, defs))
+    }
+
+    //
+    // applySubstitutions
+    //
+    // Apply substitutions from readSubstitutionFile to string, returning a new string.
+    //
+    function applySubstitutions(text, subs) {
+        text.replace(RegExp("[$][-A-Za-z0-9_./()\\\\]+[$]", "g"), function(match) {
+            if subs[match.slice(1,-1)]
+                { }
+            else
+                match
+        })
+    }
+    
+    //
+    // applyZipTemplate
+    //
+    // Apply a zip template to a dictionary of files where the keys are the file path and the data is
+    // the file content. The template defines new names for each file using the substitutionFile
+    // format described above. Only the beginning of the file paths need to match a defined match,
+    // allowing you to rename an entire directory with one definition. Omit the substitute text with
+    // a new variable definition or the EOF to delete a path prefix from the files.
+    //
+    function applyZipTemplate(text, files, local lines, subs, output, path, prefix) {
+        lines = text.split(RegExp("[\\r]?[\\n]"))
+        subs = parseSubstitutionLines(lines)
+        output = {}
+        for :enumfiles path in files {
+            for prefix in subs
+                if path.startsWith(prefix) {
+                    output[subs[prefix].concat(path.substring(prefix.length))] = files[path]
+                    continue :enumfiles
+                }
+            output[path] = files[path]
+        }
+        output
+    }
+    
+    //
+    // trimZipPaths
+    //
+    // Given a dictionary of files where the keys are the file path and the data is the file content,
+    // return a new dictionary where any common path prefix is removed from the keys.
+    //
+    function trimZipPaths(files, local rpa, path, common, match, output, newpath) {
+        rpa = {}
+        for path in files
+            rpa[path] = JSpath.dirname(path).concat("/").split("").reverse()
+        common = 0
+        loop :counter {
+            match = false
+            for path in rpa
+                if rpa[path].length == 0
+                    break :counter
+                else if !match
+                    match = rpa[path].pop()
+                else if match != rpa[path].pop()
+                    break :counter
+            ++common
+        }
+        output = {}
+        for path in files {
+            newpath = path.slice(common)
+            if newpath == ""
+                debuglog("path eliminated completely:", path)
+            else
+                output[newpath] = files[path]
+        }
+        output
+    }
+
+    //
+    // zip1
+    //
+    // Compress a dictionary of files where the keys are the file path and the data is the content 
+    // for each file. The result is a standard (error, data) tuple.
+    
+    function zip1(files, options, local libzip, ziparc, file, result) {
+        libzip = require("frameworks/project/jszip.nlg").JSZip()
+        if !libzip
+            return (list(Error("Build requires zip but it's not available")))
+        ziparc = libzip.create()
+        for file in files
+            ziparc.file(file, files[file])
+        debuglog("starting zip")
+        result = ziparc.generateAsync({
+            type: "base64"
+            compression: "DEFLATE"
+        })
+        debuglog("zip started")
+        result = await(result)
+        debuglog("zip completed")
+        result
+    }
+
+    //
+    // zip
+    //
+    // Run the zip operation on a worker.
+    //
+
+    closure zip(files, options, local result, annote) {
+        if !build.zipper
+            build.zipper = ExecutorParallel({                               // create worker for zipping
+                maxcount: 1                                                 // stupid Zip lib can't do more than one
+                basename: "zip"
+                initeval: `(false, (zip1))
+            }) 
+        result = build.zipper.rpc(zip1, list(files, options))
+        if !result.0
+            result = result.1                                               // unpeel RPC result
+        result
+    }
+
+    //
+    // parseAndPack1
+    //
+    // Parse the specified content and convert to a package format. The symbol NideBuild is assigned
+    // the current operation name as a string, e.g. "debug" during the build. During execution it is
+    // autoquoted to itself, a symbol. This can be used to detect build time vs. runtime.
+    
+    function parseAndPack1(text, fpath, options, operation,
+        local util, lib, penv, naansym, dlogsym, pmod, pcomp, output, textout, annerror, annotations, package)
+    {
+        //
+        // textline
+        // Capture text output for the build log.
+        //
+        function textline args {
+            apply(printline, args)                                          // local copy
+            let (addon) {
+               while tuple(args)
+                   addon = addon.concat(tostring(pop(args)))
+               textout = textout.concat(addon, "\n")
+            } ("")
+        }
+
+        util = Naan.module.modlist().Util.exports
+        lib = Naan.module.modlist().Lib.exports
+        if !util || !lib
+            return (list("Build packager cannot access support functions"))
+        penv = lib.ParsEnvironment(Dialect, "build-".concat(operation))
+        penv.evalq(letlocal(App))                                           // make local copy of App
+        penv.evalq(letlocal(js))                                            // make local copy of js
+        naansym = penv.evalq(letlocal(Naan).0)                              // make local copy of Naan
+        penv.evalq(assign(naansym,new(Naan)))                               // make it modifiable
+        pmod = { }                                                          // our module object
+        pcomp = { }                                                         // our component object
+        car(naansym).module = {
+            build: function(modname, compname, proc) {
+                pmod.id = module
+                pcomp.name = compname
+                call(proc, pmod, pcomp)                                     // obtain manifest
+            }
+        }
+        dlogsym = penv.evalq(letlocal(debuglog).0)                          // make local copy of debuglog
+        penv.evalq(function \.debuglog args {                               // redefine debuglog for capture
+            let (arg, spaced) {
+                spaced = `("debug=>")
+                while !empty(args) {
+                    arg = pop(args)
+                    push(space, spaced)
+                    push(arg, spaced)
+                }
+                apply(textline, reverse(spaced))
+            } () })
+        penv.evalq(putproc(car(dlogsym), \.debuglog.proc))
+        penv.eval(append(quote(assign(compress("NideBuild"))), operation))  // NideBuild symbol is operation name string
+        output = penv.parse(text)                                           // parse and evaluate
+        textout = ""
+        try {
+            if !pcomp.name
+                annerror = "Component required to build package"
+            else if output.errors.length > 0
+                annerror = output.errors[0]
+            annotations = output.annotations
+            if annotations {
+                if annotations.length == 0 {                                // empty annotations list
+                    if annerror
+                        annotations = [{                                    // first error becomes annotation
+                            row: 0
+                            column: 0
+                            text: annerror
+                            type: "error"
+                        }]
+                    else
+                        annotations = false }                               // no errors or annotations
+            }
+            if output.errors.length > 0 || output.text.length > 0 {
+                textline("-".repeat(79))
+                textline("While processing ", fpath)
+                textline("- ".repeat(39), "-")
+                if output.errors.length > 0 {
+                    textline(output.errors.join("\n"))
+                    if output.text.length > 0
+                        textline("- ".repeat(39), "-") }
+                else if !pcomp.name
+                    textline(annerror)
+                if output.text.length > 0
+                    textline(output.text.join("\n"))
+            }
+            if output.errors.length > 0
+                return (list("errors in ".concat(fpath), false, annotations, textout))
+            if options.naanpack || options.jspack {                         // actually building a package?
+                if !pcomp.name {
+                    pcomp = penv.evalq(car(compress(NaanBuildComponent)))   // fallback for building Module.nlg itself
+                    if !pcomp || !fpath.endsWith("/".concat(pcomp.filename))
+                        return (list("Build cannot package without component in ".concat(fpath), false, annotations, textout))
+                }
+                package = penv.evalq(util.pkgSave(compress(pcomp.name), pcomp.manifest))
+            }
+        } catch {
+            if true
+                return (list("Packaging exception in ".concat(fpath, ": ", tostring(exception)), false, annotations, textout))
+        } finally {
+            penv.destroy()                                                  // remove the namespace
+            debuglog("parseAndPack1 done", fpath)
+        }
+        if options.naanpack
+            package = (js.w||js.s||js.g).JSON.stringify(package)            // doesn't have frameworks/common available
+        else if options.jspack
+            package = util.pkgToJsSource(package)
+        else if options.syntax
+            package = text
+        else {
+            package = false
+            debuglog("parseAndPack1: format choice missing", fpath)
+        }
+        list(false, package, annotations, textout)
+    }
+
+    //
+    // parseAndPack
+    //
+    // Run the parseAndPack operation on a worker.
+    //
+
+    closure parseAndPack(text, fpath, options, local result, annote) {
+        if !build.parallel
+            build.parallel = ExecutorParallel({                             // create worker pool
+                basename: "build"
+                initeval: `(false, (parseAndPack1))
+            }) 
+        result = build.parallel.rpc(parseAndPack1, list(text, fpath, options, operation))
+        if !result.0 {
+            result = result.1                                               // unpeel RPC result
+            result = totuple(result)                                        // convert JS back to tuple
+            if result.2
+                build.annotations.push({                                    // we received source file annotations
+                    path: fpath
+                    annotations: result.2
+                })
+            if string(result.3) && result.3.length > 0
+                print(result.3)                                             // captured text
+            if string(result.0)
+                result = list(Error(result.0))                              // wrap errors
+        }
+        result
+    }
+
+    //
+    // resetlist
+    //
+    // Reset the make-specific arrays before starting a build.
+    //
+    function resetlist() {
+        build.errorlist = []
+        build.filelist = []
+        build.annotations = []
+    }
+    
+    //
+    // info
+    //
+    // Read info on the specified file or directory, pushing any errors on build.errorlist. This
+    // returns false on error and the info dictionary otherwise.
+    //
+    closure info(localpath, local error, info) {
+        `(error, info) = fs.info(localpath)
+        if error {
+            build.errorlist.push(error)
+            false }
+        else
+            info
+    }
+
+    //
+    // analyze
+    //
+    // Update the build.filelist for files that need to be copied or otherwise processed. Each item
+    // in the list has a dictionary with the following keys:
+    //
+    // required:
+    //      readpath:   <full pathname of source file>
+    //      writepath:  <full pathname of the destination file>
+    // optional:
+    //      destcheck:  <full pathname of the destination check>
+    //      license:    <true iff we want to license>
+    //      version:    <true iff we want to version>
+    //      unzip:      <true iff we want to unzip>
+    //      minimize:   <true iff we want to minimize>
+    //      naanpack:   <true iff we want to package in naan pkg format>
+    //      jspack:     <true iff we want to package in js source format>
+    //      syntax:     <true iff we want to syntax check>
+    //      catenate:   <true iff we want to catenate>
+    //      zip:        <true iff we want to compress>
+    //
+    // Handling the catenates is a bit tricky. One set of buildrules can have multiple catentates,
+    // distinguished by having a unique writepath derived from the destfile parameter. All groups
+    // having the same writepath contribute to a single catenate, with the sources ordere first by
+    // group number (low to high) and then order in the source list, first to last. If any component
+    // contributing to a catenate is out-of-date with respect to it then they are all built and
+    // combined into the single output file. This computes a set of ordering integers for the parts
+    // of each catenate from the maximum number of possible sources. Then after all the entries are
+    // created it uses that ordering integer to set a position and total count for each catenate.
+    //
+    closure analyze(debugMake, local licfileStat, verfileStat, buildnofileStat, groups, sourcemax, catenates, pending) {
+
+        if build.tasks.license > 0 {
+            if !build.licfilepath
+                build.errorlist.push(Error("Build requires license file for licensing operations"))
+            else
+                licfileStat = info(build.licfilepath) }
+        if build.tasks.version > 0 {
+            if !build.verfilepath
+                build.errorlist.push(Error("Build requires version file for versioning operations"))
+            else {
+                verfileStat = info(build.verfilepath)
+                if verfileStat && build.buildnopath
+                    `(false, buildnofileStat) = info(build.buildnopath) }   // build number is optional, and ignored if no version file
+        }
+        if build.tasks.catenate > 0 || build.tasks.zip > 0 {
+            let (writepath) {
+                for writepath in build.tepaths                              // get modify time for templates
+                    build.testats[writepath] = info(build.tepaths[writepath])
+            } ()
+        }
+        
+        if build.tasks.unzip && (!fs.unzip || !fs.touch)
+            build.errorlist.push(Error("Build requires unzip and touch, which are not implemented in project location"))
+        if build.tasks.minimize {
+            build.uglify = UglifyJS()
+            if !build.uglify
+                build.errorlist.push(Error("Build requires minimize but it's not available"))
+        }
+
+        groups = new(build.groups)                                          // copy so we can append more groups as needed
+        sourcemax = groups.reduce(function(acc, group) { Math.max(acc, group.sources.length) }, 0)
+        catenates = { }                                                     // catenate groups
+        pending = new(nonce)
+        pending.active = 0
+        pending.gdex = 0
+
+        // processOneGroup
+        //
+        // Process one group as a coroutine and then doMore when finished. The strategy here is to
+        // process up to 10 groups in parallel. Within each group, all sources are processed at once
+        // by first getting info on the source, then the destination, and then adding it to the list
+        // for execution if needed. When a directory source is encountered then its children are
+        // added as a separate new group. A counter is kept of all outstanding async functions, and
+        // analyze does not return until all pending async operations have completed.
+        //
+        closure processOneGroup(group, local error, indirpath, outdirpath, destcheck,
+            groupVerStat, source, sdex) {
+            ++pending.active
+            future(function test1() {
+                if group.input
+                    indirpath = JSpath.join(build.srcpath, group.input)
+                else
+                    indirpath = build.srcpath
+                outdirpath = JSpath.join(build.destpath, group.output)
+                destcheck = new(group.destcheck).reverse()                  // get next destination to check
+                groupVerStat = verfileStat
+                if group.depend_buildno {
+                    if groupVerStat.mtimeMs < buildnofileStat.mtimeMs
+                        groupVerStat = buildnofileStat                      // use later of version and buildno stats
+                }
+                for `(source, sdex) in group.sources
+                    closure(source, sdex, local infile, outfile) {
+                        ++pending.active
+                        infile = JSpath.join(indirpath, source)
+                        if group.destfile
+                            outfile = JSpath.join(outdirpath, group.destfile)
+                        else
+                            outfile = JSpath.join(outdirpath, source)
+                        fs.info(infile, function(error, instat, local listing, addgroup, file) {
+                            if error
+                                build.errorlist.push(error)
+                            else if instat.type != "directory"
+                                addEntry(infile, outfile, instat, sdex)     // add execution entry if needed
+                            else {                                          // add a new group for directory source
+                                `(error, listing) = fs.dirList(infile, { head: true })
+                                if error
+                                    build.errorlist.push(error)
+                                else {
+                                    addgroup = new(group)
+                                    addgroup.sources = []
+                                    for file in listing.children
+                                        if !file.info.hidden
+                                            addgroup.sources.push(file.name)    // add non-hidden files found in specified directory
+                                    if addgroup.input
+                                        addgroup.input = JSpath.join(addgroup.input, source, listing.data.pathsep)
+                                    else
+                                        addgroup.input = source.concat(listing.data.pathsep)
+                                    if group.destfile
+                                        addgroup.output = JSpath.join(addgroup.output, listing.data.pathsep)
+                                    else
+                                        addgroup.output = JSpath.join(addgroup.output, source, listing.data.pathsep)
+                                    addgroup.groupno = build.nextgno++      // needed for concat/zip
+                                    groups.push(addgroup)
+                                }
+                            }
+                            --pending.active
+                            doMore()
+                        })
+                    } (source, sdex)
+                --pending.active
+                doMore()
+            }, 0)
+    
+            // Add an entry to execution list if it's needed.
+            //
+            closure addEntry(infile, outfile, instat, sdex, local error, outstat, entry) {
+                entry = {
+                    readpath: infile,
+                    writepath: outfile
+                }
+                if group.input                                              // insource is the name within zip/cat
+                    entry.insource = JSpath.join(group.input, group.sources[sdex])
+                else
+                    entry.insource = group.sources[sdex]
+                if group.tasks.indexOf("license") >= 0 {
+                    entry.license = true
+                    if instat.mtimeMs < licfileStat.mtimeMs
+                        instat = licfileStat                                // make source at least as recent as license file
+                }
+                if group.tasks.indexOf("version") >= 0 {
+                    entry.version = true
+                    if instat.mtimeMs < groupVerStat.mtimeMs
+                        instat = groupVerStat                               // make source at least as recent as version file
+                }
+                if group.tasks.indexOf("copy") >= 0
+                    entry.copy = true
+                if group.tasks.indexOf("unzip") >= 0 {
+                    entry.unzip = true
+                    entry.writepath = outdirpath
+                }
+                if group.tasks.indexOf("naanpack") >= 0 || group.tasks.indexOf("jspack") >= 0 || group.tasks.indexOf("syntax") >= 0 {
+                    let (inpar, outpar, extension) {                        // change extension for package output
+                        inpar = JSpath.parse(infile)
+                        outpar = JSpath.parse(outfile)
+                        if inpar.ext.toLowerCase() == ".nlg" {
+                            if group.tasks.indexOf("syntax") >= 0 {
+                                extension = inpar.ext                       // syntax check only
+                                entry.syntax = true
+                            }
+                            else if group.tasks.indexOf("naanpack") >= 0 {
+                                extension = ".npk"                          // naan format package
+                                entry.naanpack = true
+                            }
+                            else {
+                                extension = ".js"                           // js format package
+                                entry.jspack = true
+                            }
+                            outpar.base = outpar.name.concat(extension)
+                            outfile = JSpath.format(outpar)
+                            if !entry.insource.endsWith(extension) {        // fix the "source" filename
+                                inpar = JSpath.parse(entry.insource)
+                                inpar.base = inpar.name.concat(extension)
+                                entry.insource = JSpath.format(inpar)
+                            }
+                        } else
+                            entry.copy = true                               // fall back to copy
+                    } ()
+                }
+                if group.tasks.indexOf("minimize") >= 0 {
+                    if infile.endsWith(".js") {
+                        entry.minimize = true
+                        if group.minprefix
+                            entry.minprefix = group.minprefix               // use group minify prefix
+                        else if build.minprefix
+                            entry.minprefix = build.minprefix               // use generic minify prefix
+                    }
+                }
+                if group.tasks.indexOf("catenate") >= 0
+                    entry.catenate = true
+                if group.tasks.indexOf("zip") >= 0 {
+                    entry.zip = true
+                    if !entry.writepath.toLowerCase().endsWith(".zip")
+                        entry.writepath = entry.writepath.concat(".zip")    // always ends with .zip
+                }
+                if entry.catenate || entry.zip {
+                    entry.catorder = group.groupno * sourcemax + sdex       // order of groups then sources
+                    if build.testats[outfile] && instat.mtimeMs < build.testats[outfile].mtimeMs
+                        instat = build.testats[outfile]                     // make source at least as recent as template
+                } else
+                    entry.writepath = outfile
+                ++pending.active
+                if destcheck {                                              // destcheck is special target for determining if task needed
+                    entry.destcheck = JSpath.join(outdirpath, destcheck.pop())
+                    fs.info(entry.destcheck, addIfOutOfDate)
+                } else
+                    fs.info(outfile, addIfOutOfDate)
+                    
+                function addIfOutOfDate(error, outstat, local entryop) {
+                    if error || toint(instat.mtimeMs) > toint(outstat.mtimeMs) {
+                        catenates[entry.writepath] = true                   // this entire group needed
+                        build.filelist.push(entry)                          // destination is out of date
+                        entryop = "make:"
+                    } else if entry.catorder {
+                        build.filelist.push(entry)                          // needed if any in group out of date
+                        entryop = "maybe-needed:"
+                    }
+                    else
+                        entryop = "up-to-date:"
+                    if debugMake
+                        debuglog(entryop, entry.*, instat.mtimeMs, outstat.mtimeMs, entry.readpath, entry.writepath)
+                    --pending.active
+                    doMore()
+                }
+            }
+        }
+
+        // doMore
+        //
+        // Look for more groups to process, or signal the pending if we're done.
+        function doMore() {
+            if pending.active == 0 && pending.gdex == groups.length
+                pending.signal()                                            // none active and no more to queue
+            else
+                while pending.active < 10 && pending.gdex < groups.length
+                    processOneGroup(groups[pending.gdex++])
+        }
+
+        doMore()
+        pending.wait()
+
+        //
+        // Remove unneeded catenate entries and index the remainder
+        //
+
+        let (renumber, wpath, catindex, catcount, entry) {
+            renumber = { }
+            build.filelist = build.filelist.filter(function(entry) {
+                if !entry.catorder
+                    true                                                    // not a catenate contributor
+                else if catenates[entry.writepath] {
+                    if !renumber[entry.writepath]
+                        renumber[entry.writepath] = []
+                    renumber[entry.writepath].push(entry)                   // this catenate is needed
+                    true
+                } else
+                    false                                                   // this one is not
+            })
+            for wpath in renumber {                                         // assign entries in catorder
+                renumber[wpath].sort(function(a,b) { a.catorder <=> b.catorder })
+                catindex = 0
+                catcount = renumber[wpath].length
+                for entry in renumber[wpath] {
+                    entry.catindex = catindex++
+                    entry.catcount = catcount } }
+        } ()
+    }
+
+    //
+    // execute
+    //
+    // Execute the build.filelist and record any errors that occur on the build.errorlist.
+    // As with analyze, the catenates are again tricky. This allocates an array of parts for each
+    // catenate when one of its parts is first seen. As the i/o operates complete the array is
+    // populated with the results. At the end after all entries are processed, the catenates are
+    // checked and any that have all the parts are written out. Catenates that don't have all their
+    // parts are reported as an error in addition to the error that caused them to be incomplete.
+    //
+    closure execute(local error, entries, pending, licFileDefs, buildno, verFileDefs, baddestpaths, catenates) {
+        if build.tasks.license > 0
+            `(error, licFileDefs) = readSubstitutionFile(build.licfilepath)
+        if build.tasks.version > 0 {
+            `(error, buildno) = fs.readFile(build.buildnopath)
+            if error {
+                build.errorlist.push(error)
+                buildno = false                                             // don't substitute if buildno file doesn't exist
+            } else
+                build.buildno = buildno = toint(buildno.trim())
+            build.buildno = buildno
+            `(error, verFileDefs) = readSubstitutionFile(build.verfilepath, {
+                BuildNumber: buildno
+            })
+        }
+        if build.tasks.catenate > 0 || build.tasks.zip > 0 {
+            build.templates = { }
+            let (writepath, content) {
+                for writepath in build.tepaths {                            // read catenate templates
+                    `(error, content) = fs.readFile(build.tepaths[writepath])
+                    if error
+                        build.errorlist.push(error)
+                    else if content.startsWith("$$")                        // prefix to cause version substitution
+                        build.templates[writepath] = applySubstitutions(content.slice(2), verFileDefs)
+                    else
+                        build.templates[writepath] = content
+                }
+            } ()
+        }
+        if build.errorlist.length != 0
+            return                                                          // build failed
+
+        entries = new(build.filelist)
+        pending = new(nonce)
+        pending.active = 0
+        pending.remaining = entries.length
+        baddestpaths = { }                                                  // failed destination paths
+        catenates = { }
+
+        closure processOneFile(entry, local result, content, error) {
+            ++pending.active
+            future(function build1(local dirpath) {
+                dirpath = JSpath.dirname(entry.writepath)
+                if baddestpaths[dirpath]
+                    { }                                                     // error already reported
+                else if ((`(error, result) = fs.mkdir(dirpath)) && error) {
+                    baddestpaths[dirpath] = error                           // don't report this folder again
+                    build.errorlist.push(error)
+                } else if entry.unzip {
+                    `(error, result) = fs.unzip(entry.readpath, entry.writepath)   // unzip source into destination
+                    if !error && entry.destcheck
+                        fs.touch(entry.destcheck)                           // show we completed
+                } else if entry.copy
+                    `(error, result) = fs.copy(entry.readpath, entry.writepath, { overwrite: true })     // copy file from source into destination
+                else if ((`(error, content) = fs.readFile(entry.readpath)) && !error) {
+                    if entry.license
+                        content = applySubstitutions(content, licFileDefs)
+                    if entry.version
+                        content = applySubstitutions(content, verFileDefs)
+                    if entry.naanpack
+                        `(error, content) = parseAndPack(content, entry.readpath, { naanpack: true })
+                    else if entry.jspack
+                        `(error, content) = parseAndPack(content, entry.readpath, { jspack: true })
+                    else if entry.syntax
+                        `(error) = parseAndPack(content, entry.readpath, { syntax: true })
+                    if entry.minimize {
+                        `(error, content) = build.uglify.minify(
+                            new(dictionary, list(cons(entry.readpath, content))), {
+                            mangle: { eval: true }
+                            compress: { drop_debugger: false }
+                        })
+                        if error
+                            content = false                                 // for safety, ensure that failed minimize doesn't leak source
+                        else if entry.minprefix
+                            content = entry.minprefix.concat(content)
+                    }
+                    if !error {
+                        if entry.catcount {
+                            if !catenates[entry.writepath]
+                                catenates[entry.writepath] = new(Array(entry.catcount))
+                            entry.content = content
+                            catenates[entry.writepath][entry.catindex] = entry }
+                        else
+                            `(error, result) = fs.writeFile(entry.writepath, content)
+                    }
+                }
+                if error
+                    build.errorlist.push(error)
+                --pending.active
+                if --pending.remaining == 0
+                    pending.signal()
+                else
+                    doMore()
+            }, 0)
+        }
+
+        function doMore() {
+            while entries.length > 0 && pending.active < 100
+                processOneFile(entries.pop())
+        }
+
+        doMore()
+        if pending.remaining > 0
+            pending.wait()                                                  // don't wait if nothing to do
+
+        //
+        // Write out any completed catenates
+        //
+
+        let (writepath, template, entry, content, catsub, dozip, docat, fsoptions, zipmap, error, result) {
+            for :out1 writepath in catenates {
+                template = build.templates[writepath]                       // optional
+                catsub = { }
+                for entry in catenates[writepath] {                         // error check and substitution build
+                    if !entry.content {
+                        build.errorlist.push(Error("Catenate incomplete:", writepath))
+                        continue :out1 }
+                    catsub[entry.insource] = entry.content
+                    if entry.zip
+                        dozip = true
+                    if entry.catenate
+                        docat = true
+                }
+                if docat {                                                  // catenate the files
+                    if template
+                        content = applySubstitutions(template, catsub)
+                    else
+                        content = catenates[writepath].map(function(entry){entry.content}).join("\n")
+                    if zip {
+                        zipmap = { }
+                        zipmap[JSpath.basename(writepath)] = content
+                        `(error, content) = zip(zipmap)                     // compress the catenated file
+                    }
+                } else {
+                    if template
+                        zipmap = applyZipTemplate(template, catsub)
+                    else
+                        zipmap = trimZipPaths(catsub)
+                    `(error, content) = zip(zipmap)                         // compress each of the files
+                }
+                if dozip
+                    fsoptions = { encoding: "base64" }
+                if !error
+                    `(error, result) = fs.writeFile(writepath, content, fsoptions)
+                if error
+                    build.errorlist.push(error)
+            }
+        } ()
+    }
+
+    //
+    // build.make
+    //
+    // Perform a make operation, returning a result tuple. If errors occur then the result dictionary
+    // has the following form:
+    //  {
+    //      result: <summary-text>              // a string to display to user for what happened
+    //      errors: <error-array>               // an array of Error objects for each problem encountered
+    //      files: [ {
+    //          path: <filepath>
+    //          annotations: [ {                // ACE-compatible editor annotations
+    //              row:    <zero-based row>
+    //              column: <zero-based col>
+    //              text:   <error description>
+    //              type:   "warning" | "error" | "info"
+    //          } ... ]
+    //      } ... ]
+    //  }
+    //
+    build.make = closure make(debugMake, local sink, xchan, entry, outext, error) {
+        sink = new(textstream, "", `string)                                 // log all output
+        xchan = textstreams(list(sink, sink))
+        try {
+            resetlist()
+            analyze(debugMake)
+            if debugMake {
+                if build.errorlist.length == 0 {
+                    printline("build operations (", build.filelist.length, ") for ", operation)
+                    for entry in build.filelist
+                        printline("    ", entry.readpath, space, entry.writepath, space, rrest(entry.*))
+                }
+            }
+            else
+                execute()
+            printline("-".repeat(79))
+            if build.errorlist.length > 0 {
+                printline("Build had ", build.errorlist.length, " errors:")
+                for entry in build.errorlist
+                    printline("    ", ErrorString(entry)) }
+            else
+                printline("Build had no errors") }
+        finally {
+            textstreams(xchan) }                                            // ensure restore textstreams
+        outext = "Build".concat(space, rules.name, " - ", operation,
+            "\ndate: ", Date(),
+            "\nfrom: ", JSpath.join(fs.rootpath, build.srcpath),
+            "\n  to: ", build.destpath,
+            "\n", sink.taketext())
+        `(error) = fs.writeFile(JSpath.join(build.destpath, "build_log.txt"), outext)
+        if error
+            build.errorlist.push(Error("Build unable to write log file", error))
+        if build.errorlist.length > 0
+            list({
+                summary: "build had ".concat(build.errorlist.length.tostring, " errors")
+                errors: build.errorlist
+                files:  build.annotations
+            })
+        else
+            list(false, { ok: true })
+    }
+    
+    //
+    // build.runSpawn
+    //
+    // Run the current build product by spawning a new worker.
+    //
+    build.runSpawn = function runSpawn(track local error, maintext, executor, vpath, site) {
+        `(error, maintext) = fs.readFile(JSpath.join(build.destpath, build.runway.main))
+        if error
+            error = Error("Builder: cannot read main file", error)
+        else {
+            `(error, executor) = track.spawn(build.runway.spawn.0, build.runway.spawn.1, "Build-".concat(build.buildnum), {
+                startup: {
+                    initcmds: maintext
+                    dirpath: JSpath.join(fs.rootpath, build.destpath)
+                }
+            })
+            if error
+                error = Error("Builder: cannot spawn executor instance", error)
+        }
+        if !error && build.runway."v-site" {
+            vpath = build.runway."v-path"
+            if vpath
+                vpath = JSpath.join(build.destpath, vpath)
+            else
+                vpath = build.destpath
+            `(error, site) = track.spawn("V-Site", build.runway."v-site", fs, vpath)
+            if error
+                error = Error("Builder: cannot create virtual site", error)
+        }
+        if error
+            list(error)
+        else {
+            executor.attention()
+            list(false, executor)
+        }
+    }
+    
+    //
+    // build.runWindow
+    //
+    // Run the current build product by opening a new window.
+    //
+    build.runWindow = function runWindow(track
+        local title, main, url, features, vpath, error, window, site) {
+        if !js.w
+            return (list(Error('Run method "window" requires browser host')))
+        if !build.runway."v-site"
+            return (list(Error('Run method "window" requires v-site specification')))
+        title = rules.name.concat("-", build.buildnum)
+        main = build.runway.main
+        if !main
+            main = "index.html"
+        url = js.w.location.origin.concat("/run", build.runway."v-site", "/", main)
+        if string(build.runway.window)
+            features = build.runway.window
+        vpath = build.runway."v-path"
+        if vpath
+            vpath = JSpath.join(build.destpath, vpath)
+        else
+            vpath = build.destpath
+        `(error, site) = track.spawn("V-Site", build.runway."v-site", fs, vpath)
+        if error
+            return (list(Error("Builder: cannot create virtual site", error)))
+        window = js.w.open(url, title, features)
+        list(false, { ok: true })                                           // we don't know the executor
+    }
+
+    //
+    // build.run
+    //
+    // Run the current build product, which would be after the make call. Returns a standard result
+    // tuple.
+    //
+    build.run = function run(track) {
+        if build.runway.open
+            fs.shellOpen(JSpath.join(build.destpath, build.runway.open), build.runway.args)
+        else if build.runway.spawn
+            build.runSpawn(track)
+        else if build.runway.window
+            build.runWindow(track)
+        else
+            list(false, { ok: true })
+    }
+    
+    //
+    // build.refresh
+    //
+    // Refresh after updating the v-site. This should probably update all types of executions. ###
+    //
+    build.refresh = function refresh(track local main, url_origin) {
+        if build.runway."v-site" {
+            url_origin = js.w.location.origin.concat("/run", build.runway."v-site")
+            for target in track.enumlist()
+                target.vsiteRefresh(url_origin)
+        }
+    }
+
+    //
+    // build.increment
+    //
+    // Adjust the build counter, returning a tuple of `(error, buildnum). If newnum is specified then
+    // the build number is set to that value, otherwise the build number is incremented. If no build 
+    // number file exists then a new build number file is created with the default build number zero.
+    //
+    build.increment = closure increment(newnum, local error, filecon, buildnum) {
+        build.buildnum = undefined
+        `(error, filecon) = fs.readFile(build.buildnopath)
+        if !error
+            buildnum = toint(filecon.trim())
+        if buildnum {
+            if newnum == buildnum
+                return (list(false, { ok: true }))
+            if integer(newnum)
+                buildnum = newnum
+            else
+                ++buildnum
+        } else if integer(newnum)
+            buildnum = newnum
+        else
+            buildnum = 0
+        `(error) = fs.writeFile(build.buildnopath, tostring(buildnum))
+        if error {
+            error = Error("build increment failed", error)
+            list(error) }
+        else {
+            build.buildnum = buildnum
+            list(false, buildnum) }
+    }
+    
+    //
+    // build.clean
+    //
+    // Clean the build by deleting all build products.
+    //
+    build.clean = closure clean() {
+        list(Error("build.clean not implemented yet"))
+    }
+    
+    //
+    // build.destroy
+    //
+    // Remove the build workers, if any, and destroy the builder object.
+    
+    build.destroy = closure destroy() {
+        if build.parallel
+            build.parallel.destroy()
+        build.parallel = false
+        if build.zipper
+            build.zipper.destroy()
+        build.zipper = false
+    }
+
+    // finis
+
+    list(false, build)
+};
+
+
+/*
+ * buildInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function buildInit(local manifest) {
+
+    manifest = `(Builder, buildInit)
+
+    Naan.module.build(module.id, "build", function(modobj, compobj) {
+        require("./project.nlg")
+        require("./uglifyjs.nlg")
+        letimport(require("../running/executors.nlg"))
+        compobj.manifest = manifest
+        modobj.exports.MakeBuilder = Builder
+    })
+
+} ();

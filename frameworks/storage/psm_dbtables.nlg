@@ -1,0 +1,814 @@
+/*
+ * psm_dbtables.nlg
+ * frameworks/storage
+ *
+ * PSM Connector for file systems on databases.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * FSview
+ *
+ *     Filesystem services via the specified DBtables instance. This view object allows access to an
+ * underlying database using filesystem semantics. Naming provided by this filesystem adheres to the
+ * following rules:
+ *      - terminology: a generic file or directory is a "node"
+ *      - the path separator is "/"
+ *      - filenames are non-empty string not containing "/"
+ *      - directory names are non-empty strings with the sole "/" at the end
+ *      - the names ".", "..", and anything containing ":" are forbidden
+ *      - every directory has (or should have) an associated database record for itself
+ *          - files lacking a valid directory parent are "orphans" listed during tree enumeration
+ *      - pathnames are relative to the root of the view an d consist of a string with:
+ *          - zero or more directory names joined by "/", then
+ *          - either "", "/" for a directory, or "/" with a filename
+ *      - the empty pathname "" refers to the root of the view
+ *      - the underlying database uses records named with "/" characters for the directories
+ *          - e.g. "a/" is the directory "a", and "a/b" is the file "b" in directory "a"
+ *          - record names starting with "/" or having sequential "/" characters are no-name directories
+ *          - no-name directories can be enumerated and accessed, but not created
+ *          - pathnames starting with "/" are within a no-name directory in the root of the view
+ *
+ */
+
+closure FSview(table, rootpath, local view, error) {
+    if !table
+        return (list(Error("invalid arguments")))
+    view = new(object, this)
+    view.table = table
+    view.rootpath = rootpath
+    view.path = JSpath.posix                                                // for view.path.join(), etc.
+
+    // dirName
+    //
+    // Return the directory portion of the specified path.
+    
+    function dirName(path, local slashdex) {
+        if path == "" || (slashdex = path.lastIndexOf("/")) < 0
+            ""                                                              // empty parent directory
+        else if path.slice(-1) != "/"
+            path.substring(0, slashdex+1)                                   // file at end
+        else if path == "/" || (slashdex = path.lastIndexOf("/", slashdex-1)) < 0
+            ""                                                              // empty parent directory of directory
+        else
+            path.substring(0, slashdex+1)                                   // directory at end
+    }
+    
+    // baseName
+    //
+    // Return the final segment of the specified path, with no terminal slash.
+    
+    function baseName(path, local slashdex) {
+        if path == "" || (slashdex = path.lastIndexOf("/")) < 0
+            path                                                            // no parent directory
+        else if path.slice(-1) != "/"
+            path.slice(slashdex+1)                                          // file at end
+        else if path == "/" || (slashdex = path.lastIndexOf("/", slashdex-1)) < 0
+            path.slice(0, -1)                                               // directory with empty parent
+        else
+            path.slice(slashdex+1, -1)                                      // directory at end
+    }
+
+    // validName
+    //
+    // Test whether the specified file or directory name is valid. If isPath is true then we look at
+    // the basename of the assumed path.
+    
+    function validName(name, isPath) {
+        if isPath {
+            if name == ""
+                return (true)
+            else if name.substring(0, 1) == "/" || path.indexOf("//") >= 0
+                return (false)
+            else
+                name = baseName(name) }
+        name != "" && name != "." && name != ".." && name.indexOf("/") < 0 && name.indexOf(":") < 0
+    }
+    
+    // checkPath
+    //
+    // Execute callback with error if path invalid, otherwise return false.
+    
+    function checkPath(path, callback, msg) {
+        if !string(path) {
+            if !msg
+                msg = "invalid path"
+            if !string(path)
+                path = "<".concat(typeof(path), ">")                        // e.g. "<xobject>"
+            asyncResult(callback, Error(msg, typeof(content), {
+                    status: 400
+                    name: "invalid_arguments"
+                    path: path
+                }))
+            true }
+    }
+        
+    // checkPathName
+    //
+    // Return a `(path, name) tuple for a directory, or false if callback executed due to error.
+    
+    function checkPathName(path, callback, local name, slashdex) {
+        if path == ""
+            name = ""
+        else {
+            if checkPath(path, callback)
+                return (false)                                              // non-string
+            if path.slice(-1) != "/"
+                path = path.concat("/")                                     // force to be directory
+            slashdex = path.lastIndexOf("/", path.length-2)
+            if path == "/" || slashdex < 0
+                name = path
+            else
+                name = path.slice(slashdex+1, -1)                           // omit trailing "/"
+        }
+        list(path, name)
+    }
+
+    // dbDirRecords
+    //
+    // Return all the node records in the directory, optionally with transitive children.
+    
+    closure dbDirRecords(path, deep, callback, local options) {
+        if !callback
+            return (syncAdapter(dbDirRecords, path, deep))
+        if checkPath(path, callback)
+            return
+        options = {
+            prefix: path
+            head: true
+        }
+        if deep
+            options.deep = true
+        view.table.records(options, callback)
+    }
+
+    // dbReadRecord
+    //
+    // Read a record at the specified path. If nodata is true then no content is included. If the
+    // path does not end with a slash and it's not found, then we try again with a slash.
+    
+    closure dbReadRecord(path, nodata, callback, local proc, error, data) {
+        if !callback
+            return (syncAdapter(dbReadRecord, path, nodata))
+        if checkPath(path, callback)
+            return
+        if nodata
+            proc = view.table.head
+        else
+            proc = view.table.get
+        `(error, data) = proc(path)
+        if error && error.status == 404 && path.slice(-1) != "/"
+            `(error, data) = proc(path.concat("/"))
+        callback(error, data)
+    }
+
+    // dbWriteRecord
+    //
+    // Write a record at the specified path. If necessary this first reads the record. If the table
+    // has conflict detection then this updates to avoid conflict with the existing file. If options
+    // is non-false then it is a dictionary with optional keys:
+    //      exclusive: true         -- file must not already exist
+    //      emptyok: true           -- allow empty directory names (leading "/" or embdedded "//")
+    //      md5: <hash>             -- existing file content must match hash
+    //      writenew: true          -- write as a new file, with updated create time
+    
+   closure dbWriteRecord(path, content, options, callback) {
+        if !callback
+            return (syncAdapter(dbWriteRecord, path, content, options))
+
+        function dbwriter(error, doc, local nowMs, nowstr, data, metadata) {
+            nowMs = Date.now()
+            nowstr = Date(nowMs).toISOString()
+            if error {
+                if error.status != 404
+                    return (callback(error))                                // failed, but not due to missing file
+                if !options.emptyok && !validName(path, true)
+                    return (callback(Error("empty directory in path", {     // invalid pathname
+                        status: 403
+                        name: "forbidden"
+                        path: path
+                    })))
+                metadata = {
+                    finfo: {                                                // new node
+                        birthtimeMs: nowMs
+                        birthtime: nowstr
+                    }
+                }
+                if path.slice(-1) == "/"
+                    metadata.finfo.type = "directory"
+                else
+                    metadata.finfo.type = "file"
+            } else if options.exclusive
+                return (callback(Error("file already exists", {             // only write when creating new file
+                    status: 409
+                    name: "conflict"
+                    path: path
+                })))
+            else if options.md5 && options.md5 != doc._md5
+                return (callback(Error("file changed before overwrite", {   // existing file didn't match expected hash
+                    status: 412
+                    name: "precondition_failed"
+                    path: path
+                    check: options.md5
+                    file: doc._md5
+                })))
+            else {                                                          // update for new information
+                metadata = doc
+                doc.content = content }
+            metadata.finfo.mtimeMs = nowMs                                  // update timestamps
+            metadata.finfo.mtime = nowstr
+            if options.writenew {
+                metadata.finfo.birthtimeMs = nowMs
+                metadata.finfo.birthtime = nowstr
+            }
+            if string(content) {
+                if options.encoding
+                    metadata.finfo.encoding = options.encoding              // caller-specified string encoding
+                else
+                    metadata.finfo.encoding = "utf8" }                      // default string encoding
+            else if content && !xobject(content)
+                return (callback(Error("unsupported content type", typeof(content), {
+                    status: 400
+                    name: "invalid_arguments"
+                    path: path
+                })))
+            if doc
+                `(error, data) = view.table.update(doc)                     // update existing record
+            else
+                `(error, data) = view.table.add(path, content, metadata)    // create new record
+            if error
+                callback(error)
+            else
+                callback(false, { ok: true })
+        }
+        
+        if checkPath(path, callback)
+            return
+        if table.revcheck || options.exclusive || options.md5 || !options.writenew || options.overwriteDirCheck
+            view.table.head(path, dbwriter.proc)                            // get head first, check, then write
+        else
+            future(function dbGetMissing() { dbwriter({ status: 404 }) }).run()          // write with simulated missing record
+    }
+    
+    // dbMakePathDirs
+    //
+    // Generate all the directories in the specified path, if they do not exist. This will fail if a
+    // file exists where a directory is needed.
+    
+    closure dbMakePathDirs(path, callback) {
+        if !callback
+            return (syncAdapter(dbMakePathDirs, path))
+        if path == ""
+            return (asyncResult(callback, false, { created: false }))       // root always already exists
+        if checkPath(path, callback)
+            return
+        if path.slice(-1) != "/"
+            path = path.concat("/")
+        view.table.get(path, function(error, data, local pathdirs, buildpath, item) {
+            if !error
+                return (callback(false, { created: false }))                // fastest: already exists
+            pathdirs = path.split("/")
+            buildpath = ""
+            for item in pathdirs
+                if item.length > 0 {
+                    buildpath = buildpath.concat(item)
+                    `(error, data) = view.table.get(buildpath)              // check for file in the way
+                    if !error
+                        return (callback(Error("file in the way while building directory path", 
+                            {
+                                status: 409
+                                name: "conflict"
+                                path: buildpath
+                            })))
+                    if buildpath.slice(-1) != "/"
+                        buildpath = buildpath.concat("/")
+                    `(error, data) = view.table.get(buildpath)              // get desired directory
+                    if error.status == 404
+                        `(error, data) = dbWriteRecord(buildpath)           // create desired directory
+                    if error
+                        return (callback(Error("failed building directory path", path, "on", buildpath, error)))
+                }
+                else
+                   buildpath = buildpath.concat("/")                        // had an extra slash here
+            if !error
+                data = { created: true }                                    // leaf directory newly-created
+            callback(error, data)
+        })
+    }
+    
+    // copyFile
+    //
+    // Copy a file given the source file's document, with optional move.
+    
+    closure copyFile(doc, dest, options, local srcpath, newpath, error, data) {
+        srcpath = doc.key
+        if dest.indexOf("/") < 0
+            newpath = dirName(srcpath).concat(dest)                         // renaming within same directory
+        else {
+            if dest.slice(-1) == "/"                                        // moving to new directory location:
+                newpath = dest.concat(baseName(srcpath))                    //      new path is new pathname
+            else {                                                          // moving and renaming:
+                newpath = dest                                              //      new path is new pathname
+                dest = dirName(dest) }                                      //      dest is new parent directory path
+            `(error, data) = dbMakePathDirs(dest)                           // ensure parent directories exist
+            if error
+                return (list(Error("copyFile: can't make destination", {
+                    source: srcpath
+                    destination: dest
+                }, error)))
+            else if !data.created {
+                `(error, data) = view.table.get(newpath.concat("/"))        // check for directory in the way
+                if !error
+                    return (callback(Error("copyFile: would overwrite directory", 
+                        {
+                            status: 409
+                            name: "conflict"
+                            source: srcpath
+                            destination: dest
+                            existing: newpath.concat("/")
+                        }))) } }
+        `(error, data) = view.table.copy(srcpath, newpath)
+        if error
+            return (list(Error("copyFile: copy failed", {
+                source: srcpath
+                destination: newpath
+            }, error)))
+        if options.move {
+            `(error, data) = view.table.delete(doc)
+            if error
+                error = Error("copyFile: couldn't remove original", {
+                    source: srcpath
+                    destination: newpath
+                }, error) }
+        if !error
+            data = { ok: true }
+        list(error, data)
+    }
+    
+    // copyDirectory
+    //
+    // Copy a directory by its source path, with optional move.
+    
+    closure copyDirectory(srcpath, dest, options, local error, nodes, data, destpath, errors, docpath, newpath, srcroot) {
+        `(error, nodes) = view.table.records({ prefix: srcpath })
+        if error
+            return (list(Error("copyDirectory: can't enumerate source directory", {
+                source: srcpath
+                destination: dest
+            }, error)))
+        if nodes.rows.length == 0 || nodes.rows[0].key != srcpath
+            return (list(Error("copyDirectory: source directory not found", {
+                status: 404                                                 // shouldn't happen (sanity check)
+                name: "not_found"
+                source: srcpath
+                destination: dest
+            })))
+        if dest.indexOf("/") < 0 {
+            destpath = dirName(srcpath).concat(dest)                        // new directory name in same parent directory
+            dest = dirName(srcpath) }                                       // dest is new parent pathname
+        else {
+            if dest.slice(-1) == "/"
+                destpath = dest.concat(baseName(srcpath))                   // same name; new location
+            else {
+                destpath = dest                                             // new full pathname
+                dest = dirName(dest) }                                      // dest is new parent pathname
+        }
+        if destpath != "" && destpath.slice(-1) != "/"
+            destpath = destpath.concat("/")                                 // get actual path of new directory
+        //
+        // Change srcpath to destpath for all records. Note that dest is the name of our new parent
+        // directory without a terminal slash, while destpath is the name of our new directory under 
+        // which any children will be stored and does end in slash.
+        //
+        if srcpath == destpath
+            return (list(false, { ok: true }))                              // no change
+        if destpath.indexOf(srcpath) == 0
+            return (list(Error("copyDirectory: destination within source", {
+                status: 403                                                 // trying to move within itself
+                name: "forbidden"
+                source: srcpath
+                destination: destpath
+            })))
+        `(error, data) = dbMakePathDirs(dest)                               // ensure future parent directories exist
+        if error
+            return (list(Error("copyDirectory: can't create destination", {
+                source: srcpath
+                destination: dest
+            }, error)))
+        if !data.created {
+            errors = []                                                     // existing directory - check for overwrites
+            for item in nodes.rows {
+                docpath = item.key
+                newpath = destpath.concat(docpath.slice(srcpath.length))
+                `(error, data) = view.table.md5(newpath)
+                if !error
+                    errors.push(newpath)                                    // something exists there
+                else if error.status != 404
+                    return (list(Error("copyDirectory: preflight failed", { // unexpected error
+                        source: srcpath
+                        destination: newpath
+                    }, error))) }
+            if errors.length > 0
+                return (list(Error("copyDirectory: would overwrite", {
+                    status: 409                                             // destination files already exist
+                    name: "conflict"
+                    source: srcpath
+                    destination: destpath
+                    existing: errors
+                }))) }
+        for item in nodes.rows {
+            docpath = item.key
+            newpath = destpath.concat(docpath.slice(srcpath.length))
+            `(error, data) = view.table.copy(docpath, newpath)
+            if error
+                errors.push(Error("copyDirectory: can't create copy", {     // failed to add copy
+                    source: docpath
+                    destination: newpath
+                }, error))
+            else if options.move {
+                if !srcroot
+                    srcroot = item                                          // delete source root later
+                else {
+                    `(error, data) = view.table.delete(item.doc)            // delete original
+                    if error
+                        errors.push(Error("copyDirectory: can't remove original", {
+                            source: docpath
+                            destination: newpath
+                        }, error)) } } }
+        if errors.length > 0
+            list(Error("copyDirectory: failures occurred", {
+                source: srcpath
+                destination: destpath
+                failures: errors
+            }, errors))
+        else {
+            if srcroot {
+                `(error, data) = view.table.delete(srcroot.doc)             // delete original root
+                if error
+                    return (list(Error("copyDirectory: can't remove original root", {
+                    source: srcpath
+                    destination: destpath
+                }, error))) }
+            list(false, { ok: true }) }
+    }
+
+    // info
+    //
+    // Get file/directory info at the specified path.
+    
+    view.info = closure info(path, callback) {
+        if !callback
+            return (syncAdapter(info, path))
+        dbReadRecord(path, true, function(error, data, local finfo) {
+            if data {
+                finfo = new(data.finfo)
+                if !finfo
+                    finfo = { }
+                if data._md5
+                    finfo.md5 = data._md5
+                if data._length
+                    finfo.length = data._length }
+            else if path == "" {
+                error = false                                               // we were asked for info on superoot
+                finfo = {
+                    md5: HashMD5("")
+                    length: 0
+                    type: "directory"
+                } }
+            callback(error, finfo)
+        })
+    }
+        
+    // read
+    //
+    // Read file content at the specified path.
+    
+    view.read = closure read(path, options, callback) {
+        if !callback
+            return (syncAdapter(read, path, options))
+        dbReadRecord(path, false, function(error, data) {
+            if error || data.finfo.type != "directory"
+                callback(error, data.content)
+            else
+                callback(Error("cannot read a directory", { source: path }))
+        })
+    }
+        
+    // readFile
+    //
+    // Write a file at the specified path
+    
+    view.readFile = function readFile(path, options, callback) {
+        read(path, options, callback)
+    }
+
+    // mkdir
+    //
+    // Make a directory at the specified path. The data value is a dictionary with the single
+    // key created having value true if we created the directory or false if the directory
+    // already exists.
+    
+    view.mkdir = closure mkdir(path, callback) {
+        if !callback
+            return (syncAdapter(mkdir, path))
+        if !validName(path, true)
+            return (asyncResult(callback, Error("invalid directory", path)))
+        dbMakePathDirs(path, callback)
+    }
+        
+    // write
+    //
+    // Write a file at the specified path, creating if needed by default. The following options are
+    // available:
+    //      exclusive: true         -- file must not already exist
+    //      md5: <hash>             -- existing file content must match hash
+    
+    view.write = closure write(path, content, options, callback) {
+        if !callback
+            return (syncAdapter(write, path, content, options))
+        if checkPath(path, callback)
+            return
+        if !content
+            return (asyncResult(callback, Error("content required")))
+        if path.slice(-1) == "/"
+            return (asyncResult(callback, Error("cannot write to a directory", { path: path })))
+        if !validName(path, true)
+            return (asyncResult(callback, Error("invalid filename", { path: path })))
+        dbMakePathDirs(dirName(path), function(error, data) {               // ensure parent directories exist
+            if error
+                return (callback(error))
+            if !data.created {
+                `(error, data) = view.table.head(path.concat("/"))          // don't write file over direcctory
+                if !error
+                    return (callback(list(Error("cannot overwrite a directory", { path: path }))))
+            }
+            dbWriteRecord(path, content, options, callback) })
+    }
+    
+    // writeFile
+    //
+    // Write a file at the specified path
+    
+    view.writeFile = function writeFile(path, data, options, callback) {
+        write(path, data, options, callback)
+    }
+
+    // copy
+    //
+    // Copy / move / rename a file or directory. The source is the full path of the item. The
+    // destination is:
+    //  - a new name if it has no embedded slashes, or
+    //  - a new location if it ends in a slash, otherwise
+    //  - a new pathname for the source if it does not end in a slash.
+    //     This works by creating a new file or directory of files in the new location and then
+    // optionally deleting the files in the existing location. If options.move is true then we
+    // delete the source after the copy.
+    
+    view.copy = closure copy(srcpath, dest, options, callback) {
+        if !callback
+            return (syncAdapter(copy, srcpath, dest, options))
+        if checkPath(srcpath, callback, "invalid source path")
+            return
+        if checkPath(dest, callback, "invalid destination path")
+            return
+        if !validName(dest, true)
+            return (asyncResult(callback, Error("invalid destination", { destination: dest })))
+        dbReadRecord(srcpath, true, function(error, data, local result) {
+            if error
+                callback(list(Error("copy can't access source", {
+                    source: srcpath
+                    destination: dest
+                }, error)))
+            else if srcpath.slice(-1) == "/"
+                result = copyDirectory(srcpath, dest, options)              // hard case: directory with possibly many children
+            else
+                result = copyFile(data, dest, options)                      // easy case: single file
+            apply(callback, result)
+        })
+    }
+
+    // delete
+    //
+    // Delete the file at the specified path, or a directory if the options dictionary includes:
+    //     recursive: true          -- "recursively" delete directory and children
+    
+    view.delete = closure delete(path, options, callback) {
+        if !callback
+            return (syncAdapter(delete, path, options))
+        dbReadRecord(path, true, function(error, data, local errors, item, basedir) {
+            if error
+                return (callback(error))
+            if data.key.slice(-1) != "/" {                                  // just delete the file
+                `(error, data) = view.table.delete(data)
+                if !error
+                    data = { ok: true }
+                return (callback(error, data)) }
+            if !options.recursive
+                return (callback(Error("delete directory must specify recursive option", {
+                    status: 403
+                    name: "forbidden"
+                    path: path
+                })))
+            if path.slice(-1) != "/"
+                path = path.concat("/")                                     // avoid deleting longer filenames with same parent and prefix
+            `(error, data) = dbDirRecords(path, true)
+            if error
+                return (callback(Error("delete directory enumeration failed", {
+                    path: path
+                }, error)))
+            errors = []
+            for item in data.rows {
+                if item.key == path {
+                    basedir = item                                          // delete base directory at end
+                    continue
+                }
+                `(error, data) = view.table.delete(item.doc)
+                if error
+                    errors.push(error) }
+            if errors.length != 0
+                error = Error("some directory children not deleted", errors)
+            else {
+                `(error, data) = view.table.delete(basedir.doc)
+                if error
+                   error = Error("delete directory failed", {
+                        path: path
+                    }, error)
+                }
+            if !error
+                data = { ok: true }
+            callback(error, data)
+        })
+    }
+
+    // dirList
+    //
+    // Read a directory at the specified path
+    // ### options currently ignored, for better or woise
+    
+    view.dirList = closure dirList(path, options, callback, local name, dirdict) {
+        if !callback
+            return (syncAdapter(readir, path))
+        `(path, name) = checkPathName(path, callback)
+        if !path
+            return                                                          // already executed callback with error
+        dirdict = {
+            name: name.slice(0,-1)
+            path: path
+            data: {
+                platform: table.type
+                semantics: "dbfs"
+                pathsep: "/"
+            }
+            children: []
+        }
+        dbDirRecords(path, false, function(error, data, local item, result, slashdex, offset, finfo) {
+            if error
+                return (callback(error))
+            if data.rows.length == 0 && path != ""
+                return (callback(Error("directory not found",               // should be something there
+                    {
+                        status: 404
+                        name: "not_found"
+                        path: path
+                    })))
+            offset = path.length
+            for item in data.rows {
+                slashdex = item.key.indexOf("/", offset)
+                if slashdex < 0 || slashdex == item.key.length-1 {          // file, or child directory
+                    finfo = new(item.doc.finfo)
+                    if !finfo
+                        finfo = { }
+                    name = item.key.slice(offset)
+                    if name.slice(-1) == "/"
+                        name = name.slice(0,-1)                             // remove trailing "/" from directory
+                    if item.doc._md5
+                        finfo.md5 = item.doc._md5
+                    if item.doc._length
+                        finfo.length = item.doc._length
+                    if item.key.length > offset                             // not the directory itself
+                        dirdict.children.push({
+                            name: name
+                            info: finfo }) } }
+            callback(false, dirdict)
+        })
+    }
+
+    // readir
+    //
+    // Read a directory at the specified path
+    
+    view.readir = closure readir(path, callback, local name, dirdict) {
+        dirList(path, { head: true }, callback)
+    }
+
+    // tree
+    //
+    // Return a tree for the specified path. The path is relative to the root of the view.
+    
+    view.tree = closure tree(path, options, callback, local name, treedict, item, offset) {
+        if !callback
+            return (syncAdapter(tree, path, options))
+        `(path, name) = checkPathName(path, callback)
+        if !path
+            return                                                          // already executed callback with error
+        options = {                                                         // ### might want to allow some options
+            prefix: path
+            deep: true
+        }
+        treedict = {
+            name: name.slice(0,-1)
+            data: {
+                platform: table.type
+                semantics: "dbfs"
+                pathsep: "/"
+            }
+            parents: []
+            children: []
+        }
+        
+        for item in path.split("/").slice(0,-1)
+            treedict.parents.push(item)
+        offset = path.length                                                // offset to path's child names (after any slash)
+        view.table.records(options, function(error, data, local index, leaf, parent, slashdex) {
+            if error
+                return (callback(error))
+            if data.rows.length == 0 && path != ""
+                return (callback(Error("directory not found", 
+                    {
+                        status: 404
+                        name: "not_found"
+                        path: path
+                    })))
+            index = { }
+            index[""] = treedict                                            // treedict is parent of children in top level
+            for item in data.rows {
+                name = item.key.slice(offset)                               // the node's pathname starting with slash
+                if name == ""
+                    continue                                                // root already exists
+                slashdex = name.lastIndexOf("/")
+                if slashdex < 0 {                                           // file child in root
+                    parent = ""
+                    child = { name: name } }
+                else if slashdex == name.length-1 {                         // directory child
+                    if name == "/" {
+                        parent = ""                                         // "no-name" directory in root
+                        leaf = "" }
+                    else {                                                  // named or non-root directory
+                        slashdex = name.lastIndexOf("/", name.length-2)     // penultimate slash
+                        parent = name.substring(0, slashdex+1)              // includes parent's ending slash
+                            leaf = name.slice(slashdex+1, -1) }             // omits child's ending slash
+                        child = index[name] = {
+                        name: leaf
+                        children: [] } }
+                else {                                                      // file child not in root
+                    parent = name.substring(0, slashdex+1)
+                    leaf = name.slice(slashdex+1)
+                    child = { name: leaf } }
+                if index[parent]
+                    index[parent].children.push(child)
+                else {                                                      // orphaned child doesn't have <parent>/ record
+                    if !treedict.orphans
+                        treedict.orphans = []
+                    child.key = item.key
+                    treedict.orphans.push(child)
+                }
+            }
+            callback(false, treedict)
+        })
+    }
+    
+    // util
+    //
+    // Utility operations for the filesystem
+    
+    view.util = MakePSMutil(view)
+
+    // finis
+    list(false, view)
+};
+
+
+/*
+ * psmdInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function psmdInit(local manifest) {
+
+    manifest = `(FSview, psmdInit)
+
+    Naan.module.build(module.id, "psm_dbtables", function(modobj, compobj) {
+        require("./storage.nlg")
+        require("./psm.nlg")
+        compobj.manifest = manifest
+        modobj.exports.FSview = FSview
+    })
+
+} ();

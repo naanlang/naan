@@ -1,0 +1,399 @@
+/*
+ * apiserver.nlg
+ * Naanlib/frameworks/node
+ *
+ *     NaanIDE API server with HTTP using Expressjs.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * MakeAPI
+ *
+ *     Make an API server object.
+ *
+ */
+
+closure MakeAPI(port, options, callback, local chroot, server) {
+    if !options
+        options = { }
+    else
+        options = new(options)
+    if !options.relpath
+        options.relpath = ""
+        
+    chroot = JSpath.join(js.d, options.relpath)
+    if not string(chroot) || chroot.length < 2 {
+        debuglog("APIserver: invalid path", chroot)
+        return (false)
+    }
+
+    server = new(object, this)
+    server.psm = require("./psm_server.nlg").MakeServerPSM(server)
+    server.root = chroot
+    server.app = express()
+    server.notifyq = []
+    server.responseq = []
+    server.projects = { }
+
+    // close
+    //
+    // Close the server.
+
+    server.close = function close() {
+        if server.ws
+            server.ws.close()
+        server.http.close(function(){debuglog("API Server closed")})
+    }
+    
+    // Register
+    //
+    // Register a subsystem to receive websocket messages from client connections. The caller will
+    // have the wsReceive method invoked:
+    //     wsReceive(message, conn)
+    // And can send a reply on the specified connection.
+    
+    server.Register = function Register(serverID, subsystem) {
+        server.ws.subsystems[serverID] = subsystem
+    }
+
+    //
+    // status and message notification
+    //
+
+    function notifyReaper(maxage, local oldest) {
+        oldest = Date.now() - maxage
+        server.notifyq = server.notifyq.filter(function(item,index,array){
+            item.stamp >= oldest
+        })
+        server.responseq.forEach(function(item,index,array){
+            item.poll()
+        })
+        server.responseq = server.responseq.filter(function(item,index,array){
+            item.active
+        })
+    }
+    // Notification responses are only removed from the response queue by the reaper, which means
+    // that the reaper must run periodically so that they don't accumulate if no new messages are
+    // created for a long period. Note that responses don't delete themselves from the queue when
+    // they complete because that can happen inside responseq.forEach(), which could be quite bad.
+    // A response timeout can even happen inside the forEach, so it's safest just to remove the
+    // responses in one place.
+    closure scheduleReaper(interval) {
+        future(function reaper(){ scheduleReaper(interval), notifyReaper(interval) }, interval)
+    } (30000)
+
+    server.notify = function notify(message) {
+        if not dictionary(message)
+            message = {type: "status", message: message}
+        message.stamp = Date.now()
+        server.notifyq.push(message)
+        notifyReaper(30000)
+    }
+
+    //
+    // body parsing
+    //
+
+    server.app.use(bodyParser.text({limit: "20mb"}))
+    server.app.use(bodyParser.raw({limit: "20mb"}))
+
+    //
+    // Express.js endpoints
+    //
+
+    server.app.use(function(req,res,next) {
+        res.header("Access-Control-Allow-Origin", "*")
+        res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE")
+        next()
+    })
+
+    server.app.use("", express.static(chroot))
+    let (pathpair) {
+        for pathpair in options.statics
+            server.app.use(pathpair.0, express.static(pathpair.1))
+    }()
+
+    //  "/"
+
+    server.app.get("/", function(req, res) {
+        res.send("<u>NaanIDE API</u><br>\r\n"
+        "   /readfile?path=<i>filepath</i><br>\r\n"
+        "   /status?timeout=<i>msec</i>&after=<i>stamp</i><br>\r\n")
+    })
+
+    //  "/readfile"
+
+    server.app.get("/readfile", closure(req, res) {
+        if not string(req.query.path)
+            res.status(400).send("Invalid filename")
+        else if RegExp("^\\.\\.[/\\\\]|[/\\\\]\\.\\.$|[/\\\\]\\.\\.[/\\\\]").test(req.query.path)
+            res.status(403).send("\"Parent path references forbidden\"")
+        else
+            closure (local filepath, options) {
+                filepath = req.query.path
+                options = {
+                    dotfiles: "allow"
+                }
+                if filepath.charAt(0) != JSpath.sep
+                    options.root = chroot
+                res.sendFile(filepath, options, function (err, local status) {
+                    if err {
+                        if err.code == "ENOENT"
+                            status = 404
+                        else
+                            status = 500
+                        res.status(status).end()
+                        ErrorDebuglog(Error("Server: /readfile", filepath, err))
+                    }
+                })
+            }()
+    })
+
+    //  "/status"
+
+    server.app.get("/status", closure(req,res, local timeoutms, after, responder) {
+        timeoutms = toint(req.query.timeout)
+        after = toint(req.query.after)
+        if not integer(timeoutms) or timeoutms > 10000
+            res.status(400).send("timeout is integer milliseconds no greater than 10000")
+        else if not integer(after)
+            res.status(400).send("after must be an integer")
+        else {
+            responder = new(dictionary)
+            responder.active = true
+            responder.poll = function(timeout, local queued) {
+                if responder.active {
+                    queued = server.notifyq.filter(function(item,index,array) { item.stamp > after })
+                    if queued.length > 0
+                        res.send(js.g.JSON.stringify(queued))
+                    else if timeout
+                        res.status(200).end()
+                    else
+                        return (true)
+                }
+                responder.active = false
+            }
+            if responder.poll() {
+                future(function poll(){ responder.poll(true) }, timeoutms)
+                server.responseq.push(responder)
+            }
+        }
+    })
+
+    //  "/psm"
+
+    server.app.all("/psm", closure(req, res) {
+        if !server.hostfs
+            res.status(503).send("host filesystem not available")
+        else
+            server.hostfs.api(req, res)
+    })
+
+    //
+    // initialize the server
+    //
+
+    let(local pending, result) {
+        pending = new(nonce)
+
+        // find our port
+
+        loop {
+            server.http = server.app.listen(port, function(){
+                pending.signal({})                                              // success
+            }).on("error", function (err) {
+                if err.code == "EADDRINUSE"
+                    ++port                                                      // try next port
+                else {
+                    pending.result = Error("server listen error", err)          // permanent failure
+                    callback(err, false)
+                }
+                pending.signal(pending.result)
+            })
+            if pending.wait()
+                break
+            pending.reset()
+        }
+        if pending.result
+            return (false)                                                      // failed to open
+    
+        // start the services
+    
+        server.ws = WebSocketServer(server)
+        server.port = port
+        callback(false, port, server)                                           // notify of success
+        debuglog("server open on port", port)
+        result = server.psm.conns.NodeFS.connect("Host", "NideFS", list(""))    // ### this should go through resource tracker
+        if result.0
+            ErrorDebuglog(Error("can't access HostFS", result.0))
+        else
+            server.hostfs = result.1
+    }()
+
+    // return new API server object
+    server
+};
+
+
+/* 
+ * WebSocketServer
+ *
+ *     WebSocket server objects. This is used by the HTTP server for websocket communications.
+ *
+ */
+
+closure WebSocketServer(server, local websocks) {
+    websocks = new(object, this)
+    websocks.conns = []                                                     // our connections
+    websocks.subsystems = { }                                               // registered subsystems
+    websocks.wss = xnew(ws.Server, { noServer: true })
+
+    // Server upgrade handler
+
+    server.http.on("upgrade", function(request, socket, head) {
+        websocks.wss.handleUpgrade(request, socket, head, function (csock) {
+            websocks.wss.emit("connection", csock, request)
+        })
+    })
+
+    // Event handlers
+
+    websocks.wss.on("connection", function(socket, request) {
+        websocks.conns.push(WesCon(websocks, socket, request))
+    })
+                
+    server.wss.on("error", function(error) {
+        ErrorDebuglog(Error("ws server error:", error))
+    })
+
+    server.wss.on("close", function() {
+        debuglog("WebSocketServer has closed")
+        websocks.closed = true                                              // note that we are closed
+    })
+    
+    // closeConn
+    // respond to connection closing
+    
+    websocks.closeConn = function closeConn(conn) {
+        websocks.conns = websocks.conns.filter(function(item) {
+            !(item eq conn)
+        })
+    }
+
+    // finis
+    websocks
+};
+
+
+/*
+ * WesCon
+ *
+ *     WebSocket socket objects, which represent a connection with a particular client. These are
+ * created automatically by an API server instance when a client connects. The protocol is JSON with
+ * the top level being a dictionary having the following static keys specified by the client:
+ *     serverID:    defined by the server, this string defines where requests should be routed.
+ *     clientID:    defined by the client, this string defines where replies should be sent.
+ * These are class (code) designators. Further keys can be defined to identify a specific instance on
+ * the client or server.
+ *
+ */
+
+closure WesCon(websocks, socket, request, local wescon) {
+    wescon = new(object, this)
+    wescon.socket = socket
+    wescon.serverIDs = []
+
+    // on message
+    //
+    // Incoming data.
+    
+    socket.on("message", function onmessage(text, local message, error) {
+        try {
+            message = new(js.g.JSON.parse(text))
+            if message.clientID && websocks.subsystems[message.serverID] {
+                wescon.serverIDs.push(message.serverID)                     // ### track subsystems for closing
+                websocks.subsystems[message.serverID].wsReceive(message, wescon)
+            }
+            else
+                error = Error("can't route message")
+        } catch {
+            if true
+                error = Error("can't decode message JSON", exception)
+        }
+        if error
+            socket.send(js.g.JSON.stringify([error]))
+    })
+        
+    // on error
+    //
+    // Error has occurred on this connection.
+    
+    socket.on("error", function onerror(error) {
+        debuglog("connection error", error)
+    })
+
+    // on close
+    //
+    // Connection has closed.
+    
+    socket.on("close", function onclose(code, reason, local serverID) {
+        if code != 1000 && code != 1001 && code != 1005
+            debuglog("connection has closed:", code, reason)
+        websocks.closeConn(wescon)
+        wecson.closed = {
+            code: code
+            reason: reason
+        }
+        for serverID in wescon.serverIDs
+            websocks.subsystems[message.serverID].wsClose(wescon)           // notify of our closures
+    })
+    
+    // send
+    //
+    // Send a dictionary, which must have a clientID defined.
+
+    wescon.send = function send(message) {
+        if !message.clientID || !message.serverID
+            throw("Wescon.send: client and server IDs required")
+        if wescon.closed
+            list(Error("Socket connection closed", wescon.closed))
+        socket.send(js.g.JSON.stringify(message)),
+        [false, {ok: true}]
+    }
+
+    // finis
+    wescon
+};
+
+
+/*
+ * ApisInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function ApisInit(local manifest) {
+
+    manifest = `(MakeAPI, WebSocketServer, WesCon, ApisInit)
+
+    Naan.module.build(module.id, "API", function(modobj, compobj) {
+        require("./node.nlg")
+        compobj.manifest = manifest
+        modobj.exports.MakeAPI = MakeAPI
+
+        express = js.r("express")
+        bodyParser = js.r("body-parser")
+        textParser = bodyParser.text()
+        ws = js.r("ws")
+    
+        require("./filesystem.nlg")
+        require("./psm_server.nlg")
+        require("./worker.nlg")
+    })
+}();

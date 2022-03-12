@@ -1,0 +1,773 @@
+/*
+ * dbt_pouch.nlg
+ * frameworks/storage
+ *
+ *     Naan database tables using PouchDB. These functions implement tables on top of PouchDB for use
+ * in both the browser and NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * dapoTable
+ *
+ *     Create a database table access object.
+ *
+ *     If a callback function is specified then it is called when the operation completes with the 
+ * usual (error, result) arguments. If a callback function is not specified then the call blocks 
+ * until the operation is complete, and an (error, result) tuple is returned.
+ *     Records are presented as dictionaries to the client of this interface. The client's data is
+ * stored under <record>.content, while the record key is available under <record>.key.
+ *
+ * Internals
+ *     Each PouchDB database offers a single linear list of records. The key structuring scheme here
+ * allows us to segregate each database into independent folders sharing a single bucket.
+ *     Within each database, a table instance has a path starting with "" representing the root of
+ * the database. All records in the database having that path as a key prefix belong to this table
+ * instance. A pseudo-folder structure is implemented using "/" (slash) characters as delimiters.
+ *     PouchDB does conflict detection, so the _rev key in a document must match the current value
+ * in the database or an error is generated on update.
+ *
+ */
+
+closure dapoTable(database, path, local table, prefix) {
+    table = new(object, this)
+    table.type = database.type
+    table.db = database
+    table.path = path
+    table.prefix = makePrefix(path)
+        
+    // makePrefix
+    //
+    // Make a key prefix from a path.
+
+    function makePrefix(path) {
+        if path == ""
+            path                                                            // in the root
+        else if path.slice(-1) == "/"
+            path                                                            // already complete prefix
+        else
+            path.concat("/")                                                // non-root prefix always ends in slash
+    }
+
+    // makeID
+    //
+    // Make an internal ID string from an external key, using the table's pre-determined prefix.
+
+    function makeID(key) {
+        if key eq `prefix
+            table.prefix
+        else if integer(key)
+            table.prefix.concat(tostring(key))
+        else if not string(key)
+            return (Error("invalid key type: ", typeof(key)))
+        else
+            table.prefix.concat(key)
+    }
+
+    // add
+    //
+    // Add a new record to the table with optional metadata. This will fail if the key already
+    // exists. Returns the new document record.
+
+    table.add = closure add(key, content, metadata, callback, local id, doc) {
+        if !callback
+            return (syncAdapter(add, key, content, metadata))
+        id = makeID(key)
+        if !string(id)
+            return (asyncResult(callback, id))                                 // error from makeID
+        if metadata && !dictionary(metadata)
+            return (asyncResult(callback, Error("invalid arguments")))
+        if !database.pouch
+            return (asyncResult(callback, Error("database closed")))
+        if metadata {
+            doc = new(metadata)                                             // start with metadata
+            doc._rev = undefined }                                          // _rev not allowed in metadata
+        else
+            doc = { }
+        if key eq `prefix
+            key = id
+        doc.key = key
+        doc._id = id
+        if content
+            doc.content = content
+        // ### encode large content to blob attachment here
+        database.pouch.put(doc, function(error, resp) {
+            if error
+                error = Error("add failed", error)
+            else {
+                doc._rev = resp.rev                                         // update the original doc
+                if content {
+                    doc._md5 = HashMD5(content)
+                    doc._length = length(content) } }
+            callback(error, doc)
+        })
+    }
+
+    // update
+    //
+    // Update a record in the table using the document previously returned by add or get.
+    // This will fail if the record has been modified by someone else in the meantime.
+
+    table.update = closure update(doc, callback) {
+        if !callback
+            return (syncAdapter(update, doc))
+        if !doc._id || !doc._id.startsWith(table.prefix) || !doc._rev
+            return (asyncResult(callback, Error("invalid argument")))
+        if makeID(doc.key) != doc._id
+            return (asyncResult(callback, Error("key corrupted")))
+        if !database.pouch
+            return (asyncResult(callback, Error("database closed")))
+        doc = new(doc)
+        doc._md5 = undefined
+        doc._length = undefined
+        database.pouch.put(doc, function(error, resp) {
+            if error
+                error = Error("update failed", error)
+            else {
+                doc._rev = resp.rev                                         // update the original doc
+                if doc.content {
+                    doc._md5 = HashMD5(doc.content)
+                    doc._length = length(doc.content) } }
+            callback(error, doc)
+        })
+    }
+
+    // delete
+    //
+    // Delete a record in the table using the document previously returned by add or get. This
+    // marks the record deleted but does not actually reclaim storage.
+
+    table.delete = closure delete(doc, callback) {
+        if !callback
+            return (syncAdapter(delete, doc))
+        if !doc._id || !doc._id.startsWith(table.prefix) || !doc._rev
+            return (asyncResult(callback, Error("invalid argument")))
+        if !database.pouch
+            return (asyncResult(callback, Error("database closed")))
+        doc = {
+            _id: doc._id
+            _rev: doc._rev
+            _deleted: true
+        }
+        database.pouch.put(doc, function(error, resp) {
+            if error
+                error = Error("delete failed", error)
+            else
+                resp = { ok: true }
+            callback(error, resp)
+        })
+    }
+
+    // get
+    //
+    // Get the record in the table stored in the specified key.
+
+    table.get = closure get(key, callback, local id) {
+        if !callback
+            return (syncAdapter(get, key))
+        id = makeID(key)
+        if !string(id)
+            return (asyncResult(callback, id))                              // error from makeID
+        if !database.pouch
+            return (asyncResult(callback, Error("database closed")))
+        database.pouch.get(id, function(error, resp) {
+            if error
+                error = Error("get failed", error)
+            else {
+                resp.key = key                                              // ensure doc's key matches id
+                if resp.content {
+                    resp._md5 = HashMD5(resp.content)
+                    resp._length = length(resp.content) }
+            }
+            callback(error, resp)
+        })
+    }
+    
+    // md5
+    //
+    // Compute the MD5 hash of the content of the specified record if it exists. The result is "" if
+    // no content exists. The metadata is not part of the hash.
+
+    table.md5 = closure md5(key, callback) {
+        if !callback
+            return (syncAdapter(md5, key))
+        table.get(key, function(error, resp, local md5) {
+            if error
+                error = Error("get md5 failed", error, { status: error.status })
+            else if resp.content
+                md5 = HashMD5(resp.content)
+            else
+                md5 = ""
+            callback(error, md5)
+        })
+    }
+    
+    // head
+    //
+    // Retrieve the head record for a key (i.e. everything but the content.)
+
+    table.head = closure head(key, callback) {
+        if !callback
+            return (syncAdapter(head, key))
+        table.get(key, function(error, resp) {
+            if error
+                error = Error("head failed", error, { status: error.status })
+            else
+                resp.content = undefined
+            callback(error, resp)
+        })
+    }
+
+    // copy
+    //
+    // Copy a record from a source key to a new record under a destination key.
+    
+    table.copy = closure copy(srckey, destkey, callback, local srcid, destid) {
+        if !callback
+            return (syncAdapter(copy, srckey, destkey))
+        srcid = makeID(srckey)
+        if !string(srcid)
+            return (asyncResult(callback, srcid))                              // error from makeID
+        destid = makeID(destkey)
+        if !string(destid)
+            return (asyncResult(callback, destid))                             // error from makeID
+        if !database.pouch
+            return (asyncResult(callback, Error("database closed")))
+        database.pouch.get(srcid, function(error, resp, local doc) {
+            if error
+                return (callback(Error("copy read failed", {
+                    source: srckey
+                    destination: destkey
+                }, error)))
+            doc = resp
+            doc._id = destid
+            doc.key = destkey
+            doc._rev = undefined
+            database.pouch.put(resp, function(error, resp) {
+                if error
+                    return (callback(Error("copy write failed", {
+                        source: srckey
+                        destination: destkey
+                    }, error)))
+                doc._rev = resp.rev                                         // return new doc
+                if doc.content {
+                    doc._md5 = HashMD5(doc.content)
+                    doc._length = length(doc.content) }
+                callback(false, doc)
+            })
+        })
+    }
+
+    // records
+    //
+    // List all records in the table with the following options:
+    //  prefix: <string>        -- only records with the specified key prefix are included
+    //  deep: true|false        -- if true, include transitive children; default false
+    //  head: true|false        -- if true, include doc element with header for each record
+    //  get: true|false         -- if true, include doc element with content for each record
+    //
+    // The return structure has the following form:
+    //
+    // {prefix  : "joe/bill/",
+    //  rows : [
+    //      {
+    //          key         :   "john",
+    //          _modified   :   [Date Sat Apr 04 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
+    //          _md5        :   "55ff07fb005494c4bd42322d4845e858"
+    //          _length     :   156043
+    //         [ doc | error:  <document from "get" or "head"> | <error from get|head> ] },
+    //      {
+    //          key         :   "jill",
+    //          _modified   :   [Date Sat Apr 22 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
+    //          _md5        :   "f53f07fb00d42322dc4bd42322d4845e"
+    //          _length     :   155
+    //         [ doc         :  <document from "get" or "head"> ] } ] }
+    //
+    // All transitive nested children are included with the options.deep flag non-false. Otherwise
+    // only immediate children are listed, with directories at the end--and no metadata for them.
+    //
+
+    table.records = closure records(options, callback, local prefix, pouchOpts, output) {
+        if !callback
+            return (syncAdapter(records, options))
+        output = {
+            rows: [] }
+        if options.prefix {
+            if !string(options.prefix)
+                return (asyncResult(callback, Error("prefix option must be string")))
+            output.prefix = options.prefix
+            prefix = table.prefix.concat(makePrefix(options.prefix)) }
+        else
+            prefix = table.prefix
+        if !database.pouch
+            return (asyncResult(callback, Error("database closed")))
+        pouchOpts = {
+            startkey: prefix
+            endkey: prefix.concat("\ufff0")                                 // recommended last character
+        }
+        if options.get || options.head
+            pouchOpts.include_docs = true
+        database.pouch.allDocs(pouchOpts, function(error, rowlist, local firstkids, obj, key, offset, item) {
+            if error
+                error = Error("allDocs failed", error)
+            else {
+                firstkids = { }
+                for obj in rowlist.rows {
+                    if obj.id.startsWith(table.prefix)
+                        key = obj.id.substring(table.prefix.length)
+                    else
+                        key = "*key error*"                                 // should not happen
+                    if !options.deep {
+                        offset = key.indexOf("/", prefix.length)
+                        if offset >= 0 {
+                                key = key.substring(0, offset+1)            // child directory name
+                                if !firstkids[key]
+                                    firstkids[key] = key                    // first time we've seen this child directory
+                                else
+                                    continue } }                            // ignore deeper child
+                    item = {
+                        key:        key
+                        _id:        obj.id
+                        _rev:       obj.value.rev
+                    }
+                    if obj.doc {
+                        if obj.doc.content {
+                            item._md5 = HashMD5(obj.doc.content)
+                            item._length = length(obj.doc.content) }
+                        item.doc = obj.doc
+                        if !options.get
+                            item.doc.content = undefined }
+                    output.rows.push(item) }
+                callback(false, output)
+            }
+        })
+    }
+
+    // finis
+
+    list(false, table)
+};
+
+
+/*
+ * PouchDB
+ *
+ * column positioning:                          //                          //                      !
+ *     Make a database access object for a PouchDB database at the specified urlname. The database is
+ * created if it does not already exist. The urlname can be a string like:
+ *      urlname     - URL (e.g. "http://domain.com/dbname")     - remote access
+ *                  - filepath (e.g. "/Users/richardz/dbname")  - NodeJS filesystem access
+ *                  - string (e.g. "dbname")                    - local browser access
+ * or it can be a dictionary containing:
+ *      urlname     - as above
+ *      authname    - the authentication name for a URL
+ *      authpw      - the autentication password, required if authname is provided
+ * Return values from the various methods are typically a two-element tuple of (error, data), where
+ * at most one of the two values is non-false.
+ *
+ */
+
+closure PouchDB(urlname, local database, options) {
+    options = {
+        revs_limit: 1                                                       // number of revs to maintain for replication
+        auto_compaction: false }                                            // don't compcat on every change
+    if !string(urlname) {
+        if urlname.authname
+            options.auth = {
+                username: urlname.authName
+                password: urlname.authPW
+            }
+        urlname = urlname.urlName
+    }
+    if !string(urlname) || urlname == ""
+        return (list(Error("invalid database url/path/name")))
+    database = new(object, this)
+    database.type = "PouchDB"
+    if RegExp("https?://").test(urlname)
+        database.name = urlname.match(RegExp("https?://[^?]*?([^/?]+)([?].*)*$")).1
+    else if urlname.indexOf("/") >= 0 {
+        options.prefix = jspath.dirname(urlname).concat("/")
+        database.name = jspath.basename(urlname) }
+    else
+        database.name = urlname
+    if !xobject(pouchdb)
+        return (list(Error("PouchDB module not found")))
+    database.pouch = xnew(pouchdb, database.name, options)                  // don't compact after every change
+    if !database.pouch
+        return (list(Error("could not access database", urlname)))
+
+    // isopen
+    //
+    //     False iff the database is not open.
+    
+    database.isopen = function isopen() {
+        !!database.pouch
+    }
+
+    // close
+    //
+    // Close the database.
+
+    database.close = function close(local pending) {
+        if !database.pouch
+            return (list(Error("database closed")))
+        pending = new(nonce)
+        database.pouch.close(function(error) {
+            database.pouch = false
+            pending.signal(list(error, { ok: true }))
+        })
+        pending.wait()
+    }
+
+    // info
+    //
+    // Return PouchDB-specif database info.
+
+    database.info = function info(local pending) {
+        if !database.pouch
+            return (list(Error("database closed")))
+        pending = new(nonce)
+        database.pouch.info(function(error, resp) {
+            resp = new(resp)
+            resp.type = database.type
+            pending.signal(list(error, resp))
+        })
+        pending.wait()
+    }
+
+    // destroy
+    //
+    // Delete the database and close it.
+
+    database.destroy = function destroy(local pending) {
+        if !database.pouch
+            return (list(Error("database closed")))
+        pending = new(nonce)
+        database.pouch.destroy(function(error, resp) {
+            database.pouch = false
+            pending.signal(list(error, resp))
+        })
+        pending.wait()
+    }
+    
+    // table
+    //
+    // Return a table-access object for the table.
+
+    database.table = function table(path) {
+        if !database.pouch
+            return (list(Error("database closed")))
+        if !string(path)
+            return (list(Error("invalid table path")))
+         dapoTable(database, path)
+    }
+
+    // finis
+
+    list(false, database)
+};
+
+
+/*
+ * ListBrowserDBs
+ *
+ *     List PouchDB instances in the browser.
+ *
+ */
+
+closure ListBrowserDBs(local pending, output) {
+    if !indexedDB
+        return (list(Error("browser database unavailable")))
+    if !indexedDB.databases
+        return (list(Error("API for indexedDB.databases unavailable")))
+    pending = new(nonce)
+    output = []
+    indexedDB.databases().then(function(success) {
+            for item in success
+                if item.name.startsWith("_pouch_")
+                    output.push(item.name.substring(7))
+            pending.signal(list(false, output))
+        }, function(failure) {
+            pending.signal(list(Error("can't list databases", failure)))
+        })
+    pending.wait()
+};
+
+
+/*
+ * DbConnector
+ *
+ *     Make a PSM connector for PouchDB database tables.
+ *
+ */
+
+closure DbConnector(psm, local connClassID, connector, watch) {
+    connClassID = "PouchDB"
+    connector = new(object, this)
+    connector.psm = psm
+    connector.vault = psm.vault(connClassID)
+    connector.label = "PouchDB"
+    watch = psm.watchable(connector)
+    
+    // localDBcred
+    //
+    // True iff the specified credential dictionary is for a local browser DB.
+    function localDBcred(creds) {
+        !creds.authName && creds.urlName.indexOf("://") < 0
+    }
+
+    // uifields
+    //
+    // Report the UI fields we need to add a resource
+    connector.uifields = function uifields() {
+        [{
+            label:          "URL | Path | Name"
+            placeholder:    "http://domain.com/dbname | /Host-path/dbname | dbname"
+            key:            "urlName" },
+        {
+            label:          "Auth Name"
+            placeholder:    "account name"
+            key:            "authName" },
+        {
+            label:          "Auth Password"
+            placeholder:    "account password"
+            key:            "authPW"
+            type:           "password" },
+        ]
+    }
+    
+    // hashResourceID
+    //
+    // Make a stable hash based on the resource credentials that we can persist or share between
+    // different domains accessing the same resource.
+    connector.hashResourceID = function hashResourceID(resource, local ident) {
+        ident = resource.urlName
+        if resource.label
+            ident = ident.concat(resource.label)
+        HashSHA256(ident)
+    }
+
+    // findResource
+    //
+    // Find a resource with the specified contents, returning the resID or false. The loose criteria
+    // is: if added, would the specified contents be redundant to an existing resource?
+    connector.findResource = function findResource(resource, local resID, creds) {
+        for resID in listResources().1 {
+            creds = access(resID).1
+            if resource.urlName == creds.urlName
+                && (!resource.label || resource.label == creds.label)
+                && resource.authName == creds.authName
+                return (resID)
+        }
+        false
+    }
+
+    // addResource
+    //
+    // Add credentials for a named resource. The resource is a dictionary comprising these keys:
+    //      label       - [optional] label we use for this resource
+    //      urlName     - URL (e.g. "http://domain.com/dbname")
+    //                  - filepath (e.g. "/Users/richardz/dbname")  - NodeJS filesystem access
+    //                  - string (e.g. "dbname")                    - local browser access
+    //      authName    - [optional] the authentication name for a URL
+    //      authPW      - [optional] the autentication password, required if authname is provided
+    //      hidden      - [optional] don't enumerate to user
+    //      locked      - [optional] don't allow user delete
+    //      existng     - [optional] true to enable using existing database
+    // The return value is (error, result) tuple. Error, if non-false, is a dictionary of field
+    // keys and error diagnostic strings. The special key "label" refers to the label string
+    connector.addResource = function addResource(resource, local errors, creds, original, error, resID, data) {
+        function badField(str) { !string(str) || str.trim().length == 0 }
+        creds = { urlName: resource.urlName }
+        errors = { }
+        if resource.label
+            creds.label = resource.label
+        else
+            creds.label = resource.urlName
+        if badField(creds.label)
+            errors.label = "invalid label"
+        if badField(resource.urlName)
+            errors.urlName = "required field"
+        else if !resource.existing {
+            original = ListBrowserDBs().1
+            if original && original.indexOf(resource.urlName) >= 0
+                errors.urlName = "database already exists"                  // database exists
+        }
+        if !badField(resource.authName) {
+            creds.authName = resource.authName
+            creds.authPW = resource.authPW
+            if badField(resource.authPW)
+                errors.authPW = "required if Auth Name specified" }
+        if length(errors) > 0
+            error = errors
+        else if localDBcred(creds)
+            `(error, data) = PouchDB(creds)                                 // create the database now
+        if !error {
+            if resource.hidden
+                creds.hidden = resource.hidden
+            if resource.locked
+                creds.locked = resource.locked
+            resID =  hashResourceID(resource)
+            `(error, data) = connector.vault.addResource(resID, creds)
+            if data {
+                watch.notify(connClassID, { added: [resID] })
+                data = resID }
+        }
+        list(error, data)
+    }
+    
+    // getResource
+    //
+    // Get credentials for a named resource, matching the dictionary semantics of addResource. The
+    // result is a standard result tuple.
+    connector.getResource = function getResource(resID, local error, creds, resource) {
+        `(error, creds) = connector.vault.accessResource(resID)
+        if error
+            return (list(error))
+        resource = {
+            classID: connClassID
+            label: creds.label
+        }
+        if string(creds.urlName)
+            resource.urlName = creds.urlName
+        if string(creds.authName)
+            resource.authName = creds.authName
+        if string(creds.authPW)
+            resource.authPW = creds.authPW
+        list(false, resource)
+    }
+
+    // deleteResource
+    //
+    // Delete credentials for a resource, which includes the database itself if local.
+    connector.deleteResource = function deleteResource(resID, local error, creds, db) {
+        `(error, creds) = access(resID)
+        if error || creds.locked
+            return (list(Error("database protected", resID)))
+        if !error && localDBcred(creds) {
+            if !js.w.confirm("Really delete PouchDB ".concat(creds.urlName, " permanently?"))
+                return (list(Error("delete canceled")))                     // ### temporary until debugged
+            `(error, db) = PouchDB(creds)
+            if db
+                db.destroy()
+        }
+        connector.vault.deleteResource(resID)
+        watch.notify(connClassID, { deleted: [resID] })
+        list(false, { ok: true})
+    }
+        
+    // listResources
+    //
+    // List saved resources in our database
+    connector.listResources = function listResources(local error, output, original, resID, creds, ddex) {
+        `(error, output) = connector.vault.listResources()
+        if error
+            return (list(error))                                            // can't access our saved resources
+        original = ListBrowserDBs().1
+        if original {
+            for resID in output {
+                `(error, creds) = connector.vault.accessResource(resID)
+                if !error && localDBcred(creds) && (ddex = original.indexOf(creds.urlName)) >= 0
+                    original.splice(ddex, 1)                                // remove local databases we have credential for
+            }
+            output = original.concat(output)                                // add unreferenced local DBs
+        }
+        list(false, output)
+    }
+    
+    // info
+    //
+    // Return info for a resource.
+    connector.info = function info(resID, local info, error, creds) {
+        info = {
+            classID: connClassID
+            type: "PouchDB"
+            services: ["NideDB", "NideFS"]
+        }
+        `(error, creds) = connector.vault.accessResource(resID)
+        if creds {
+            if creds.label
+                info.name = creds.label
+            if localDBcred(creds)
+                info.type = "browser storage"
+            if creds.locked
+                info.locked = true
+            if creds.hidden
+                info.hidden = true
+            info.where = creds.urlName }
+        else {
+            info.where = "internal"
+            info.hidden = true
+            info.locked = true }
+        list(false, info)
+    }
+
+    // access
+    //
+    // Return an PouchDB access object, which is the credentials to open a database.
+    connector.access = function access(resID, local error, creds) {
+        `(error, creds) = connector.vault.accessResource(resID)
+        if error && ListBrowserDBs().1.indexOf(resID) >= 0 {
+            error = false
+            creds = resID
+        }
+        list(error, creds)
+    }
+
+    // connect
+    //
+    // Connect to a database, returning a PSM view.
+    connector.connect = function connect(resID, service, args, local error, creds, db, rootpath, table) {
+        `(error, creds) = connector.access(resID)
+        if !error
+            `(error, db) = PouchDB(creds)
+        if error
+            list(error)
+        else if service == "NideDB"
+            list(false, db)
+        else if service == "NideFS" {
+            rootpath = args.0                                               // connect to a NideFS filesystem
+            if !rootpath
+                return (Error("mandatory rootpath missing"))
+            `(error, table) = db.table(rootpath)
+            if error
+                list(error)
+            else
+                FSview(table, rootpath)
+        } else
+            list(Error("unsupported service", service))
+    }
+
+    // finis
+
+    psm.register(connClassID, connector)
+    connector
+};
+
+
+/*
+ * dapoInit
+ *
+ *     Initialize the Database module.
+ *
+ */
+
+function dapoInit(local manifest) {
+
+    manifest = `(dapoTable, PouchDB, ListBrowserDBs, DbConnector, dapoInit)
+
+    Naan.module.build(module.id, "dbt_pouch", function(modobj, compobj) {
+        require("./storage.nlg")
+        require("./psm_dbtables.nlg")
+        compobj.manifest = manifest
+        modobj.exports.PouchDB = PouchDB
+        modobj.exports.ListBrowserDBs = ListBrowserDBs
+        modobj.exports.DbConnector = DbConnector
+    })
+
+} ();

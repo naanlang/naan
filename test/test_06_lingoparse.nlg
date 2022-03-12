@@ -1,0 +1,500 @@
+/*
+ * test_06_lingoparse.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2018-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Test Category 6 - Lingo parse
+ *
+ */
+
+RegisterTestCategory("Lingo parse", [
+    [ "4+3;", "7" ],                                                        // generic first test
+
+
+    //
+    // Simple expressions
+    //
+    
+    [ "42;", { exprs: "42" } ],
+    [ "a;", { exprs: "a" } ],
+    [ "`b;", { exprs: "(`` b)" } ],
+    [ "`(a b c);", { exprs: "(`` (a b c))" } ],
+
+    //
+    // basic lists and dotted pairs
+    //
+    
+    [ "`();>", "false" ],
+    [ "`);>", ")" ],
+    [ "`(a `.);>", "(a `.)" ],
+    [ "`(a `. b);>", "(a `. b)" ],
+    [ "`(a ``);>", "(a ``)" ],
+    [ "`(a `();>", "(a `()" ],
+    [ "`(a `));>", "(a `))" ],
+    [ "`(a `,);>", "(a `,)" ],
+    [ "`(a . false);>", "(a)" ],
+    [ "`(a . b);>", "(a . b)" ],
+    [ "`(a b . c);>", "(a b . c)" ],
+    [ "`(a . (b c));>", "(a b c)" ],
+    [ "`((a b) . (c d));>", "((a b) c d)" ],
+    [ "`((a . b) . (c d));>", "((a . b) c d)" ],
+    [ "`((a b) . (c . d));>", "((a b) c . d)" ],
+
+    //
+    // Basic operators
+    //
+    
+    [ "a or b or c;", { exprs: "(or a b c)" } ],
+    [ "4+3*5;", { exprs: "(+ 4 (* 3 5))" } ],
+
+    //
+    // Newline termination
+    //
+    
+    [ "4&&3;", { exprs: "(&& 4 3)" } ],
+    [ "4\n&&3;", { exprs: "(&& 4 3)" } ],
+    [ "4&&\n3;", { exprs: "(&& 4 3)" } ],
+    [ "function test0(x, y) { \n x \n y = 3 \n };", { exprs: "(defproc function test0 (x y) x (= y 3))" } ],
+
+    //
+    // Procedure types
+    //
+    
+    [ "function test1() { };", { exprs: "(defproc function test1 false)" } ],
+    [ "function test1() { a+b };", { exprs: "(defproc function test1 false (+ a b))", text: "==> redefined: test1" } ],
+    [ "function test1(x) { };", { exprs: "(defproc function test1 (x))", text: "==> redefined: test1"  } ],
+    [ "function test1(x) { x };", { exprs: "(defproc function test1 (x) x)", text: "==> redefined: test1"  } ],
+    [ "function test1 x { };", { exprs: "(defproc function test1 x)", text: "==> redefined: test1"  } ],
+    [ "function test1 x { x };", { exprs: "(defproc function test1 x x)", text: "==> redefined: test1"  } ],
+    [ "function () { };", { exprs: "(function lambda false)" } ],
+    [ "function () { a+b };", { exprs: "(function lambda false (+ a b))" } ],
+    [ "function (x) { x };", { exprs: "(function lambda (x) x)" } ],
+    
+    [ "macro test1() { };", { exprs: "(defproc macro test1 false)", text: "==> redefined: test1"  } ],
+    [ "macro test1() { a+b };", { exprs: "(defproc macro test1 false (+ a b))", text: "==> redefined: test1"  } ],
+    [ "macro test1(x) { };", { exprs: "(defproc macro test1 (x))", text: "==> redefined: test1"  } ],
+    [ "macro test1(x) { x };", { exprs: "(defproc macro test1 (x) x)", text: "==> redefined: test1"  } ],
+    [ "macro test1 x { };", { exprs: "(defproc macro test1 x)", text: "==> redefined: test1"  } ],
+    [ "macro test1 x { x };", { exprs: "(defproc macro test1 x x)", text: "==> redefined: test1"  } ],
+    [ "macro () { };", { exprs: "(macro lambda false)" } ],
+    [ "macro () { a+b };", { exprs: "(macro lambda false (+ a b))" } ],
+    [ "macro (x) { x };", { exprs: "(macro lambda (x) x)" } ],
+    
+    [ "closure test1() { };", { exprs: "(defproc closure test1 false)", text: "==> redefined: test1"  } ],
+    [ "closure test1() { a+b };", { exprs: "(defproc closure test1 false (+ a b))", text: "==> redefined: test1"  } ],
+    [ "closure test1(x) { };", { exprs: "(defproc closure test1 (x))", text: "==> redefined: test1"  } ],
+    [ "closure test1(x) { x };", { exprs: "(defproc closure test1 (x) x)", text: "==> redefined: test1"  } ],
+    [ "closure test1 x { };", { exprs: "(defproc closure test1 x)", text: "==> redefined: test1"  } ],
+    [ "closure test1 x { x };", { exprs: "(defproc closure test1 x x)", text: "==> redefined: test1"  } ],
+    [ "closure () { };", { exprs: "(closure lambda false)" } ],
+    [ "closure () { a+b };", { exprs: "(closure lambda false (+ a b))" } ],
+    [ "closure (x) { x };", { exprs: "(closure lambda (x) x)" } ],
+
+    [ "function false() { };", { text: "cannot define function false in Namespace<Test-Lingo parse>" } ],
+    [ "function false(x) { x };", { text: "cannot define function false in Namespace<Test-Lingo parse>" } ],
+    [ "function false x { x };", { text: "cannot define function false in Namespace<Test-Lingo parse>" } ],
+
+    [ "function lambda() { };", { exprs: "(function lambda false)" } ],
+    [ "function lambda(x) { x };", { exprs: "(function lambda (x) x)" } ],
+    [ "function lambda x { x };", { exprs: "(function lambda x x)" } ],
+
+    [ "`(function test99);", { exprs: "(`` (function test99))" } ],
+    [ "`(macro test99);", { exprs: "(`` (macro test99))" } ],
+    [ "`(closure test99);", { exprs: "(`` (closure test99))" } ],
+    [ "`(a function test1);", { exprs: "(`` (a function test1))" } ],
+    [ "`(b macro test1);", { exprs: "(`` (b macro test1))" } ],
+    [ "`(c closure test1);", { exprs: "(`` (c closure test1))" } ],
+    
+    [ "function () { function(x) { x+1 }() };", { exprs: "(function lambda false (call (function lambda (x) (+ x 1))))" } ],
+
+    //
+    // Defining procedures
+    //
+    
+    [ "function true(a,b) { a+b };", { text: "cannot define function true in Namespace<Test-Lingo parse>" } ],
+    [ "macro true(a,b) { a+b };", { text: "cannot define macro true in Namespace<Test-Lingo parse>" } ],
+    [ "closure true(a,b) { a+b };", { text: "cannot define closure true in Namespace<Test-Lingo parse>" } ],
+    [ "function test() {\n"
+        " f(),\n"                     // ### remove comma to break everything
+        " (a - b) / 3\n"
+        "};\n", "test" ],
+        
+    [ "function(){{spawn:function(){[{ok:true}]}}};", "function () {\n"
+        "    {\n"
+        "        spawn: function () {\n"
+        "            [\n"
+        "                { ok: true }]\n"
+        "        }\n"
+        "         }\n"
+        "}" ],
+
+    //
+    // Printing procedures
+    //
+    
+    [ "quote(function () { function(x) { x+1 }() });", "function () {\n"
+        "    function (x) {\n"
+        "        x + 1\n"
+        "    } ()\n"
+        "}" ],
+    [ "quote(function (a) { function(x) { x+1 }(a) });", "function (a) {\n"
+        "    function (x) {\n"
+        "        x + 1\n"
+        "    } (a)\n"
+        "}" ],
+
+    //
+    // quoting
+    //
+    
+    [ "`(a . b);", "(a . b)" ],
+    [ "`(a . b);", { exprs: "(`` (a . b))" } ],
+    [ "quote(`(a . b));", "`(a . b)" ],
+    [ "function() { `(a . b) };", { exprs: "(function lambda false (`` (a . b)))" } ],
+    [ "function() { `(c . d) };", "function () {\n"
+        "    `(c . d)\n"
+        "}" ],
+    
+    //
+    // and/or/not
+    //
+    
+    [ "function (x,y) { if 1 <= 2 or 3 <= 4 or (y = 5) or 6 7 };",
+        { exprs: "(function lambda (x y) ((or (<= 1 2) (<= 3 4) (= y 5) 6) 7))" } ],
+    [ "a or b or c or d;", { exprs: "(or a b c d)" } ],
+    [ "a or b or c or d or e;", { exprs: "(or a b c d e)" } ],
+    [ "a or b or (c or d) or e;", { exprs: "(or a b c d e)" } ],
+    [ "a or (b or c) or d or e;", { exprs: "(or a b c d e)" } ],
+    [ "(a or (b or c)) or d or e;", { exprs: "(or a b c d e)" } ],
+    [ "a or ((b or c) or d) or e;", { exprs: "(or a b c d e)" } ],
+
+    //
+    // if/else
+    //
+    
+    [ "if a 1;", { exprs: "(cond ((identity a) 1))" } ],
+    [ "if a, -1;", { exprs: "(cond ((identity a) -1))" } ],
+    
+    [ "function (){if c, (3) else if d 5};", { exprs: "(function lambda false ((identity c) 3) ((identity d) 5))" } ],
+
+    [ "function(expr) { if 1 expr };", { exprs: "(function lambda (expr) ((identity 1) expr))" } ],
+
+    [ "function () { if (1) {} else 2 };", { exprs: "(function lambda false ((identity 1)) 2)" } ],
+    
+    [ "function (x) { if atom(x) { x = x + 1, x } };", { exprs: "(function lambda (x) ((atom x) (= x (+ x 1)) x))" } ],
+    
+    [ "function test2(x) { if x > 9 print("big1") };",
+        { exprs: "(defproc function test2 (x) ((> x 9) (print "big1")))" } ],
+    
+    [ "function test2(x) { if x > 9 print("big2"), print(x) };",
+        { exprs: "(defproc function test2 (x) (((> x 9) (print "big2"))) (print x))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { if x > 9 print("big3") else if x > 1 print("small") };",
+        { exprs: "(defproc function test2 (x) ((> x 9) (print "big3")) ((> x 1) (print "small")))",
+        text: "==> redefined: test2" } ],
+        
+    [ "function test2(x) { if x > 9 print("big4") else if x > 1 print("small"), print(x) };",
+        { exprs: "(defproc function test2 (x) (((> x 9) (print "big4")) ((> x 1) (print "small"))) (print x))",
+        text: "==> redefined: test2" } ],
+
+    [ "function test2(x) { if x > 9 { print("big5"), print("bigger") } else if x > 1 print("small") };",
+        { exprs: "(defproc function test2 (x) ((> x 9) (print "big5") (print "bigger")) ((> x 1) (print "small")))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { if x > 9 print("big6") else if x > 1 { print("small"), print("smaller") }};",
+        { exprs: "(defproc function test2 (x) ((> x 9) (print "big6")) ((> x 1) (print "small") (print "smaller")))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { if x > 9 { print("big7"), print("bigger") } else if x > 1 { print("small"), print("smaller") }};",
+        { exprs: "(defproc function test2 (x) ((> x 9) (print "big7") (print "bigger")) ((> x 1) (print "small") (print "smaller")))",
+        text: "==> redefined: test2" } ],
+        
+    [ "function () { if 1 2 };",
+        { exprs: "(function lambda false ((identity 1) 2))" } ],
+
+    [ "function () { if 1 2 else 3 };",
+        { exprs: "(function lambda false ((identity 1) 2) 3)" } ],
+        
+    [ "function () { if 1 { 2 } else 3 };",
+        { exprs: "(function lambda false ((identity 1) 2) 3)" } ],
+
+    [ "function () { if 1 2 else { 3 } };",
+        { exprs: "(function lambda false ((identity 1) 2) 3)" } ],
+
+    [ "function () { if 1 { 2 } else { 3 } };",
+        { exprs: "(function lambda false ((identity 1) 2) 3)" } ],
+
+    [ "function () { if 1 2 else if 3 4 };",
+        { exprs: "(function lambda false ((identity 1) 2) ((identity 3) 4))" } ],
+
+    [ "function () { if 1 2 else if 3 { 4 } };",
+        { exprs: "(function lambda false ((identity 1) 2) ((identity 3) 4))" } ],
+
+    [ "function () { if 1 2 else if 3 4 else 5 };",
+        { exprs: "(function lambda false ((identity 1) 2) ((identity 3) 4) 5)" } ],
+
+    [ "function () { if 1 2 else if 3 4 else 5, 6 };",
+        { exprs: "(function lambda false (((identity 1) 2) ((identity 3) 4) 5) 6)" } ],
+    
+    [ "function() { if 1 2 else { if 3 4, 5} };",
+        { exprs: "(function lambda false ((identity 1) 2) (((identity 3) 4)) 5)" } ],
+    
+    [ "function() { if 1 2 else { if 3 4, 5}, 6 };",
+        { exprs: "(function lambda false (((identity 1) 2) (((identity 3) 4)) 5) 6)" } ],
+    
+    [ "function () { if 1 if 2 3 };",
+        { exprs: "(function lambda false ((identity 1) ((identity 2) 3)))" } ],
+        
+    [ "function () { if 1 if 2 3 else 4 };",
+        { exprs: "(function lambda false ((identity 1) ((identity 2) 3) 4))" } ],
+
+    [ "function() { if 1 { } else f({ root: 2  }) };",
+        { exprs: "(function lambda false ((identity 1)) (f Dictionary{1}))" } ],
+    
+    [ "function(a,b) {if a>b {-1} else 0};",
+        { exprs: "(function lambda (a b) ((> a b) -1) 0)" } ],
+
+    [ "function() { if 1 2 else { if 3 4, 5}, 6 };",
+        "function () {\n"
+        "    if 1\n"
+        "        2\n"
+        "    else {\n"
+        "        if 3\n"
+        "            4\n"
+        "        5 }\n"
+        "    6\n"
+        "}" ],
+    
+    //
+    // loop
+    //
+
+    [ "loop{if 1 break};",
+        { exprs: "(loop false ((identity 1)))" } ],
+    [ "function(){loop{if 1 break}};",
+        { exprs: "(function lambda false (loop false ((identity 1))))" } ],
+
+    [ "loop{if 1 break else 2};",
+        { exprs: "(loop false (((identity 1) (break)) 2))" } ],
+    [ "function(){loop{if 1 break else 2}};",
+        { exprs: "(function lambda false (loop false (((identity 1) (break)) 2)))" } ],
+
+    [ "function test2(x) { loop { if x > 3 break, printline(\"loop \", x), x = x+1 } };",
+        { exprs: "(defproc function test2 (x) (loop false ((> x 3)) (printline \"loop \" x) (= x (+ x 1))))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { loop { if x > 3 { print(\"done\"), break }, printline(\"loop \", x), x = x+1 } };",
+        { exprs: "(defproc function test2 (x) (loop false ((> x 3) (print \"done\")) (printline \"loop \" x) (= x (+ x 1))))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { loop { if x > 3 print(\"done\"), break, printline(\"loop \", x), x = x+1 } };",
+        { exprs: "(defproc function test2 (x) (loop false (((> x 3) (print \"done\"))) (break) (printline \"loop \" x) (= x (+ x 1))))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { loop { if x > 3 if x > 2 { print(\"done\"), break }, printline(\"loop \", x), x = x+1 } };",
+        { exprs: "(defproc function test2 (x) (loop false (((> x 3) ((> x 2) (print \"done\") (break)))) (printline \"loop \" x) (= x (+ x 1))))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { loop { if x > 4 {print(\"done\"), break}, printline(\"loop \", x), x = x+1, print(\" \")} };",
+        { exprs: "(defproc function test2 (x) (loop false ((> x 4) (print \"done\")) (printline \"loop \" x) (= x (+ x 1)) (print \" \")))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { loop { if x > 3 { if x > 2 print(\"done\"), break }, printline(\"loop \", x), x = x+1 } };",
+        { exprs: "(defproc function test2 (x) (loop false (((> x 3) (((> x 2) (print \"done\"))) (break))) (printline \"loop \" x) (= x (+ x 1))))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { loop { if x <= 3 print(\" \") else break, printline(\"loop \", x), x = x+1 } };",
+        { exprs: "(defproc function test2 (x) (loop false (((<= x 3) (print \" \")) (break)) (printline \"loop \" x) (= x (+ x 1))))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test2(x) { loop { if x > 3 { if x > 2 { print(\"done\"), break }, print(\" \")} , printline(\"loop \", x), x = x+1 } };",
+        { exprs: "(defproc function test2 (x) (loop false (((> x 3) (((> x 2) (print \"done\") (break))) (print \" \"))) (printline \"loop \" x) (= x (+ x 1))))",
+        text: "==> redefined: test2" } ],
+    
+    [ "function test3() { loop { if 1 < 2 3 else break, print }};",
+        { exprs: "(defproc function test3 false (loop false (((< 1 2) 3) (break)) print))" } ],
+    
+    [ "function test3() { loop { if 1 < 2 3 else continue, print }};",
+        { exprs: "(defproc function test3 false (loop false (((< 1 2) 3) (continue)) print))",
+        text: "==> redefined: test3" } ],
+        
+    [ "function test4() { loop { if 1 < 2 break, 4 }};",
+        { exprs: "(defproc function test4 false (loop false ((< 1 2)) 4))" } ],
+
+    [ "function test4() { loop { if 1 < 2 { 3, break }, 4 }};",
+        { exprs: "(defproc function test4 false (loop false ((< 1 2) 3) 4))",
+        text: "==> redefined: test4" } ],
+
+    [ "function() { loop { if 1 break, 2} };",
+        { exprs: "(function lambda false (loop false ((identity 1)) 2))" } ],
+    [ "function(x) { x = loop { if 1 break, 2 } };",
+        { exprs: "(function lambda (x) (= x (loop false ((identity 1)) 2)))" } ],
+    
+    [ "function(x) { if x 2 else if y 3 };",
+        { exprs: "(function lambda (x) ((identity x) 2) ((identity y) 3))" } ],
+    
+    [ "function(x) { loop { if x 2 else if y 3 } };",
+        { exprs: "(function lambda (x) (loop false (((identity x) 2) ((identity y) 3))))" } ],
+
+    [ "function() { if 1 { 2, loop { if 3 4 }, 5 } };",
+        { exprs: "(function lambda false ((identity 1) 2 (loop false (((identity 3) 4))) 5))" } ],
+    [ "function() { if 1 { 2, loop { if 3 4 }, 5 } };",
+        "function () {\n"
+        "    if 1 {\n"
+        "        2\n"
+        "        loop\n"
+        "            if 3\n"
+        "                4\n"
+        "        5 }\n"
+        "}" ],
+
+    //
+    // while
+    //
+    
+    [ "function () { while 1 2 };",
+        { exprs: "(function lambda false (while false ((not 1)) 2))" } ],
+
+    [ "function () { while 1 { 2 } };",
+        { exprs: "(function lambda false (while false ((not 1)) 2))" } ],
+            
+    [ "function () { while 1 A() };",
+        { exprs: "(function lambda false (while false ((not 1)) (A)))" } ],
+
+    [ "function () { while 1 { A() } };",
+        { exprs: "(function lambda false (while false ((not 1)) (A)))" } ],
+    
+    [ "function () { while:tag 1 { A() } };",
+        { exprs: "(function lambda false (while tag ((not 1)) (A)))" } ],
+    
+    [ "function wtest(n local x) { x = 0, while x <= n { print(x), x=x+1 }};",
+        { exprs: "(defproc function wtest (n false x) (= x 0) (while false ((not (<= x n))) (print x) (= x (+ x 1))))" } ],
+    
+    [ "while x < 10 { print(x++, space), if x==8 break };",
+        { exprs: "(while false ((not (< x 10))) (print (postadjust x + 1) space) (((== x 8) (break))))" } ],
+
+    [ "quote(while x < 10 { print(x++, space), if x==8 break });",
+        "while x < 10 {\n"
+        "    print(x++, space)\n"
+        "    if x == 8\n"
+        "        break\n"
+        "}" ],
+
+    [ "quote(while x < 10 print(x++, space));",
+        "while x < 10\n"
+        "    print(x++, space)" ],
+    
+    //
+    // for
+    //
+    
+    [ "for x in `(a b c) print(x);",
+        { exprs: "(for (let lambda (iter) (= iter (iterate (`` (a b c)) (`` x))) (loop false ((`. iter \"next\" (iter)) (`. iter \"final\" (iter))) (= x (`. iter \"value\")) (print x))))",
+        text: "abc" } ],
+
+    [ "for:gg x in `(a b c) print(x);",
+        { exprs: "(for (let lambda (iter) (= iter (iterate (`` (a b c)) (`` x))) (loop gg ((`. iter \"next\" (iter)) (`. iter \"final\" (iter))) (= x (`. iter \"value\")) (print x))))",
+        text: "abc"  } ],
+
+    [ "for:gg x in `(a b c) {print(x),print(y)};",
+        { exprs: "(for (let lambda (iter) (= iter (iterate (`` (a b c)) (`` x))) (loop gg ((`. iter \"next\" (iter)) (`. iter \"final\" (iter))) (= x (`. iter \"value\")) (print x) (print y))))",
+        text: "aybycy"  } ],
+    [ "quote(for:gg x in `(a b c) {print(x),print(y)});",
+        "for :gg x in `(a, b, c) {\n"
+        "    print(x)\n"
+        "    print(y)\n"
+        "}" ],
+
+    //
+    // Return/continue/break
+    //
+        
+    [ "return;", { exprs: "(return)" } ],
+    [ "return (777);", { exprs: "(return 777)" } ],
+    [ "function test4() { loop :dumb { if 1 < 2 { 3, break :dumb }, 4 }};",
+        { exprs: "(defproc function test4 false (loop dumb (((< 1 2) 3 (break dumb))) 4))",
+        text: "==> redefined: test4" } ],
+    [ "function test4() { loop :smart { if 1 < 2 { 3, continue :smart }, 4 }};",
+        { exprs: "(defproc function test4 false (loop smart (((< 1 2) 3 (continue smart))) 4))",
+        text: "==> redefined: test4" } ],
+
+    //
+    // Try/catch/throw
+    //
+    
+    [ "try { print(\"try\") } finally { print(\"finally\") };",
+        { exprs: "(catch ((print \"try\")) false ((print \"finally\")))",
+        text: "tryfinally" } ],
+    [ "try{nest()}finally{};",
+        { exprs: "(catch ((nest)) false false)" } ],
+    [ "try{nest()}catch{}finally{};",
+        { exprs: "(catch ((nest)) (((identity true))) false)" } ],
+    [ "function test1() { try { nest() } finally { } };",
+        { exprs: "(defproc function test1 false (catch ((nest)) false false))",
+        text: "==> redefined: test1" } ],
+    [ "function(){try{nest()}catch{},if(1)2};",
+        { exprs: "(function lambda false (catch ((nest)) (((identity true))) false) ((identity 1) 2))" } ],
+    [ "function(x) { try {} catch { if true { 4 } } };",
+        { exprs: "(function lambda (x) (catch false (((identity true) 4)) false))" } ],
+    
+    //
+    // cond
+    //
+    
+    [ "cond(if 1 2);",
+        { exprs: "(cond ((identity 1) 2))" } ],
+    [ "cond(if 1 2, if 3 4);",
+        { exprs: "(cond ((identity 1) 2) ((identity 3) 4))" } ],
+
+    //
+    // dereference
+    //
+
+    [ "a[b,c];>", "(Lib::dereflist a (b c))" ],
+    [ "a[b,c];", "a[b,c]" ],
+    
+    //
+    // parser/unparser ambiguities
+    //
+    
+    [ "function() {test()[3]};>", "(function lambda false (deref (test) 3))"],
+    [ "function() {test()\n[3]};>", "(function lambda false (deref (test) 3))"],
+    [ "function() {test(),\n[3]};>", "(function lambda false (test) Array[1])"],
+    [ "function() {test(),\n[3]};", "function () {\n"
+        "    test(),\n"                                                     // need comma before array
+        "    [3]\n"
+        "}"],
+    [ "function(){\n[3]};", "function () {\n"
+        "    [3]\n"                                                         // don't need comma before array
+        "}"],
+    [ "function() {if 1 { { a:3 } } };", "function () {\n"
+        "    if 1 {\n"
+        "        { a: 3 } }\n"                                              // need braces around dictionary
+        "}" ],
+    [ "function() {if 1 2 };", "function () {\n"
+        "    if 1\n"
+        "        2\n"
+        "}" ],
+    [ "function() {if 1 2 else 3 };", "function () {\n"
+        "    if 1\n"
+        "        2\n"
+        "    else\n"
+        "        3\n"
+        "}" ],
+    [ "function() {if 1 2 else { { a:3 } } };", "function () {\n"
+        "    if 1\n"
+        "        2\n"
+        "    else {\n"
+        "        { a: 3 } }\n"                                              // need braces around dictionary
+        "}" ],
+]);

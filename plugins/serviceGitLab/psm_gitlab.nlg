@@ -1,0 +1,205 @@
+/*
+ * psm_gitlab.nlg
+ * serviceGitLab
+ *
+ *     PSM connector for GitLab for browser and NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * plabConnector
+ *
+ *     Make a PSM connector for GitLab access.
+ *
+ */
+
+closure plabConnector(psm, local connClassID, connector, watch) {
+    connClassID = "GLAB"
+    require("plugins/serviceGitLab/gitops.nlg")
+    connector = new(object, this)
+    connector.psm = psm
+    connector.vault = psm.vault(connClassID)
+    connector.label = "GitLab"
+    watch = psm.watchable(connector)
+
+    // uifields
+    //
+    // Report the UI fields we need to add a resource
+    connector.uifields = function uifields() {
+        [{
+            label:          "Username"
+            placeholder:    "GitLab username or email"
+            key:            "userName" },
+        {
+            label:          "Password"
+            placeholder:    "Personal Access Token"
+            key:            "userPat"
+            type:           "password" }
+        ]
+    }
+    
+    // hashResourceID
+    //
+    // Make a stable hash based on the resource credentials that we can persist or share between
+    // different domains accessing the same resource.
+    connector.hashResourceID = function hashResourceID(resource, local ident) {
+        ident = resource.userName
+        if resource.label
+            ident = ident.concat(resource.label)
+        HashSHA256(ident)
+    }
+
+    // findResource
+    //
+    // Find a resource with the specified contents, returning the resID or false. The loose criteria
+    // is: if added, would the specified contents be redundant to an existing resource?
+    connector.findResource = function findResource(resource, local resID, creds) {
+        for resID in listResources().1 {
+            creds = access(resID).1
+            if resource.userName == creds.userName
+                return (resID)
+        }
+        false
+    }
+
+    // addResource
+    //
+    // Add credentials for a named resource. The label is a string. The resource is a dictionary
+    // comprising these keys:
+    //      label       - [optional] label we use for this resource
+    //      userName    - GitLab user name
+    //      userPat     - GitLab Personal Access Token
+    //      hidden      - [optional] don't enumerate to user
+    //      locked      - [optional] don't allow user delete
+    // The return value is (error, result) tuple. Error, if non-false, is a dictionary of field
+    // keys and error diagnostic strings. The special key "label" refers to the label string.
+    connector.addResource = function addResource(resource, local label, errors, creds, error, resID, data) {
+        function badField(str) { !string(str) || str.trim().length == 0 } 
+        creds = { 
+            userName: resource.userName,
+            userPat: resource.userPat
+        }
+        errors = { }
+        if resource.label
+            creds.label = resource.label
+        else
+            creds.label = resource.region.concat("-", resource.bucketName)
+        if badField(creds.label)
+            errors.label = "invalid label"
+        if badField(resource.userName)
+            errors.userName = "required field"
+        if badField(resource.userPat)
+            errors.userPat = "required field"
+        if length(errors) > 0
+            error = errors
+        else {
+            if resource.hidden
+                creds.hidden = resource.hidden
+            if resource.locked
+                creds.locked = resource.locked
+            resID = hashResourceID(resource)
+            `(error, data) = connector.vault.addResource(resID, creds)
+            if data {
+                watch.notify(connClassID, { added: [resID] })
+                data = resID }
+        }
+        list(error, data)
+    }
+
+    // deleteResource
+    //
+    // Delete credentials for a resource
+    connector.deleteResource = function deleteResource(resID) {
+        connector.vault.deleteResource(resID)
+        watch.notify(connClassID, { deleted: [resID] })
+        list(false, { ok: true})
+    }
+        
+    // listResources
+    //
+    // List saved resources in our database
+    connector.listResources = function listResources() {
+        connector.vault.listResources()
+    }
+    
+    // info
+    //
+    // Return info for a resource.
+    connector.info = function info(resID, local error, creds, info) {
+        info = {
+            classID: "GitLab"
+            type: "GitLab"
+            services: ["GitAPI"]
+        }
+        `(error, creds) = connector.vault.accessResource(resID)
+        if creds {
+            if creds.label
+                info.name = creds.label
+            if creds.locked
+                info.locked = true
+            if creds.hidden
+                info.hidden = true
+            info.where = creds.userName
+        }
+        list(false, info)
+    }
+
+    // access
+    //
+    // Return an access object.
+
+    connector.access = function access(resID, local error, creds, glab) {
+        `(error, creds) = connector.vault.accessResource(resID)
+        if error
+            return (list(error))                                            // can't access that resource
+        glab = {
+            userName:           creds.userName,
+            userPat:            creds.userPat }
+        list(false, glab)
+    }
+
+    // connect
+    //
+    // Connect to an GitLab filesystem.
+    
+    connector.connect = function connect(resID, service, args, local error,  glab, gitremote, table) {
+        `(error, glab) = connector.access(resID)
+        if !error
+            `(error, gitremote) = GitLabOps(glab)                           // get GitLab as a git remote
+        if error
+            list(error)
+        else if service == "GitAPI"
+            list(false, gitremote)
+        else
+            list(Error("unsupported service", service))
+    }
+
+    // finis
+    
+    psm.register(connClassID, connector)
+    connector
+};
+
+
+/*
+ * plabInit
+ *
+ *     Initialize the GitLab module.
+ *
+ */
+
+function plabInit(local manifest) {
+
+    manifest = `(plabConnector, plabInit)
+
+    Naan.module.build(module.id, "psm_gitlab", function(modobj, compobj) {
+        compobj.manifest = manifest
+        modobj.exports.GitLabConnector = plabConnector
+        require("./serviceGitLab.nlg")
+    })
+} ();

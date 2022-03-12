@@ -1,0 +1,196 @@
+/*
+ * taskexec.nlg
+ *
+ *     Task execution for workers.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * taskDispatcher
+ *
+ *     Create a dispatcher for remote evaluation. The replier argument is a function that accepts
+ * outgoing messages. The return value is a closure that processes incomming messages. This code is
+ * a peer to ExecutorContext in executors.nlg.
+ *
+ */
+
+closure taskDispatcher(replier, local contexts, gohome, util) {
+    contexts = { }
+    gohome = makeActivator()
+    util = modlist().Util.exports
+    closure(data, local reply, restorens, expr, roots, proc, args, result) {
+        reply = {
+            xmsg: "error"
+            xid: data.xid
+            error: "unknown operation"
+        }
+        try {
+            restorens = makeActivator()
+            if data.xmsg == "xstart"
+                reply = { xmsg: "xready" }                                  // ready to accept messages
+            else if data.xmsg == "register" {
+                //
+                // register a new context to default namespace
+                //
+                gohome()
+                context = contexts[data.contextID] = {                      // register new context
+                    namespace: nsactive()
+                    activator: gohome
+                }
+                restorens()
+                reply.xmsg = "registered"
+                reply.contextID = data.contextID
+                reply.error = undefined
+                reply.nsname = context.namespace.tostring
+            }
+            else if data.xmsg == "eval" {
+                //
+                // evaluate an expression in the context's namespace
+                //
+                context = contexts[data.contextID]
+                if !context
+                    reply.error = "unknown context"
+                else if !context.namespace
+                    reply.error = "namespace missing"
+                else {
+                    context.activator()
+                    reply.xmsg = "evaluated"
+                    reply.contextID = data.contextID
+                    expr = util.pkgLoad(data.expr, {
+                        intern: true                                        // intern symbols
+                        localroots: true                                    // make roots local if needed to intern
+                        execute: true                                       // execute auto-running procedures
+                    })
+                    expr = caar(expr)
+                    reply.error = undefined
+                    if expr {
+                        expr = evalactive(expr)
+                        if data.get
+                            roots = new(data.get).map(function(sym){        // new() to get symbol from compress
+                                compress(sym)
+                            })
+                        if roots
+                            roots = cons(`expr, totuple(roots))
+                        else
+                            roots = `(expr)
+                        reply.result = util.pkgSave(`expr, roots, {
+                            nsignore: true                                  // don't report namespace errors
+                            comments: true })                               // include comments
+                        if context.namespace !== nsactive().0
+                        {                                                   // evaluation changed namespace
+                            context.namespace = nsactive().0
+                            context.activator = makeActivator()
+                        }
+                    }
+                }
+            }
+            else if data.xmsg == "rpc" {
+                //
+                // call an RPC in the context's namespace
+                //
+                context = contexts[data.contextID]
+                if !context
+                    reply.error = "unknown context"
+                else if !context.namespace
+                    reply.error = "namespace missing"
+                else {
+                    context.activator()
+                    reply.xmsg = "executed"
+                    reply.contextID = data.contextID
+                    if data.args && !(args = new(data.args).totuple)
+                        reply.error = "invalid arguments"
+                    else if !string(data.proc)
+                        reply.error = "invalid procedure"
+                    else {
+                        proc = compress(data.proc)
+                        reply.error = undefined
+                        reply.result = apply(proc, args)
+                        if context.namespace !== nsactive().0
+                        {                                                   // evaluation changed namespace
+                            context.namespace = nsactive().0
+                            context.activator = makeActivator()
+                        }
+                    }
+                }
+            }
+            else
+                call(onMessageHook, data)
+        } catch {
+            if true {
+                if tuple(exception)
+                    result = exception.toarray.map(function(x){tostring(x)}).join(" - ")
+                else
+                    result = tostring(exception)
+                reply.error = "exception: ".concat(result)
+            }
+        } finally {
+            restorens()
+        }
+        replier(reply)
+    }
+};
+
+
+/*
+ * TaskExecutor
+ *
+ *     Install an executor for remote evaluation in worker threads. This uses the OnMessage protocol
+ * available in the env_xxx.js Naan controllers. The return value is false if OnMessage is not there
+ * or true on success.
+ *
+ */
+
+closure TaskExecutor() {
+
+    // taskInstall
+    // Install the taskDispatcher, and reload on state load.
+    //
+    function taskInstall() {
+        if !js.t.OnMessage
+            return (false)                                                  // false if not a worker
+        js.t.OnMessage(taskDispatcher(js.t.ReplyMessage))
+    }()
+    LoadNotify(taskInstall)
+
+    // finis
+
+    true
+};
+
+
+/*
+ * TaskOnMessageHook
+ *
+ *     OK, this is a kludge, but you call this function to specify a handler proc when a message
+ * comes in that we don't understand.
+ *
+ */
+
+function TaskOnMessageHook(hook) {
+    onMessageHook = hook
+};
+
+
+/*
+ * taxInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function taxInit(local manifest) {
+
+    manifest = `(taskDispatcher, TaskExecutor, TaskOnMessageHook, taxInit)
+
+    Naan.module.build(module.id, "taskexec", function(modobj, compobj) {
+        require("./running.nlg").LiveImport()
+        compobj.manifest = manifest
+        modobj.exports.TaskExecutor = TaskExecutor
+        modobj.exports.TaskOnMessageHook = TaskOnMessageHook
+    })
+} ();

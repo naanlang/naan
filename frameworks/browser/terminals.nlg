@@ -1,0 +1,787 @@
+/*
+ * terminals.nlg
+ * Naanlib/frameworks/browser
+ *
+ *     Terminal access to Naan executors (execution instances.)
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * TermHost
+ *
+ *     Make a host debugger target.
+ *
+ */
+
+closure TermHost(track, api, name, workerID, options,
+    local target, nlregex, clientID, serverID)
+{
+    target = runningExecutors.ExecutorBase(track, "Host", name)
+    clientID = "DebugWorkers"
+    serverID = "Workers"
+    nlregex = RegExp("\\n", "g")
+    if !workerID
+        workerID = "myDebugWorker"
+    target.workerID = workerID
+    target.msgQueue = []
+    
+    // connect
+    // Connect with the host if not already connected.
+    closure connect(local pending) {
+        if target.ws
+            return
+        target.ws = xnew(js.w.WebSocket,"ws://".concat(js.w.location.host)) // ### use api parameter
+        pending = new(nonce)
+    
+        // onopen
+        // The WebSocket connection is now open.
+        target.ws.onopen = function onopen(e, local spawner) {
+            pending.signal(list(false, { ok: true }))
+            spawner = new(options.startup)
+            spawner.name = name
+            sendControl("spawn", spawner)
+        }
+
+        // onmessage
+        // A message was received from the worker via WebSockets.
+        
+        target.ws.onmessage = function onmessage(e, message, local msg) {
+            try {
+                message = new(js.w.JSON.parse(e.data))
+            } catch {
+                if true {
+                    debuglog("can't decode incoming ws message:", exception)
+                    return }
+            }
+            if message.respOp == "msgout" {
+                msg = message.payload
+                if msg.id == "spawned" || msg.id == "workerlist" || msg.id == "termination"
+                    return (hostWorkerUpdate(msg))
+                if msg.id != "targetout" {
+                    if msg.id == "status"
+                        target.lastStatus = milliseconds()
+                    if target.msgQueue {
+                        if msg.id != "status"
+                            target.msgQueue.push(msg)
+                        return  } }
+                target.doMessage(msg) }
+            else if message.respOp == "error"
+                debuglog("worker controller error:", ErrorString(message.payload[0]))
+            else if message.respOp == "linked"
+                future(function termLinked(){
+                    if !target.written
+                        target.term.WriteLn("(reconnected)")
+                }, 1000).run()
+            else
+                debuglog("unknown host response message:", message.respOp)
+        }
+        
+        // onerror
+        // An error occurred on the WebSocket connection.
+        target.ws.onerror = function onerror(e) {
+            pending.signal(list(Error("websocket failed", e)))
+            debuglog("ws error:", e)
+        }
+        
+        // onclose
+        // The WebSocket connection was closed.
+        target.ws.onclose = function onclose(e) {
+            debuglog("ws close:", e.code, e.reason)
+            target.execClosed(Error("socket closed", e.code, e.reason))
+            target.ws = false
+        }
+        
+        pending.wait()
+    }
+    
+    //
+    // hostWorkerUpdate
+    //
+    //     New workers created/discovered on this host.
+    //
+    function hostWorkerUpdate(msg, local localID) {
+    
+        // findWorker
+        //
+        function findWorker(testID, local instance) {
+            for instance in track.instances {
+                if instance.executor.hostWorkerMatch(api, testID)
+                    return (instance.executor)
+            }
+            false
+        }
+
+        if msg.id == "spawned" {
+            if !findWorker(msg.workerID)
+                TermHost(track, api, msg.name, msg.workerID)
+        }
+        else if msg.id == "termination"
+            track.delete(findWorker(msg.workerID))
+        else {
+            for localID in msg.workerIDs
+                if !findWorker(localID)
+                    TermHost(track, api, localID, localID)
+        }
+    }
+        
+    //
+    // hostWorkerMatch
+    //
+    //     True iff the specified information matches us.
+    //
+    target.hostWorkerMatch = function hostWorkerMatch(testApi, testID) {
+        testApi === api && testID == workerID
+    }
+
+    //
+    // doMessage
+    //
+    //     Process the specified undecoded message.
+    target.doMessage = function doMessage(msg) {
+        if msg.id == "textout" {
+            target.written = true
+            target.term.Write(msg.text.replace(nlregex, "\r\n")) }
+        else if msg.id == "debugtext" {
+            target.written = true
+            target.debugWrite(msg.text, msg.level) }
+        else if msg.id == "targetout"
+            target.execReceived(msg.data)
+        else if msg.id == "started"
+            { }
+        else if msg.id == "typed"
+            target.term.Write(msg.text.replace(nlregex, "\r\n"))
+        else if msg.id == "status"
+            target.statusCB(target, msg.status)
+        else if msg.id == "debugout"
+            target.debugger.debugData(target, msg.data)
+        else
+            debuglog("unknown host worker message:", msg.id)
+    }
+    
+    //
+    // sendControl
+    //
+    //     Send a message to the worker controller.
+
+    target.sendControl = function sendControl(workerOp, payload) {
+        target.ws.send(js.w.JSON.stringify({
+            clientID: clientID
+            serverID: serverID
+            workerID: target.workerID
+            workerOp: workerOp
+            payload: payload
+        }))
+    }
+    
+    //
+    // send
+    //
+    //     Send a message to the worker.
+    
+    target.send = function send(msg) {
+        sendControl("msgin", msg)
+    }
+
+    //
+    // oninterrupt
+    //
+
+    function oninterrupt() {
+        send({                                                              // send interrupt to worker
+            id: "interrupt"
+        })
+    }
+
+    //
+    // onreturn
+    //
+
+    function onreturn(local text) {
+        text = target.term.TakeText()
+        echotext(text)
+        send({                                                              // send user-entered text to worker
+            id: "keyline",
+            text: text
+        })
+    }
+    
+    // echotext
+    //
+    //     Echo text to other terminals.
+    
+    function echotext(text) {
+        sendControl("echo", {                                               // send user-entered text to worker
+            id: "typed",
+            text: "\x1b[90m\x1b[3m".concat(text, "\x1b[0m\n")               // dark-grey, italic
+        })
+    }
+    
+    // target.KeyText
+    //
+    //     Send text to the worker, with optional echo to terminal.
+    
+    target.KeyText = function KeyText(text, echo) {
+        if echo {
+            target.term.WriteLn(text.trim())
+            echotext(text.trim())
+        }
+        send({                                                              // send user-entered text to worker
+            id: "keyline",
+            text: text
+        })
+    }
+
+    //
+    // target.PostMessage
+    //
+    //     Post a message to the target.
+    //
+
+    target.PostMessage = function PostMessage(data) {
+        connect()
+        send({                                                              // send data to worker
+            id: "targetin",
+            data: data
+        })
+    }
+    
+    //
+    // target.DebugCmd
+    //
+    //     Post a debug command to the target.
+    //
+
+    target.DebugCmd = function DebugCmd(data) {
+        connect()
+        send({                                                              // send debug command to worker
+            id: "debugin",
+            data: data
+        })
+    }
+
+    //
+    // target.debugWrite
+    //
+    //     Write a debug message to the repl.
+    //
+    
+    target.debugWrite = function(text, level) {
+        if (level >= 5)
+            target.term.WriteLn(text, target.term.Cyan)                     // cyan for builtin logging
+        else if (level >= 4)
+            target.term.WriteLn(text, target.term.Blue)                     // blue for Naan function logging
+        else if (level >= 3)
+            target.term.WriteLn(text, target.term.Red)                      // light red for warnings
+        else if (level >= 2)
+            target.term.WriteLn(text, target.term.Green)                    // green for Naan.debug.debuglog logging
+        else
+            target.term.WriteLn(text, target.term.Red+target.term.Bold)     // heavy red for errors
+    }
+
+    //
+    // termAttach
+    //
+    //     A terminal and/or debugger was attached to our instance.
+    
+    target.termAttach = function termAttach(repl, db, statusCB, local msg) {
+        target.term = repl
+        target.debugger = db
+        target.statusCB = statusCB
+        if target.termSaved {
+            target.term.StateLoad(target.termSaved)
+            target.termSaved = false }
+        else
+            target.term.Reset()
+        target.debugger.attach(target)
+        while target.msgQueue.length > 0 {
+            for msg in target.msgQueue.splice(0)                            // all current messages
+                target.doMessage(msg)
+        }
+        target.msgQueue = false
+        target.term.On("interrupt", oninterrupt.proc)
+        target.term.On("return", onreturn.proc)
+        target.term.Focus()
+        connect()                                                           // ensure we are connected
+        target
+    }
+        
+    //
+    // termDetach
+    //
+    //     The terminal is being deattached from our instance.
+    
+    target.termDetach = function termDetach(repl, db) {
+        target.term.On("interrupt")
+        target.term.On("return")
+        target.msgQueue = []
+        target.debugger.detach(target)
+        target.termSaved = target.term.StateSave()
+        target.term.Reset()
+        target.statusCB = false
+        target.debugger = false
+        target.term = false
+    }
+        
+    // destroy
+    //
+    //     Destroy the execution instance.
+    
+    target.destroy = function destroy() {
+        track.delete(target)
+        termDetach()
+        sendControl("terminate", { })
+        target.ws.close(1000)                                               // 1000: normal close
+    }
+
+    track.add(target)
+    connect()                                                               // connect right away to start receiving messages
+
+    // finis
+
+    list(false, target)
+};
+
+
+/*
+ * TermLocal
+ *
+ *     Make a local debugger target, returning a standard (error, object) tuple.
+ *
+ */
+
+closure TermLocal(track, name, workerID, options,
+    local target, nlregex)
+{
+    if workerID == "NaanIDE" {
+        if !js.t
+            return (list(Error("Cannot access Local IDE executor")))
+        termInstallVirtualWatcher(track, js.t)
+        return (termIDE(track, name, workerID, js.t))                       // connect to IDE execution instance itself
+    }
+    if not js.w.Worker
+        return (list(Error("Local environment does not support workers")))
+    if dictionary(options)
+        options = new(options)
+    else
+        options = { }
+    target = runningExecutors.ExecutorBase(track, "Local", name)
+    nlregex = RegExp("\\n", "g")
+    target.workerID = workerID
+    target.worker = xnew(js.w.Worker, "env_webworker.js")
+    target.msgQueue = []
+
+    // onmessage
+    // A message was received from the worker.
+    
+    target.worker.onmessage = function(e, msg) {
+        msg = new(e.data)
+        if msg.id != "targetout" && msg.id != "loaded" {
+            if msg.id == "status"
+                target.lastStatus = milliseconds()
+            if target.msgQueue {
+                if msg.id != "status"
+                    target.msgQueue.push(msg)
+                return  } }
+        target.doMessage(msg)
+    }
+
+    // onerror
+    // The worker had an error.
+    
+    target.worker.onerror = function(e) {
+        target.execClosed(Error("instance error", e.message))
+    }
+
+    //
+    // oninterrupt
+    //
+
+    function oninterrupt() {
+        target.worker.postMessage({                                         // send interrupt to worker
+            id: "interrupt"
+        })
+    }
+
+    //
+    // onreturn
+    //
+
+    function onreturn() {
+        target.worker.postMessage({                                         // send user-entered text to worker
+            id: "keyline",
+            text: target.term.TakeText()
+        })
+    }
+        
+    // target.KeyText
+    //
+    //     Send text to the worker, with optional echo to terminal.
+    
+    target.KeyText = function KeyText(text, echo) {
+        if echo
+            target.term.WriteLn(text.trim())
+        target.worker.postMessage({                                         // send text to worker
+            id: "keyline",
+            text: text
+        })
+    }
+
+    //
+    // doMessage
+    //
+    //     Process the specified undecoded message.
+
+    target.doMessage = function doMessage(msg) {
+        if msg.id == "textout"
+            target.term.Write(msg.text.replace(nlregex, "\r\n"))
+        else if msg.id == "debugtext"
+            target.debugWrite(msg.text, msg.level)
+        else if msg.id == "targetout"
+            target.execReceived(msg.data)
+        else if msg.id == "status"
+            target.statusCB(target, msg.status)
+        else if msg.id == "debugout"
+            target.debugger.debugData(target, msg.data)
+        else if msg.id == "loaded" {
+            if !target.started
+                target.worker.postMessage({
+                    id: "start",
+                    state: false                                            // resume state, if we have any
+                    altcmd: options.startup.initcmds
+                })
+            target.started = true
+        }
+    }
+    
+    //
+    // target.DebugCmd
+    //
+    //     Post a debug command to the target.
+    //
+
+    target.DebugCmd = function DebugCmd(data) {
+        target.worker.postMessage({                                         // send data to worker
+            id: "debugin"
+            data: data
+        })
+    }
+
+    //
+    // target.PostMessage
+    //
+    //     Post a message to the target, if it has registered a listener.
+    //
+
+    target.PostMessage = function PostMessage(data) {
+        target.worker.postMessage({                                         // send data to worker
+            id: "targetin",
+            data: data
+        })
+    }
+    
+    //
+    // target.debugWrite
+    //
+    //     Write a debug message to the repl.
+    //
+    
+    target.debugWrite = function(text, level) {
+        if (level >= 5)
+            target.term.WriteLn(text, target.term.Cyan)                     // cyan for builtin logging
+        else if (level >= 4)
+            target.term.WriteLn(text, target.term.Blue)                     // blue for Naan function logging
+        else if (level >= 3)
+            target.term.WriteLn(text, target.term.Red)                      // light red for warnings
+        else if (level >= 2)
+            target.term.WriteLn(text, target.term.Green)                    // green for Naan.debug.debuglog logging
+        else
+            target.term.WriteLn(text, target.term.Red+target.term.Bold)     // heavy red for errors
+    }
+    
+    //
+    // termAttach
+    //
+    //     A terminal was attached to our instance.
+    
+    target.termAttach = function termAttach(repl, db, statusCB, local msg) {
+        target.term = repl
+        target.debugger = db
+        target.statusCB = statusCB
+        if target.termSaved {
+            target.term.StateLoad(target.termSaved)
+            target.termSaved = false }
+        else
+            target.term.Reset()
+        target.debugger.attach(target)
+        while target.msgQueue.length > 0 {
+            for msg in target.msgQueue.splice(0)                            // all current messages
+                target.doMessage(msg)
+        }
+        target.msgQueue = false
+        target.term.On("interrupt", oninterrupt.proc)
+        target.term.On("return", onreturn.proc)
+        target.term.Focus()
+        target
+    }
+        
+    //
+    // termDetach
+    //
+    //     The terminal is being deattached from our instance.
+    
+    target.termDetach = function termDetach() {
+        target.term.On("interrupt")
+        target.term.On("return")
+        target.msgQueue = []
+        target.debugger.detach(target)
+        target.termSaved = target.term.StateSave()
+        target.statusCB = false
+        target.debugger = false
+        target.term = false
+    }
+    
+    // destroy
+    //
+    //     Destroy the execution instance.
+    
+    target.destroy = function destroy() {
+        target.execClosed(Error("instance destroyed"))
+        track.delete(target)
+        termDetach()
+        target.worker.terminate()                                           // kill without saving
+        target.worker = false
+    }
+
+    track.add(target)
+
+    // finis
+
+    list(false, target)
+};
+
+
+/*
+ * findIDEtarget
+ *
+ *     Find a target for our IDE that matches the specified name, workerID, and naancont.
+ *
+ */
+
+closure findIDEtarget(track, name, workerID, naancont, local target) {
+    for target in track.enumlist()
+        if target.name == name && target.workerID == workerID && (!target.naancont || target.naancont === naancont)
+            return (target)
+    false
+};
+
+
+/*
+ * termIDE
+ *
+ *     Make an IDE debugger target. The Naan controller in this case, env_web.js, iterates through
+ * all connected terminals so we just have to provide unique connection object for it to talk with.
+ * This is used for both the IDE itself as well as any additional virtual website windows.
+ *
+ */
+
+closure termIDE(track, name, workerID, naancont, local target, connected) {
+    target = findIDEtarget(track, name, workerID, naancont)
+    if target {                                                             // new naancont on existing target
+        target.updateController(naancont)
+        return (target)
+    }
+    target = runningExecutors.ExecutorBase(track, "Local", name)
+    target.name = name
+    target.workerID = workerID
+    target.naancont = naancont
+    connected = []
+
+    //
+    // target.DebugCmd
+    //
+    //     Post a debug command to the target, ourselves.
+    //
+
+    target.DebugCmd = function DebugCmd(data) {
+        naancont.DispatchDebugger(data)
+    }
+
+    //
+    // target.PostMessage
+    //
+    //     Post a message to the target, ourselves.
+    //
+
+    target.PostMessage = function PostMessage(data) {
+        naancont.DispatchMessage(data)
+    }
+
+    // termAttach
+    //
+    // Create a closure for an attaching terminal.
+
+    target.termAttach = closure termAttach(term, db, statusCB, local connection, inbound) {
+        connection = new(object, this)
+
+        function oninterrupt() {
+            naancont.Interrupt(inbound)
+        }
+
+        function onreturn(local text) {
+            naancont.Return(term.TakeText(), inbound)
+        }
+    
+        function onstatus(status) {
+            statusCB(target, status)
+        }
+    
+        function onmessageout(data) {
+            target.execReceived(data)
+        }
+    
+        function ondebugout(data) {
+            db.debugData(target, data)
+        }
+        
+        connection.KeyText = function KeyText(text, echo) {                 // send text to instance
+            if echo
+                term.WriteLn(text.trim())                                   // echo to terminal
+            naancont.Return(text, inbound)
+        }
+
+        connection.termActive = function termActive(active) {
+            if inbound
+                inbound.active = active
+        }
+
+        connection.termDetach = function termDetach() {                     // disconnect the terminal
+            db.detach(target)
+            term.On("interrupt")
+            term.On("return")
+            if inbound
+                naancont.Detach(inbound)
+            connected = connected.filter(function(conn) { conn !== connection })
+        }
+
+        connection.popup = true                                             // we can handle multiple terminals
+
+        let (replstate) {
+            replstate = naancont.StateGet()
+            if (replstate)
+                term.StateLoad(replstate)
+            else
+                term.Reset()
+            term.On("interrupt", oninterrupt.proc)
+            term.On("return", onreturn.proc)
+            term.Focus()
+            inbound = xnew({
+                OnMessage: term.OnMessage
+                StateSave: term.StateSave
+                OnStatus: onstatus.proc
+                OnMessageOut: onmessageout.proc
+                OnDebugOut: ondebugout.proc
+            })
+            naancont.Attach(inbound)
+            connection.inbound = inbound
+            connection.db = db
+            connected.push(connection)
+            db.attach(target)
+        } ()
+        
+        // finis
+        connection
+    }
+    
+    // updateController
+    //
+    //     Update the naan controller on this target, which means updating for all the terminals.
+    
+    target.updateController = function updateController(newnc, local conn) {
+        naancont = newnc
+        target.naancont = newnc
+        for conn in connected {
+            if naancont {
+                naancont.Attach(conn.inbound)                               // tell the controller about terminals
+                conn.db.attach(target)                                      // re-attach since remote changed
+                conn.termActive()
+            } else
+                conn.db.detach(target)                                      // nothing left to debug
+        }
+        target.execReset()                                                  // reset our parent class
+    }
+    
+    // vsiteRefresh
+    //
+    //     The vsite upon which we are based has changed.
+    
+    target.vsiteRefresh = function vsiteRefresh(url_origin) {
+        naancont.VsiteRefresh(url_origin)
+    }
+    
+    // destroy
+    //
+    //     Destroy the execution instance.
+    
+    target.destroy = function destroy() {
+        target.execClosed(Error("instance destroyed"))
+        track.delete(target)
+    }
+
+    track.add(target)
+
+    // finis
+
+    list(false, target)
+};
+
+
+/*
+ * termInstallVirtualWatcher
+ *
+ * column positioning:                          //                          //                      !
+ *     Install a persistent watcher to note when virtual terminals come and go, and manage their
+ * execution target lifetimes.
+ *
+ */
+
+closure termInstallVirtualWatcher(track, naancont) {
+
+    function watchVsites(msg, local error, target) {
+        if msg.op == "VsiteOpen" {
+            `(error, target) = termIDE(track, msg.name, "NaanVsite", msg.naancont)
+            target.attention()
+        }
+        else if msg.op == "VsiteClose" {
+            target = findIDEtarget(track, msg.name, "NaanVsite", msg.naancont)
+            if target
+                target.updateController()
+        }
+    }
+    
+    runningExecutors.TaskOnMessageHook(watchVsites)
+};
+
+
+/*
+ * termInit
+ *
+ *     Initialize the debugger page.
+ *
+ */
+
+function termInit(local manifest) {
+
+    manifest = `(TermHost, TermLocal, findIDEtarget, termIDE, termInstallVirtualWatcher, termInit)
+
+    Naan.module.build(module.id, "terminals", function(modobj, compobj) {
+        require("./browser.nlg")
+        compobj.manifest = manifest
+        modobj.exports.TermLocal = TermLocal
+        modobj.exports.TermHost = TermHost
+    })
+} ();

@@ -1,0 +1,768 @@
+/*
+ * test_01_core.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2017-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Test Category 1 - Core
+ *
+ */
+
+RegisterTestCategory("core", [
+    [ "4+3;", "7" ],                                                    // generic first test
+
+    //
+    // booleans and/or undefined
+    //
+    
+    [ "false;", "" ],
+    [ "true;", "true" ],
+    [ "not true;", "false" ],
+    [ "not false;", "true" ],
+    [ "not undefined;", "true" ],
+
+    [ "false and false;", "false" ],
+    [ "false and true;", "false" ],
+    [ "true and false;", "false" ],
+    [ "true and true;", "true" ],
+    [ "undefined and false;", "undefined" ],
+    [ "false and undefined;", "false" ],
+    [ "undefined and undefined;", "undefined" ],
+    [ "undefined and true;", "undefined" ],
+    [ "true and undefined;", "undefined" ],
+    [ "true and print(\"yes\");", "yes|\"yes\"" ],
+
+    [ "false or false;", "false" ],
+    [ "false or true;", "true" ],
+    [ "true or false;", "true" ],
+    [ "true or true;", "true" ],
+    [ "undefined or false;", "false" ],
+    [ "false or undefined;", "undefined" ],
+    [ "undefined or undefined;", "undefined" ],
+    [ "undefined or true;", "true" ],
+    [ "true or undefined;", "true" ],
+    [ "true or print(\"yes\");", "true" ],
+
+    [ "aaa=true;", "true" ],
+    [ "false=true;", { errors: "attempt to modify constant false" } ],
+    [ "undefined=true;", { errors: "attempt to modify constant undefined" } ],
+    [ "true=true;", { errors: "can't modify NaanCore::true from Test-core" } ],
+
+    [ "lambda();", "false" ],
+    [ "lambda(lambda);", "true" ],
+    [ "lambda(unintern(\"lambda\"));", "true" ],
+
+    [ "car(`;);", ";" ],
+
+    //
+    // basic lists and dotted pairs
+    //
+    
+    [ "`();>", "false" ],
+    [ "`);>", ")" ],
+    [ "`(a `.);>", "(a `.)" ],
+    [ "`(a `. b);>", "(a `. b)" ],
+    [ "`(a ``);>", "(a ``)" ],
+    [ "`(a `();>", "(a `()" ],
+    [ "`(a `));>", "(a `))" ],
+    [ "`(a `,);>", "(a `,)" ],
+    [ "`(a . false);>", "(a)" ],
+    [ "`(a . b);>", "(a . b)" ],
+    [ "`(a b . c);>", "(a b . c)" ],
+    [ "`(a . (b c));>", "(a b c)" ],
+    [ "`((a b) . (c d));>", "((a b) c d)" ],
+    [ "`((a . b) . (c d));>", "((a . b) c d)" ],
+    [ "`((a b) . (c . d));>", "((a b) c . d)" ],
+
+
+    //
+    // assignment
+    //
+    
+    [ "aa=13;", "13" ],
+    [ "aa;", "13" ],
+    [ "assign(bb, 23);", "23" ],
+    [ "bb;", "23" ],
+    [ "`(aa,bb) = `(17,19);>", "(17 19)" ],
+    [ "aa;", "17" ],
+    [ "bb;", "19" ],
+    [ "`(aa,bb,cc) = `(29);>", "(29)" ],
+    [ "aa;", "29" ],
+    [ "bb;", "false" ],
+    [ "cc;", "false" ],
+    [ "`(aa,bb,cc) = `31;", "31" ],
+    [ "aa;", "31" ],
+    [ "bb;", "31" ],
+    [ "cc;", "31" ],
+    [ "`(aa,bb,cc) = `(aa,bb,cc);>", "(aa bb cc)" ],
+    [ "assign(list(`aa,`bb), `(37 39));>", "(37 39)" ],
+    [ "aa;", "37" ],
+    [ "bb;", "39" ],
+    [ "aa=new(array).concat(1,2,3);", "[1, 2, 3]" ],
+    [ "assign(aa, 4);", { errors: "attempt to modify constant Array[3]" } ],
+    
+    
+    //
+    // adjusters
+    //
+    
+    [ "preadjust(bb,`+,1);", "40" ],
+    [ "bb;", "40" ],
+    [ "postadjust(bb,`+,1);", "40" ],
+    [ "bb;", "41" ],
+    [ "oo={aa:0};", "{ aa: 0 }" ],
+    [ "preadjust(oo.aa,`+,1);", "1" ],
+    [ "oo.aa;", "1" ],
+    [ "postadjust(oo.aa,`+,1);", "1" ],
+    [ "oo.aa;", "2" ],
+    [ "preadjust(`(a,b),`+,1);", "false" ],
+    [ "preadjust(false,`+,1);", { errors: "attempt to modify constant false" } ],
+    
+    
+    //
+    // symbols
+    //
+    
+    [ "exists(`$);", "$" ],
+    [ "exists(\"$\");", "$" ],
+    [ "exists(`a);", "a" ],
+    [ "exists(\"a\");", "a" ],
+    [ "exists(RegExp(\"ss+\"));>", "(assign)" ],
+    [ "exists(RegExp(\"adj\"), car(nsactive()));>",
+        "(preadjust postadjust)" ],
+    [ "exists(RegExp(\"z\"), car(nsactive(true)));>", "(NaanRoot::zero)" ],
+
+
+    //
+    // accessors
+    //
+    
+    [ "A=B=C=D=E=F=G=H=I=J=K=L=M=N=O=P=Q=R=1;", "1" ],
+
+    [ "alist=`(A,B, (C D E), F);>", "(A B (C D E) F)" ],
+    [ "`alist;", "alist" ],
+    [ "quote(alist);", "alist" ],
+    [ "first(alist);>", "A" ],
+    [ "ffirst(alist);>", "1" ],
+    [ "second(alist);>", "B" ],
+    [ "fsecond(alist);>", "1" ],
+    [ "third(alist);>", "(C D E)" ],
+    [ "rest(alist);>", "(B (C D E) F)" ],
+    [ "rrest(alist);>", "((C D E) F)" ],
+    [ "rrrest(alist);>", "(F)" ],
+
+    [ "blist=`(((((A),B),((C),D),E),((F),G,H),(I),J),((K,L),(M),N),(O,P),Q,R);>",
+        "(((((A) B) ((C) D) E) ((F) G H) (I) J) ((K L) (M) N) (O P) Q R)" ],
+    [ "car(blist);>", "((((A) B) ((C) D) E) ((F) G H) (I) J)" ],
+    [ "cdr(blist);>", "(((K L) (M) N) (O P) Q R)" ],
+    [ "caar(blist);>", "(((A) B) ((C) D) E)" ],
+    [ "cadr(blist);>", "((K L) (M) N)" ],
+    [ "cdar(blist);>", "(((F) G H) (I) J)" ],
+    [ "cddr(blist);>", "((O P) Q R)" ],
+    [ "caaar(blist);>", "((A) B)" ],
+    [ "caadr(blist);>", "(K L)" ],
+    [ "cadar(blist);>", "((F) G H)" ],
+    [ "caddr(blist);>", "(O P)" ],
+    [ "cdaar(blist);>", "(((C) D) E)" ],
+    [ "cdadr(blist);>", "((M) N)" ],
+    [ "cddar(blist);>", "((I) J)" ],
+    [ "cdddr(blist);>", "(Q R)" ],
+    [ "caaaar(blist);>", "(A)" ],
+    [ "caaadr(blist);>", "K" ],
+    [ "caadar(blist);>", "(F)" ],
+    [ "caaddr(blist);>", "O" ],
+    [ "cadaar(blist);>", "((C) D)" ],
+    [ "cadadr(blist);>", "(M)" ],
+    [ "caddar(blist);>", "(I)" ],
+    [ "cadddr(blist);>", "Q" ],
+    [ "cdaaar(blist);>", "(B)" ],
+    [ "cdaadr(blist);>", "(L)" ],
+    [ "cdadar(blist);>", "(G H)" ],
+    [ "cdaddr(blist);>", "(P)" ],
+    [ "cddaar(blist);>", "(E)" ],
+    [ "cddadr(blist);>", "(N)" ],
+    [ "cdddar(blist);>", "(J)" ],
+    [ "cddddr(blist);>", "(R)" ],
+
+    //
+    // tuple paths
+    //
+    
+    [ "tetu = `(a,(3,4),c . d);>", "(a (3 4) c . d)" ],
+    [ "tuplepath(tetu, tetu)", "false" ],
+    [ "tuplepath(tetu, tetu.0)", "(0)" ],
+    [ "tuplepath(tetu, tetu.-1)", "(-1)" ],
+    [ "tuplepath(tetu, tetu.1)", "(1)" ],
+    [ "tuplepath(tetu, tetu.-2)", "(-2)" ],
+    [ "tuplepath(tetu, tetu.2)", "(2)" ],
+    [ "tuplepath(tetu, tetu.-3)", "(-3)" ],
+    [ "tuplepath(tetu, tetu.3)", "(-3)" ],
+    [ "tuplepath(tetu, tetu.-4)", "(-3)" ],
+    [ "tuplepath(tetu, tetu.-5)", "(-3)" ],
+    [ "tuplepath(tetu, tetu.1.0)", "(1, 0)" ],
+    [ "tuplepath(tetu, tetu.1.-1)", "(1, -1)" ],
+    [ "tuplepath(tetu, tetu.1.1)", "(1, 1)" ],
+
+
+    //
+    // builtins
+    //
+    
+    [ "member(apple, `(grape, apple, plum));>", "(apple plum)" ],
+    [ "member(apples, `(grape, apple, plum));", "false" ],
+
+    [ "unicode(0x5a);", "\"Z\"" ],
+    [ "unicode(\"Z\");", "0x5a" ],
+    [ "unicode(0x2609);", "\"☉\"" ],
+    [ "unicode(\"☉\");", "0x2609" ],
+    [ "unicode(0x9962);", "\"饢\"" ],                                   // "persian flatbread", i.e. naan
+    [ "unicode(\"饢\");", "0x9962" ],
+    [ "unicode(0x1f35e);", "\"🍞\"" ],
+    [ "unicode(\"🍞\");", "0x1f35e" ],
+    [ "unicode(0x1f95c);", "\"🥜\"" ],                                  // peanut, UNICODE 9.0 2016
+    [ "unicode(\"🥜\");", "0x1f95c" ],
+
+    //
+    // special operators
+    //
+    
+    [ "eval(`(+ 4 3));", "7" ],
+    
+    [ "apply(`+, `(4 3));", "7" ],
+    
+    [ "call(car(`+), 4, 3);", "7" ],
+    [ "call(getproc(`+), 4, 3);", "7" ],                                // ensures that call takes a builtin as function
+    
+    [ "list();>", "false" ],
+    [ "list(3, 4, 5, `(6 7));>", "(3 4 5 (6 7))" ],
+
+    [ "apply(`and);", "true" ],
+    [ "apply(`and, list(true));", "true" ],
+    [ "apply(`and, list(false));", "false" ],
+    [ "true and true;", "true" ],
+    [ "true and false;", "false" ],
+    [ "false and true;", "false" ],
+    [ "false and false;", "false" ],
+    [ "0 and 1;", "1" ],
+    [ "false and print(3);", "false" ],
+    [ "true and print(3);", "3|3" ],
+   
+    [ "apply(`or);", "false" ],
+    [ "apply(`or, list(true));", "true" ],
+    [ "apply(`or, list(false));", "false" ],
+    [ "true or true;", "true" ],
+    [ "true or false;", "true" ],
+    [ "false or true;", "true" ],
+    [ "false or false;", "false" ],
+    [ "0 or 1;", "0" ],
+    [ "false or print(3);", "3|3" ],
+    [ "true or print(3);", "true" ],
+    
+    [ "loop { print(6), if true break };", "6|true" ],
+
+    [ "false=true;", { errors: "attempt to modify constant false" } ],
+    [ "print(testcore=`testcore);", "testcore|testcore" ],
+    [ "print(testcore=42);", "42|42" ],
+ 
+    [ "cond();", { errors: "cond( requires if expression at (1, 7) found )" } ],
+    [ "quote(cond(if false 3 else if true 4));>", "(cond ((identity false) 3) ((identity true) 4))" ],
+    [ "cond(if false 3 else if true 4);", "4" ],
+    [ "cond (if 1 and\n 2, 3);", "3" ],
+    [ "cond(print(false),print(\"hi\"));",
+        { errors: "cond( requires if expression at (1, 7) found print" } ],
+    
+    [ "body();", "false" ],
+    [ "quote(body(if false 3 else if true 4));>", "(body ((identity false) 3) ((identity true) 4))" ],
+    [ "body(if false 3 else if true 4);", "4" ],
+    [ "body(print(\"hi\"), print(\" there\"),4+3);>", "hi there|7" ],
+    [ "body(print(false),print(\"hi\"));", "falsehi|\"hi\"" ],
+
+    [ "push();>", { errors: "attempt to modify constant false" } ],
+    [ "push(true);>", { errors: "attempt to modify constant false" } ],
+    [ "push(true, 3);>", "false" ],
+    [ "testcore=false;", "false" ],
+    [ "push(11, testcore);>", "(11)" ],
+    [ "push(12, testcore);>", "(12 11)" ],
+    [ "push(`(a b c), testcore);>", "((a b c) 12 11)" ],
+
+    [ "testcore.1;", "12" ],
+    [ "testcore.2;", "11" ],
+    [ "testcore.3;", "false" ],
+    [ "testcore.0;>", "(a b c)" ],
+    [ "testcore.0.1;>", "b" ],
+
+    //
+    // property functions
+    //
+    
+    [ "get();", "false" ],
+    [ "get(false);", "false" ],
+    [ "get(false);", "false" ],
+    [ "put();", { errors: "attempt to modify constant false" } ],
+    [ "put(false, true, 9);", { errors: "attempt to modify constant false" } ],
+    [ "cdr(false);", "false" ],
+    [ "testcore=`testcore;", "testcore" ],
+    [ "replacer(testcore, false);", "testcore" ],
+    [ "cdr(testcore);>", "false" ],
+    [ "put(testcore, \"abc\", 8);", "8" ],
+    [ "get(testcore, \"abc\");", "8" ],
+    [ "cdr(testcore);>", "Dictionary{1}" ],
+    [ "totuple(cdr(testcore));>", "((\"abc\" . 8))" ],
+    [ "put(testcore, true, 9);", "9" ],
+    [ "get(testcore, true);", "9" ],
+    [ "cdr(testcore);>", "Dictionary{2}" ],
+    [ "totuple(cdr(testcore));>", "((\"abc\" . 8) (\"true\" . 9))" ],
+
+    [ "put(testcore, true, 9);", "9" ],
+    [ "totuple(cdr(testcore));>", "((\"abc\" . 8) (\"true\" . 9))" ],
+    [ "put(testcore, true, false);", "false" ],
+    [ "totuple(cdr(testcore));>", "((\"abc\" . 8) (\"true\"))" ],
+
+
+    //
+    // function definitions
+    //
+    
+    [ "quote(function& (x,y) { x+y });>", "(function\\& lambda (x y) (+ x y))" ],
+    [ "function (x,y) { x+y };>", "(function lambda (x y) (+ x y))" ],
+    [ "function (x,y) { x+y }(4,3);", "7" ],
+    [ "(function (x,y) { x+y })(4,3);", "7" ],
+    [ "function temp(ex1, lex1) { ex1+pop(lex1), print(lex1), lex1 };", "temp" ],
+    [ "temp.proc;>", "(function temp (ex1 lex1) (+ ex1 (pop lex1)) (print lex1) lex1)" ],
+    [ "interned(temp);>", "temp" ],
+    [ "interned(temp.proc.1);>", "false" ],
+    [ "temp(2, `(1 2 3));>", "(2 3)|(2 3)" ],
+    [ "function (ex1, lex1) { ex1+pop(lex1), print(lex1), lex1 }(2, `(1 2 3));>", "(2 3)|(2 3)" ],
+    [ "quote(function (a)\n { f(b)-\ng(c) * h(d)\n });>", "(function lambda (a) (- (f b) (* (g c) (h d))))" ],
+    [ "quote(function (a)\n { f(b)\n-g(c) * h(d)\n });>", "(function lambda (a) (- (f b) (* (g c) (h d))))" ],
+    
+    [ "tempo = temp.proc;>", "(function temp (ex1 lex1) (+ ex1 (pop lex1)) (print lex1) lex1)" ],
+    [ "function temp(ex1) { ex1 * 2 };", "==> redefined: temp|temp" ],
+    [ "temp(4);", "8" ],
+    [ "tempo(2, `(1,2,3));>", "(2 3)|(2 3)" ],
+    
+    [ "apply(`+,list(2,3));", "5" ],
+    [ "apply(getproc(`+),list(4,5));", "9" ],
+    [ "call(`+,5,6);", "11" ],
+    [ "call(getproc(`+),6,7);", "13" ],
+    [ "putproc(tost, temp);", "temp"],
+    [ "tost(5);", "10"],
+    [ "getproc(tost);", "temp"],
+    [ "tost.proc;", "temp"],
+    [ "putproc(tost, tost);", "tost"],
+    [ "tost(5);", "false"],
+
+
+    //
+    // nested functions
+    //
+    
+    [ "function nesty1() { function inner(x) { x }, inner(7) };", "nesty1" ],
+    [ "nesty1();", "7" ],
+    [ "function nesty2() { inner(5), function inner(x) { x }, inner(7) };", "nesty2" ],
+    [ "nesty2();", "7" ],
+    [ "function test1(a, b) { function inner() { print(\"a=\", a) }, inner(), if a<2 { test1(a+1), inner() } else inner() };", "test1" ],
+    [ "test1(0);", "a=0a=1a=2a=2a=1a=0|0" ],
+    [ "function test2(a, b) { function inner2() { print(\"a=\", a) }, inner2(), if a<2 { test2(a+1), inner2() } else inner2() };", "test2" ],
+    [ "test2(0);", "a=0a=1a=2a=2a=1a=0|0" ],
+    [ "closure test3(a, b) { function inner() { print(\"a=\", a) }, inner(), if a<2 { test3(a+1), inner() } else inner() };", "test3" ],
+    [ "test3(0);", "a=0a=1a=2a=2a=1a=0|0" ],
+    [ "function () { function t(a) { print(a) }, t(2) }();>", "2|2" ],
+    
+    [ "apply(function(x) { closure() { print(x) } }(33),`(22));", "x|x" ],
+    [ "apply(closure(x) { function() { print(x) } }(33),`(22));", "33|33" ],
+
+    [ "function(b) { function(a) { print(\"a-\",a) }(b) }(9);", "a-9|9" ],
+    [ "function testb(b) { function(a) { print(\"a-\",a) }(b) };", "testb" ],
+    [ "function testc() { testb(c) };", "testc" ],
+    [ "testc();", "a-c|c" ],
+    [ "closure (c) { testc() }(4);", "a-c|c" ],
+    [ "closure (c) { function(c) { print(c), testc() }(5) }();", "5a-c|c" ],
+    [ "closure (c) { function(d) { print(d), testc() }(6) }(7);", "6a-c|c" ],
+    [ "eval(`(\"-\" 4 3));", "(\"-\", 4, 3)" ],
+    [ "$$=closure (c) { function(d) { print(c, \"-\", d) } }(7);>",
+        "(function lambda (d) (print c \"-\" d))" ],
+    [ "call($$,3);", "7-3|3" ],
+    
+    [ "$$=function (a) { innert(13), function innert(b) { print(\"b-\", b) }, a };>",
+        "(function lambda (a) (innert 13) (function innert (b) (print \"b-\" b)) a)" ],
+    [ "call($$,3);", "b-13|3" ],
+    [ "innert(7);", "(innert, 7)" ],
+    
+    [ "closure (a) { function inner(b) { totuple(cdr(inner)) }() }(55);>", "((\".parent\" . lambda))" ],
+    [ "closure (a) { function inner(b, local par, var) { par=get(inner,\\.parent), var = getproc(par).2.0, list(par, var, car(var)) }() }(55);>", "(lambda a 55)" ],
+
+
+    //
+    // catch/throw/finally
+    //
+    
+    [ "try { print(\"try\") } finally { print(\"finally\") };", "tryfinally|\"try\"" ],
+    [ "throw(\"badness\");", { errors: "exception: badness" } ],
+    [ "function looper(x) { x = 1, loop { x = x+1, print(x), spaces(1), if x > 3 throw(done) } };", "looper" ],
+    [ "looper();", { errors: "exception: done", text: "2 3 4" } ],
+    [ "try { looper() } catch { if true { print(\"caught: \"), printline(exception), \"xo\" } } finally { printline(cleanup) };",
+        "2 3 4 caught: done|cleanup|\"xo\"" ],
+    [ "try { looper() } catch { if true { print(\"caught: \"), printline(exception), \"xo\" } } finally { throw(3) };",
+        { errors: "exception: 3", text: "2 3 4 caught: done" } ],
+    [ "try { looper() } catch { if true { print(\"caught: \"), printline(exception), \"xo\" } } finally { printline(cleanup) };",
+        "2 3 4 caught: done|cleanup|\"xo\"" ],
+    [ "try { looper() } catch { if false { print(\"caught: \"), printline(exception), \"xo\" } } finally { printline(cleanup) };",
+        { errors: "exception: done", text: "2 3 4 cleanup" } ],
+    [ "try { looper() } catch { if false { print(\"caught: \"), printline(exception), \"xo\" } } finally { throw(3), printline(cleanup) };",
+        { errors: "exception: 3", text: "2 3 4" } ],
+    [ "try { throw(blah) } catch { if true try { throw(needer) } catch { if true exception } };",
+        "needer" ],
+    [ "try { print(hello), spaces(1) } finally { print(world) };",
+        "hello world|6" ],
+    [ "function tester() { try { looper() } finally { print(\"tester clean\") } };",
+        "tester" ],
+    [ "tester();",
+        { errors: "exception: done", text: "2 3 4 tester clean" } ],
+    [ "try { tester() } catch { if true { print(\"caught: \"), printline(exception), \"xo\" } } finally { printline(cleanup) };",
+        "2 3 4 tester cleancaught: done|cleanup|\"xo\"" ],
+
+    
+    //
+    // return
+    //
+    
+    [ "return(33);", "33" ],
+    [ "function(x) { loop { loop { return(55) } } }();", "55" ],
+    [ "function(x) { loop { loop { 44, return } } }();", "44" ],
+    [ "function(x) { loop { loop { 3+2, return } } }();", "5" ],
+    
+    [ "function testret x { loop { loop { return(77) } } };", "testret" ],
+    [ "testret();", "77" ],
+
+
+    //
+    // objects
+    //
+    
+    [ "new();", "false" ],
+    [ "testo=new(object);", "Object{0}" ],
+    [ "testo.a=3;", "3" ],
+    [ "testo;", "Object{1}" ],
+    [ "testo.b=4;", "4" ],
+    [ "b=a;", "a" ],
+    [ "testo.b;", "4" ],
+    [ "testo;", "Object{2}" ],
+    [ "totuple(testo);>", "((\"a\" . 3) (\"b\" . 4))" ],
+    [ "testo1=new(testo);", "Object{2}" ],
+    [ "totuple(testo1);>", "((\"a\" . 3) (\"b\" . 4))" ],
+    [ "testo1.b=5;", "5" ],
+    [ "testo.b;", "4" ],
+    [ "testo.\"b\";", "4" ],
+    [ "xget(testo,\"b\");", "4" ],
+    [ "xget(testo,b);", "3" ],              // b has value `a, and test.a is 3
+    [ "testo.f = function(x) { x+1 };>", "(function lambda (x) (+ x 1))" ],
+    [ "testo.f(5);", "6" ],
+    [ "apply(deref(testo, \"f\"), list(6));", "7" ],
+    
+    [ "testo.length = 5;", "5" ],
+    [ "testo.length;", "5" ],
+    [ "length(testo);", "4" ],
+    [ "xget(testo, length);", "5" ],
+    [ "xkeys(testo);>", "(\"a\" \"b\" \"f\" \"length\")" ],
+    [ "totuple(testo);>", "((\"a\" . 3) (\"b\" . 4) (\"f\" function lambda (x) (+ x 1)) (\"length\" . 5))" ],
+
+    [ "testo1.4=c;", "c" ],
+    [ "testo1.4;", "c" ],
+    
+    [ "this = true;", { errors: "can't modify NaanCore::this from Test-core" } ],
+
+    [ "joe={};", "{ }" ],
+    [ "joe.sam=function(x) { print(x, \"|\", keys(joe)) };>", "(function lambda (x) (print x \"|\" (keys joe)))" ],
+    [ "joe.sam(joe);", "Dictionary{1}|(sam)|(\"sam\")" ],
+    [ "joe.nevil=function nevil x { print(x, \"|\", keys(joe)) };", "nevil" ],
+    [ "joe.nevil(joe);", "(Dictionary{2})|(sam nevil)|(\"sam\", \"nevil\")" ],
+    [ "joe.bill=getproc(`cons);", "[Builtin cons]" ],
+    [ "joe.bill(3,4);>", "(3 . 4)" ],
+    [ "joe;", "{\n"
+        "    sam  : function (x) {\n"
+        "        print(x, \"|\", keys(joe))\n"
+        "    },\n"
+        "    nevil: nevil,\n"
+        "    bill : [Builtin cons] }" ],
+    
+    [ "bobby={};", "{ }" ],
+    [ "bobby.sue = 4;", "4" ],
+    [ "bobby.billy=function(y) { print(y, keys(bobby),\"/\"), joe.sam(bobby), print(\"/\", keys(bobby)) };",
+        "function (y) {\n"
+        "    print(y, keys(bobby), \"/\")\n"
+        "    joe.sam(bobby)\n"
+        "    print(\"/\", keys(bobby))\n"
+        "}" ],
+    [ "bobby.sue=function sue yy { print(yy, keys(bobby), \"/\"), joe.sam(bobby), print(\"/\", keys(bobby)) };", "sue" ],
+    [ "bobby.billy(33);", "33(sue billy)/Dictionary{2}|(sam nevil bill)/(sue billy)|(\"sue\", \"billy\")" ],
+    [ "bobby.sue(44);", "(44)(sue billy)/Dictionary{2}|(sam nevil bill)/(sue billy)|(\"sue\", \"billy\")" ],
+    [ "keys(bobby);>", "(\"sue\" \"billy\")" ],
+    
+    
+    //
+    // object getters
+    //
+    
+    [ "oo=new(object);", "Object{0}" ],
+    [ "oo['..prop'] = function(value) { oo.value };>", "(function lambda (value) (`. oo value))" ],
+    [ "oo['.=prop'] = function(value) { oo.value = value };>", "(function lambda (value) (Lib::set\\. oo (`` value) value))" ],
+    [ "oo.prop = 8;", "8" ],
+    [ "oo.prop;", "8" ],
+    [ "oo['prop'] = 9;", "9" ],
+    [ "oo['prop'];", "9" ],
+    [ "xget(oo, 'prop');", "false" ],
+    [ "xset(oo, 'value', 10);", "10" ],
+    [ "xget(oo, 'value');", "10" ],
+    [ "oo.prop;", "10" ],
+    [ "xset(oo, 'prop', 11);", "11" ],
+    [ "oo.prop;", "11" ],
+    [ "oo.value;", "10" ],
+    [ "oo.*;", '("..prop", ".=prop", "value", "prop")' ],
+
+
+    //
+    // object hooks
+    //
+    
+    [ "oo=new(object);", "Object{0}" ],
+    [ "oo.v=4;", "4" ],
+    [ "oo.\\.negate = function \\.negate(o) { printline(\".negate \", o, \" \", o.v), -o.v };", "\\.negate" ],
+    [ "-oo;",
+        ".negate Object{2} 4|-4" ],
+
+    [ "oo.\\.plus = function \\.plus vv { printline(\".plus \", vv), \\.plus };", "\\.plus" ],
+    [ "oo + 5;",
+        ".plus (Object{3} 5)|\\.plus" ],
+    [ "5 + oo;",
+        ".plus (5 Object{3})|\\.plus" ],
+    [ "plus(oo);", "Object{3}" ],
+
+    [ "oo.\\.difference = function \\.difference vv { printline(\".difference \", vv), \\.difference };", "\\.difference" ],
+    [ "oo - 6;",
+        ".difference (Object{4} 6)|\\.difference" ],
+    [ "6 - oo;",
+        ".difference (6 Object{4})|\\.difference" ],
+    [ "-oo;",
+        ".negate Object{4} 4|-4" ],
+    [ "difference(oo);",
+        ".negate Object{4} 4|-4" ],
+    
+    [ "oo.\\.times = function \\.times vv { printline(\".times \", vv), \\.times };", "\\.times" ],
+    [ "oo * 7;",
+        ".times (Object{5} 7)|\\.times" ],
+    [ "7 * oo;",
+        ".times (7 Object{5})|\\.times" ],
+    
+    [ "oo.\\.quotient = function \\.quotient vv { printline(\".quotient \", vv), \\.quotient };", "\\.quotient" ],
+    [ "oo / 8;",
+        ".quotient (Object{6} 8)|\\.quotient" ],
+    [ "8 / oo;",
+        ".quotient (8 Object{6})|\\.quotient" ],
+    
+    [ "oo.\\.modulo = function \\.modulo vv { printline(\".modulo \", vv), \\.modulo };", "\\.modulo" ],
+    [ "mod(oo, 9);",
+        ".modulo (Object{7} 9)|\\.modulo" ],
+    [ "mod(9, oo);",
+        ".modulo (9 Object{7})|\\.modulo" ],
+    
+    [ "oo.\\.divide = function \\.divide vv { printline(\".divide \", vv), \\.divide };", "\\.divide" ],
+    [ "divide(oo, 10);",
+        ".divide (Object{8} 10)|\\.divide" ],
+    [ "divide(10, oo);",
+        ".divide (10 Object{8})|\\.divide" ],
+    
+    [ "oo.\\.greater = function \\.greater vv { printline(\".greater \", vv), \\.greater };", "\\.greater" ],
+    [ "oo > 11;",
+        ".greater (Object{9} 11)|\\.greater" ],
+    [ "11 > oo;",
+        ".greater (11 Object{9})|\\.greater" ],
+    
+    [ "oo.\\.lesser = function \\.lesser vv { printline(\".lesser \", vv), \\.lesser };", "\\.lesser" ],
+    [ "oo < 12;",
+        ".lesser (Object{10} 12)|\\.lesser" ],
+    [ "12 < oo;",
+        ".lesser (12 Object{10})|\\.lesser" ],
+    
+    [ "oo.\\.tofloat = function \\.tofloat vv { printline(\".tofloat \", vv), \\.tofloat };", "\\.tofloat" ],
+    [ "tofloat(oo);",
+        ".tofloat (Object{11})|\\.tofloat" ],
+
+    [ "oo.\\.numeric = function \\.numeric vv { printline(\".numeric \", vv), \\.numeric };", "\\.numeric" ],
+    [ "numeric(oo, 14);",
+        ".numeric (Object{12} 14)|\\.numeric" ],
+    [ "numeric(14, oo);",
+        ".numeric (14 Object{12})|\\.numeric" ],
+    [ "numeric(14, oo, 15);",
+        ".numeric (14 Object{12} 15)|\\.numeric" ],
+
+    [ "oo.\\.preadjust = function \\.preadjust vv { printline(\".preadjust \", vv), \\.preadjust };", "\\.preadjust" ],
+    [ "oo.\\.postadjust = function \\.postadjust vv { printline(\".postadjust \", vv), \\.postadjust };", "\\.postadjust" ],
+    [ "preadjust(oo, `+, 1);",
+        ".preadjust (Object{14} + 1)|\\.preadjust" ],
+    [ "postadjust(oo, `+, 1);",
+        ".postadjust (Object{14} + 1)|\\.postadjust" ],
+    [ "preadjust(oo.v, `+, 1);", "5" ],
+    [ "postadjust(oo.v, `+, 1);", "5" ],
+    [ "oo.v;", "6" ],
+
+
+    //
+    // arrays
+    //
+    
+    [ "new();", "false" ],
+    [ "testa=new(array);", "[]" ],
+    [ "testa.0=2;", "2" ],
+    [ "testa;", "[2]" ],
+    [ "totuple(testa);>", "(2)" ],
+    [ "testa.2=5;", "5" ],
+    [ "testa.2;", "5" ],
+    [ "testa.1;", "false" ],
+    [ "totuple(testa);>", "(2 false 5)" ],
+    [ "testa1=new(testa);>", "Array[3]" ],
+    [ "totuple(testa1);>", "(2 false 5)" ],
+    [ "testa1.2=6;", "6" ],
+    [ "testa1.1;", "false" ],
+    [ "testa.2;", "5" ],
+    [ "xget(testa,testa.0);", "5" ],                                    // testa.0 is 2, so this is returning testa.2, which is 5
+    [ "xget(testa,length);", "3" ],
+    [ "testa.length;", "3" ],
+    [ "testa.length = 4;", "4" ],
+    [ "testa.length;", "4" ],
+    [ "xget(testa,length);", "4" ],
+    [ "testa.3;", "false" ],
+    [ "totuple(testa);>", "(2 false 5 undefined)" ],
+    
+    [ "totuple(testc = new(array).concat(1, 3, 5, 7, 9));>", "(1 3 5 7 9)" ],
+    [ "totuple(testc.copyWithin(0,4));>", "(9 3 5 7 9)" ],
+    [ "testc.pop();", "9" ],
+    [ "totuple(testc);>", "(9 3 5 7)" ],
+    [ "testc.push(9, 1);", "6" ],
+    [ "totuple(testc.reverse());>", "(1 9 7 5 3 9)" ],
+    [ "testc.shift();>", "1" ],
+    [ "totuple(testc.slice(1,3));>", "(7 5)" ],
+    [ "totuple(testc.sort(function(a,b) { a-b }));>", "(3 5 7 9 9)" ],
+    [ "totuple(testc.splice(-1, 1, 2, 4, 6, 8));>", "(9)" ],
+    [ "totuple(testc);>", "(3 5 7 9 2 4 6 8)" ],
+    [ "testc.unshift(0, 1);", "10" ],
+    [ "totuple(testc.sort(function(a,b) { a-b }));>", "(0 1 2 3 4 5 6 7 8 9)" ],
+    [ "totuple(testc.fill(`x, 1, 9));>", "(0 x x x x x x x x 9)" ],
+    
+    [ "(acc=\"\") and testc.every(function(e,i,a) { acc=strcat(acc,e) }) and print(acc);", "0xxxxxxxx9|\"0xxxxxxxx9\"" ],
+    [ "totuple(testc.filter(function(e,i,a) { numeric(e) }));>", "(0 9)" ],
+    [ "testc.find(function(e,i,a) { printline(e, \"/\", i, \"/\", a),if e eq x { } });",
+            "0/0/Array[10]|x/1/Array[10]|x" ],
+    [ "testc.findIndex(function(e,i,a) { if e eq x { } });", "1" ],
+    [ "testc.forEach(function(e,i,a) { print(e) });", "0xxxxxxxx9|undefined" ],
+    [ "totuple(testc.map(function(e,i,a) { if e eq x `* else e }));>", "(0 * * * * * * * * 9)" ],
+    [ "testc.some(function(e,i,a) { printline(e, \"/\", i, \"/\", a), if e eq x { } });",
+            "0/0/Array[10]|x/1/Array[10]|true" ],
+
+    [ "totuple(Naan.array.arraycall(testc, splice, 1, 8, 1, 2, 3, 4, 5, 6, 7, 8));>", "(x x x x x x x x)" ],
+    [ "totuple(Naan.array.arraycall(testc, sort, function(a,b) { b-a }));>", "(9 8 7 6 5 4 3 2 1 0)" ],
+
+    [ "testc.indexOf(8);", "1" ],
+    [ "testc.lastIndexOf(8);", "1" ],
+    [ "testc.indexOf(8,2);", "-1" ],
+    [ "testc.lastIndexOf(8,-2);", "1" ],
+
+    [ "new(array).shift();>", "undefined" ],
+    [ "totuple(new(array).concat(w, x, y, z));>", "(w x y z)" ],
+    
+    [ "Array(1,2,3).forEach(function(x) { print(x),return });", "123|undefined" ],
+
+
+    //
+    // dates
+    //
+    
+    [ "Date(\"9/23/1960\").getDay();", "5" ],
+    [ "Date(\"9/23/1960\").getDate();", "23" ],
+    [ "eval(`(Date, 1960, 9, 23)).getFullYear();", "1960" ],
+    [ "Date(Date.UTC(1960,8,24,1,59,00)).toUTCString();", "\"Sat, 24 Sep 1960 01:59:00 GMT\"" ],
+    [ "quote(Date(3));>", "(Date 3)" ],
+    
+    
+    //
+    // strings
+    //
+    
+    [ "\"abcdefghi\".replace(\"d\", function(m) { \"q\" });", "\"abcqefghi\"" ],
+
+
+    //
+    // other builtins
+    //
+
+    [ "cons();", "false" ],
+    [ "cons(`a);>", "(a)" ],
+    [ "cons(`a,`b);>", "(a . b)" ],
+    [ "cons(`a,`b,`c);>", "(a b . c)" ],
+    [ "length(stacktrace());", "54" ],
+    
+    //
+    // lower builtin
+    //
+    
+    [ "lower(1, 1);", "false" ],
+    [ "lower(1, 2);", "true" ],
+    [ "lower(2, 1);", "false" ],
+    [ "lower(1.0, 1.0);", "false" ],
+    [ "lower(1.0, 2.0);", "true" ],
+    [ "lower(2.0, 1.0);", "false" ],
+    [ "lower(1, 1.0);", "true" ],
+    [ "lower(1, 2.0);", "true" ],
+    [ "lower(2, 1.0);", "true" ],
+    [ "lower(1.0, 1);", "false" ],
+    [ "lower(1.0, 2);", "false" ],
+    [ "lower(2.0, 1);", "false" ],
+
+    [ "lower(\"abc\", \"abc\");", "false" ],
+    [ "lower(\"abc\", \"def\");", "true" ],
+    [ "lower(\"def\", \"abc\");", "false" ],
+    [ "lower(\"abc\", 1);", "false" ],
+    [ "lower(\"abc\", 1.0);", "false" ],
+    [ "lower(1, \"def\");", "true" ],
+    [ "lower(1.0, \"def\");", "true" ],
+
+    [ "lower(car(nsactive(true)), car(nsactive(true)));", "false" ],
+    [ "lower(car(nsactive(true)), cadr(nsactive(true)));", "false" ],
+    [ "lower(cadr(nsactive(true)), car(nsactive(true)));", "true" ],
+
+    [ "lower(a, a);", "false" ],
+    [ "lower(a, b);", "false" ],
+    [ "lower(b, a);", "false" ],
+
+    [ "lower(a, 1);", "false" ],
+    [ "lower(a, 1.0);", "false" ],
+    [ "lower(a, \"def\");", "true" ],
+    [ "lower(a, car(nsactive(true)));", "true" ],
+    [ "lower(1, b);", "true" ],
+    [ "lower(1, \"def\");", "true" ],
+    [ "lower(1, car(nsactive(true)));", "true" ],
+    [ "lower(1.0, b);", "true" ],
+    [ "lower(1.0, \"def\");", "true" ],
+    [ "lower(1.0, car(nsactive(true)));", "true" ],
+    [ "lower(\"abc\", b);", "false" ],
+    [ "lower(\"abc\", 1);", "false" ],
+    [ "lower(\"abc\", 1.0);", "false" ],
+    [ "lower(\"abc\", car(nsactive(true)));", "true" ],
+    [ "lower(car(nsactive(true)), b);", "false" ],
+    [ "lower(car(nsactive(true)), 1);", "false" ],
+    [ "lower(car(nsactive(true)), 1.0);", "false" ],
+    
+    //
+    // mangled
+    //
+
+    [ "mangled();", "true" ],
+]);

@@ -1,0 +1,587 @@
+/*
+ * projects.nlg
+ * Naanlib/frameworks/project/
+ *
+ *     Project management.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2016-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * ProjectManager
+ *
+ *     Create a new Project manager for the specified resource locate tracker and database. This
+ * returns a standard error tuple with the project manager object on success.
+ *
+ */
+
+closure ProjectManager(locate, track, dbname, local error, proj) {
+    `(error, proj) = storageResources.ResourceManager(dbname, "Projects/")
+    if error
+        return(list(error))
+    proj.locate = locate                                                    // storage locations
+    proj.track = track                                                      // execution tracking
+    proj.types = []
+    proj.types.push(proj_cliserType(proj))                                  // register client server projects
+    proj.types.push(proj_consoleType(proj))                                 // register console projects
+    proj.types.push(proj_folderType(proj))                                  // register folder projects
+    proj.types.push(proj_lambdaType(proj))                                  // register lambda projects
+    proj.types.push(proj_staticType(proj))                                  // register static projects
+
+    // tracker
+    //
+    // Create a resource tracker that is customized for projects.
+    
+    proj.tracker = function tracker() {
+        projTracker(proj)
+    }
+
+    // finis
+    list(false, proj)
+};
+
+
+/*
+ * projTracker
+ *
+ *     Make a resource tracker with project additions. The tracker provides the service of tracking
+ * known projects and making them available for instantiation. Interested watchers can sign up for
+ * notification of changes to the project list.
+ *
+ */
+
+closure projTracker(reman, local petor) {
+    petor = storageResources.ResourceTracker(reman)
+    
+    // findTypeForLocation
+    //
+    // Given a location, return the best projectType for handling it. The name and typeID of the
+    // found project are updated into the where object.
+    //
+    // Type objects returns a score for how well they can handle the specified project:
+    //
+    // Score    Description
+    // false    Can't handle that project type
+    //  100     Would provide generic project access
+    //   80     Could translate the specified project to our project type
+    //   50     Could downgrade the project for support
+    //   40     Could upgrade the project for support
+    //   20     Knows this type and version
+    //   10     Knows this type and version and can build and deploy
+    //    0     We are already working with this project somehow
+    //
+    // 
+
+    petor.findTypeForLocation = function findTypeForLocation(where, local type, where1, score, bestScore, bestType, bestWhere) {
+        for type in reman.types {
+            where1 = {                                                      // make a copy with no name or type (to be wildcards)
+                locationID: where.locationID
+                path: where.path
+            }
+            score = type.testActiveLocation(where1)
+            if numeric(score) && (!bestScore || score < bestScore) {
+                bestScore = score
+                bestType = type
+                bestWhere = where1
+            }
+        }
+        if bestWhere.typeID
+            where.typeID = bestWhere.typeID
+        if bestWhere.name
+            where.name = bestWhere.name
+        bestType.classID
+    }
+        
+    // findByLocation
+    //
+    // Given a location, return a projID for it or false if it does not exist.
+    
+    petor.findByLocation = function findByLocation(where, local type) {
+        for type in reman.types
+            if type.connect.findResource(where)
+                return
+        false
+    }
+
+    // ensureExistsByLocation
+    //
+    // Given the location of an existing project, return a projID for it or false if not possible.
+    // We try in order:
+    //      1. Look for a known project with that location, or
+    //      2. Look for the best type to handle it and create a projID.
+    
+    petor.ensureExistsByLocation = function ensureExistsByLocation(where, local classID) {
+        if findByLocation(where)
+            return
+        where = new(where)
+        classID = findTypeForLocation(where)                                // where modified by this call
+        if !classID
+            list(Error("unsupported project location", where))
+        else
+            petor.ensureExists(classID, where)
+    }
+
+    // finis
+    petor
+};
+
+
+/*
+ * projConnector
+ *
+ *     Make a generic project connector for a project type. Project connectors are responsible for 
+ * creating, deleting, providing info for, and instantiating projects of a particular type. The 
+ * specified projectType object must provide the following methods/data:
+ *      .classLabel                     - user visible typename of the project type
+ *      .classID                        - stable typeID of the project type
+ *      .instantiate(where, args)       - where is name/location/path
+ *
+ * Unless otherwise noted all methods return (error, data) tuples.
+ *
+ */
+
+closure projConnector(projman, projtype, local connector, watch) {
+    connector = new(object, this)
+    connector.projman = projman
+    connector.label = projtype.classLabel
+    connector.vault = projman.vault(projtype.classID)
+    watch = projman.watchable(connector)
+        
+    // hashResourceID
+    //
+    // Make a stable hash based on the resource credentials that we can persist or share between
+    // different domains accessing the same resource.
+    connector.hashResourceID = function hashResourceID(resource, local ident) {
+        ident = resource.name.concat(resource.locationID, resource.path)
+        HashSHA256(ident)
+    }
+
+    // findResource
+    //
+    // Find a resource with the specified contents, returning the resID or false. The loose criteria
+    // is: if added, would the specified contents be redundant to an existing resource?
+    connector.findResource = function findResource(resource, local resID, resInfo) {
+        for resID in listResources().1 {
+            resInfo = access(resID).1
+            if resource.name == resInfo.name
+                && resource.locationID == resInfo.locationID
+                && resource.path == resInfo.path
+                return (resID)
+        }
+        false
+    }
+
+    // addResource
+    //
+    // Add credentials for a named resource. The resource is a dictionary comprising these keys:
+    //      name:       <string>        - the user visible name of the project
+    //      locationID: <string>        - resID of location resource where this project resides
+    //      path:       <string>        - path to project within location
+    // Error, if non-false, is a dictionary of field keys and error diagnostic strings.
+    connector.addResource = function addResource(resource, local errors, error, resID, data) {
+        function badField(str) { !string(str) || str.trim().length == 0 }
+        errors = { }
+        if badField(resource.name)
+            errors.name = "invalid name"
+        if !resource.locationID
+            errors.locationID = "required field"
+        if !string(resource.path)
+            errors.path = "required field"
+        if length(errors) == 0 {
+            if findResource(resource)
+                errors.name = "project already exists" }
+        if length(errors) > 0
+            error = errors
+        else {
+            resID =  hashResourceID(resource)
+            `(error, data) = connector.vault.addResource(resID, resource)
+            if data {
+                watch.notify(projtype.classID, { added: [resID] })
+                data = resID }
+        }
+        list(error, data)
+    }
+
+    // deleteResource
+    //
+    // Delete information for a project. The return value is (error, result) tuple.
+    connector.deleteResource = function deleteResource(resID, local error, creds, db) {
+        connector.vault.deleteResource(resID)
+        watch.notify(projtype.classID, { deleted: [resID] })
+        list(false, { ok: true})
+    }
+        
+    // listResources
+    //
+    // List saved resources in our database
+    connector.listResources = function listResources() {
+        connector.vault.listResources()
+    }
+    
+    // info
+    //
+    // Return info for a project given its resID.
+    connector.info = function info(resID, local info, error, where) {
+        info = {
+            classID: projtype.classID
+            type: projtype.classLabel
+            services: ["NideProject"]
+        }
+        `(error, where) = connector.vault.accessResource(resID)
+        if where {
+            info.name = where.name
+            info.locationID = where.locationID
+            info.path = where.path }
+        list(false, info)
+    }
+
+    // access
+    //
+    // Return an access object, which is the "where" data to open a project.
+    connector.access = function access(resID) {
+        connector.vault.accessResource(resID)
+    }
+
+    // connect
+    //
+    // Returning a project instance.
+    connector.connect = function connect(resID, service, args, local error, where) {
+        `(error, where) = connector.access(resID)
+        if error
+            list(error)
+        else if service == "NideProject"
+            list(false, projtype.instantiate(where, resID, args))           // create project instance
+        else
+            list(Error("unsupported service", service))
+    }
+
+    // finis
+
+    projman.register(projtype.classID, connector)
+    connector
+};
+
+
+/*
+ * projConfig
+ *
+ *     Manage a project configuration folder, including the creation, loading updating, and removal
+ * thereof. Having a project configuration folder is standard for projects based on filesystems, but
+ * is not required. The precise structure of a project folder depends on the specific project type,
+ * but this controller manages the standard parts, which include the following contents:
+ *
+ * Nide.proj/
+ *      nide_cliser.cfg                 - JSON definition of the project (see below)
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.0-1 etc.
+ *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
+ *      build/                          - [optional] default build output location
+ *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
+ *
+ * The nide_cliser.cfg content is JSON for a dictionary that includes:
+ *  {
+ *      ident:      "Nide Project Configuration"
+ *      name:       <project name>
+ *      nide-type:  <project typeID>
+ *      build:      <build instructions dictionary>
+ *  }
+ *
+ *     Given a new projConfig instance, you can either load (which fails of the project is not valid)
+ * or create (which fails if the project already exists.) The load operation will update the where
+ * argument with the actual name and type found. Unless other noted the methods all return standard
+ * (error, data) result tuples.
+ *
+ */
+
+proj_configDataFolder = "Nide.proj/";
+proj_cliserConfigFile = "nide_cliser.cfg";
+
+closure projConfig(projman, where, local procon, fs, configpath) {
+    procon = new(object, this)
+    procon.name = where.name
+    
+    // validate
+    //
+    // Ensure the location arguments are valid and load the filesystem. If this returns non-false
+    // then the caller should just return that value as a result-error tuple.
+    //
+    closure validate(name, local error) {
+        if !name
+            name = where.name                                               // default is to use original location
+        if name && (!string(name) || name.length < 1)
+            return (list(Error("invalid project name", name)))
+        `(error, fs) = projman.locate.connect(where.locationID, "NideFS", where.path)
+        if error
+            return (list(Error("can't access project filesystem", error)))
+        configpath = fs.path.join(proj_configDataFolder, proj_cliserConfigFile)
+        procon.fs = fs
+        false
+    }
+    
+    // readConfig
+    //
+    // Read our configuration file into procon.configDict, returning a result tuple. If previously
+    // read then this checks for changes since the last read of the config file and returns a result
+    // of false if it is unchanged.
+    //
+    closure readConfig(local error, info, data) {
+        `(error, info) = fs.info(configpath)
+        if !error {
+            if procon.configMs && procon.configMs == info.mtimeMs
+                return (`(false, false))                                    // unchanged
+            `(error, data) = fs.readFile(configpath) }
+        if error
+            return (list(Error("can't read project configuration", where.path, error)))
+        if procon.configMD5 && procon.configMD5 == HashMD5(data)
+            return (`(false, false))                                        // unchanged
+        procon.configMs = info.mtimeMs
+        procon.configMD5 = HashMD5(data)
+        try {
+            data = JSONparse(data)
+            if xobject(data)
+                procon.configDict = new(data, 500)
+            else
+                return (list(Error("invalid project configuration", where.path)))
+            if !where.name
+                where.name = procon.configDict.name
+            else if procon.configDict.name != where.name
+                return (list(Error("project name mismatch", where.path, procon.configDict.name, where.name)))
+            if !where.typeID
+                where.typeID = procon.configDict["nide-type"]
+            else if procon.configDict["nide-type"] != where.typeID
+                return (list(Error("project type mismatch", where.path, procon.configDict["nide-type"], where.typeID))) 
+        }
+        catch {
+            if true
+                return (list(Error("can't parse project configuration", where.path, exception))) }
+        procon.where_name = where.name                                      // copy name to config
+        procon.where_typeID = where.typeID                                  // copy typeID to config
+        list(false, procon.configDict)
+    }
+    
+    // writeConfig
+    //
+    // Write procon.configDict to our configuration file, returning a result tuple.
+    //
+    closure writeConfig(local error, info, data) {
+        `(error, data) = fs.writeFile(configpath, JSONstringify(procon.configDict))
+        if !error {
+            procon.configMD5 = data
+            `(error, info) = fs.info(configpath)
+            if !error
+                procon.configMs = info.mtimeMs }
+        if error
+            list(Error("can't write project configuration", where.path, error))
+        else
+            list(false, { ok: true })
+    }
+
+    // create
+    //
+    // Create the project with the specified name, and leave it loaded if no error. The project must
+    // not already be loaded. The provided name overrides any name in the where argument above, but
+    // path and locationID must be specified. Returns a standard result tuple.
+    //
+    procon.create = closure create(name, local error, data, configpath) {
+        if procon.loaded
+            return (list(Error("Project.create: project already loaded")))
+        if validate(name)
+            return                                                          // validation failed
+        `(error, data) = fs.mkdir(proj_configDataFolder)
+        if error
+            return (list(Error("Project.create initialization failed", error)))
+        `(error, data) = readConfig()
+        if !error
+            return (list(Error("Project.create failed: a project already exists at that location")))
+        procon.configDict = {
+            ident: "Nide Project Configuration",
+            "nide-type": where.typeID,
+            build: {
+                verfile: "Nide.proj/NaanIDE_version.txt"
+                buildno: "Nide.proj/NaanIDE_version_builds.txt"
+                run: {
+                    open: "",
+                    args: []
+                },
+                groups: [] } }
+        procon.configDict.name = name
+        `(error, data) = writeConfig()
+        if !error {
+            `(error, data) = fs.writeFile(fs.path.join(proj_configDataFolder, "NaanIDE_version.txt"),
+                "#\n"
+                "# NaanIDE_version.txt\n"
+                "#\n\n"
+                "$".concat("Version$\n"
+                "0.1.$BuildNumber$\n")) }
+        if !error
+            `(error, data) = fs.writeFile(fs.path.join(proj_configDataFolder, "NaanIDE_version_builds.txt"), "0")
+        if error
+            return (list(Error("Project.create failed", error)))
+        procon.loaded = true
+        list(false, procon.configDict)
+    }
+
+    // load
+    //
+    //     Load the project, i.e. read the project configuration if valid. This is non-destructive.
+    // The result is a standard error tuple with a dictionary result on success.
+    //
+    procon.load = closure load(local error, data, info, configpath) {
+        if procon.loaded
+            return (list(false, procon.configDict))
+        if validate()
+            return                                                          // validation failed
+       `(error, info) = fs.info(proj_configDataFolder)
+        if !error {
+            if info.type != "directory"
+                error = Error("project configuration not a directory", where.path)
+            else
+                `(error, data) = readConfig() }
+        if error
+            return (list(Error("Project.load failed", error)))
+        procon.loaded = true
+        list(false, procon.configDict)
+    }
+
+    // changed
+    //
+    //     Test if the configuration has changed on disk since it was read. If it has changed then
+    // re-read it (discarding any changes in memory) and return a copy of the new configuration. If
+    // unchanged then return a result of false. This returns a standard result tuple.
+    //
+    procon.changed = closure changed(local error, config) {
+        if !procon.loaded
+            return (list(Error("project not loaded")))
+        `(error, config) = readConfig()
+        if !error
+            config = new(config)
+        list(error, config)
+    }
+
+    // update
+    //
+    //     Update the configuration to be the one specified. If the files has changed on disk then
+    // this returns a result of { conflict: true } and you must call procon.changed() to clear it.
+    // This ignores errors reading the existing configuration so that we can rewrite it if possible.
+    //
+    procon.update = closure update(newconfig, local error, info, data) {
+        if !procon.loaded
+            return (list(Error("project not loaded")))
+        `(error, info) = fs.info(configpath)
+        if !error && procon.configMs && procon.configMs != info.mtimeMs {   // ignore read errors
+            `(error, data) = fs.readFile(configpath)
+            if !error && procon.configMD5 && procon.configMD5 != HashMD5(data)
+                return (list(false, { conflict: true })) }
+        if newconfig
+            procon.configDict = newconfig 
+        `(error, data) = writeConfig()
+    }
+    
+    // buildrules
+    //
+    //     Get the current build rules.
+    //
+    function buildrules(local rules) {
+        rules = procon.configDict."build-rules".default                     // "default" will be switchable later
+        if !rules
+            rules = procon.configDict.build                                 // fallback to old config structure
+        rules
+    }
+
+    // run
+    //
+    //     Run the project by building and then launching.
+    //
+    procon.run = closure run(buildonly, local rules, builder, buildpath, error, buildnum) {
+        if !procon.loaded
+            return (list(Error("project not loaded")))
+        rules = buildrules()
+        if !rules || !rules.products
+            return (list(Error("build rules missing or incomplete")))
+        buildpath = fs.path.join(proj_configDataFolder, rules.products)
+        rules.name = procon.where_name
+        rules.typeID = procon.where_typeID
+        `(error, builder) = Builder(rules, "debug", fs, "", buildpath)
+        if error
+            return (list(error))
+        `(error, buildnum) = builder.increment()
+        if error {
+            ErrorDebuglog("build number increment failed", error)
+            return (list(error))
+        }
+        `(error) = builder.make()
+        if !error {
+            if buildonly
+                builder.refresh(projman.track)
+            else
+                `(error) = builder.run(projman.track)
+        }
+        builder.destroy()
+        if error
+            list(error)
+        else
+            list(false, buildnum)
+    }
+    
+    // publish
+    //
+    //     Publish the project to its configured location.
+    //
+    procon.publish = closure publish(local rules, publish, error, outfs, inpath) {
+        rules = buildrules()
+        publish = procon.configDict.publish
+        if !rules || !publish.where
+            return (list(Error("no project publish location configured")))
+        `(error, outfs) = projman.locate.connect(publish.where.locationID, "NideFS", publish.where.path)
+        if error
+            return (list(Error("can't access publishing filesystem", error)))
+        inpath = fs.path.join(proj_configDataFolder, rules.products, publish.input)
+        fs.util.deepcopy(inpath, publish.sources, outfs, publish.output)
+    }
+
+    // close
+    //
+    //     Close the project.
+
+    procon.close = function close() {
+        procon.loaded = false
+        procon.fs = fs = false
+        procon.configDict = false
+        procon.configMs = false
+        procon.configMD5 = false
+    }
+    
+    // finis
+
+    procon
+};
+
+
+/*
+ * projInit
+ *
+ *     Initialize the proj component.
+ *
+ */
+
+function projInit(local manifest) {
+
+    manifest = `(ProjectManager, projTracker, projConnector, projConfig, projInit)
+
+    Naan.module.build(module.id, "projects", function(modobj, compobj) {
+        require("./project.nlg")
+        require("./proj_cliser.nlg")
+        require("./proj_console.nlg")
+        require("./proj_folder.nlg")
+        require("./proj_lambda.nlg")
+        require("./proj_static.nlg")
+        require("./build.nlg")
+        storageResources = require("../storage/resources.nlg")
+        compobj.manifest = manifest
+        module.exports.ProjectManager = ProjectManager
+    })
+
+}();

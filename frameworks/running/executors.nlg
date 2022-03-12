@@ -1,0 +1,767 @@
+/*
+ * executors.nlg
+ *
+ *     Execution resource tracker.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * ExecutorBase
+ *
+ *     A base class for executor instances with the common code.
+ *
+ */
+
+closure ExecutorBase(track, type, name, local exec) {
+    exec = new(object, this)
+    exec.type = type
+    exec.name = name
+    
+    // execReset
+    // Initialize remote communications for a new or restarted instance.
+    
+    exec.execReset = function execReset() {
+        exec.pending = { }
+        exec.nextSendID = toint(RandomBytes(3))                             // keep our sequence code unique for shared servers
+        exec.nextContextID = 1
+    }
+    execReset()
+
+    // execSend
+    // Send a message to the running instance and return a nonce to wait on. If data is not a
+    // dictionary then it is ignored.
+    
+    exec.execSend = closure execSend(msg, data, local pending) {
+        if !dictionary(data)
+            data = { }
+        data.xmsg = msg
+        data.xid = exec.nextSendID++
+        pending = new(nonce)
+        pending.msgout = data
+        exec.pending[data.xid] = pending
+        exec.PostMessage(data)
+        pending
+    }
+    
+    // execReceived
+    // THe specified message was received from the instance, so signal it.
+    
+    exec.execReceived = closure execReceived(data, local pending) {
+        pending = exec.pending[data.xid]
+        if !pending {
+            if data.xmsg == "xready"
+                exec.pending.ready = true
+            return
+        }
+        exec.pending[data.xid] = undefined
+        pending.signal(list(false, data))
+    }
+    
+    // execClosed
+    // Note that the connection has closed, so signal all the waiters.
+    
+    exec.execClosed = closure execClosed(error, local xid) {
+        for `(xid, pending) in exec.pending {
+            pending.signal(list(error))
+            pending[xid] = undefined
+        }
+    }
+        
+    // context
+    // Return a context object for the instance, or an error, in a result tuple. Currently this does
+    // not ever reclaim old contexts on the instance end of things, but it should. ###
+
+    exec.context = closure context(local context, retries, ms) {
+        retries = 0
+        ms = milliseconds()
+        while !exec.pending.ready {
+            exec.PostMessage({
+                xmsg: "xstart"
+            })
+            if ++retries > 100
+                return (list(Error("timeout creating remote worker context", type, name)))
+            sleep(100) }
+        context = ExecutorContext(exec, exec.nextContextID++)
+        context.register()
+    }
+
+    // attention
+    // Focus the UI on this instance because something needs attention.
+
+    exec.attention = function attention() {
+        track.attention(exec)
+    }
+    
+    // finis
+    exec
+};
+
+
+/*
+ * ExecutorContext
+ *
+ *     Contexts for remote execution. Remote evaluation requires a namespace context, but there is no
+ * easy, general way to specify the context between instances by default. This presents a challenge
+ * for accessing different modules, but can be even more difficult when arbitrary namespaces are
+ * being created.
+ *     Execution contexts provide a means for remote evaluation in a specific context, including the
+ * ability to track namespace changes as the result of evaluating an expression. They do not override
+ * normal namespace protections. The contexts exposed here preserve the active namespace after the
+ * expression is evaluated.
+ *
+ */
+
+closure ExecutorContext(exec, contextID, local context, util) {
+    context = new(object, this)
+    util = modlist().Util.exports
+
+    // register
+    // Register or re-register our context with the worker.
+
+    context.register = closure register(local pending, result) {
+        pending = exec.execSend("register", {
+            contextID: contextID
+        })
+        result = pending.wait()
+        if result.1
+            list(false, context)
+        else
+            result
+    }
+    
+    // eval
+    // Evaluate the specified expression in the current worker context. The optional put argument
+    // if non-false is a tuple of symbols that should be transfered to the remote end, while get is
+    // an optional tuple of symbols to retrieve after evaluation.
+
+    context.eval = closure evalf(expr, put, get, local roots, pkg, data, pending, result) {
+        if tuple(put)
+            roots = cons(`expr, put)
+        else
+            roots = `(expr)
+        pkg = util.pkgSave(`expr, roots, {
+            nsignore: true
+            comments: true })
+        data = {
+            contextID: contextID
+            expr: pkg }
+        if tuple(get)
+            data.get = get
+        pending = exec.execSend("eval", data)
+        result = pending.wait()
+        if result.1.error
+            list(Error(result.1.error))
+        else if result.1.result
+            list(false, caar(util.pkgLoad(result.1.result, {
+                localroots: false
+                intern: false
+                execute: false
+            })))
+        else
+            result
+    }
+    
+    // evalq
+    // Evaluate the specified QUOTED expression in the current worker context.
+    
+    context.evalq = macro evalq(expr, put, get) {
+        evalf(expr, eval(put), eval(get))
+    }
+    
+    // rpc
+    // Execute a remote procedure call without package translation, to reduce overhead. This will not
+    // properly transfer Naan-specific types like symbols, and the results will be native JavaScript.
+    // The procedure must be specified as a symbol or string.
+    
+    context.rpc = closure rpc(proc, args, local data, result) {
+        data = {
+            contextID: contextID
+            proc: proc
+            args: args }
+        pending = exec.execSend("rpc", data)
+        result = pending.wait()
+        if result.1.error
+            list(Error(result.1.error))
+        else
+            list(false, totuple(result.1.result))
+    }
+
+    // finis
+    context
+};
+
+
+/*
+ * ExecutorParallel
+ *
+ *     Evaluate expressions in parallel. Given a maximum number of workers, this delegates processing
+ * to an available worker or enqueues the work to be done on the next available worker, blocking the
+ * caller until the work is complete. Destroying this object releases the workers and terminates any
+ * pending work with errors.
+ *     Creating a worker takes 200-300 msec, so this acts like a worker pool and allows them to be
+ * saved and reused when needed. At the moment there is no affinity feature, so the actual worker
+ * assigned for each task is not selectable.
+ *     The eval() method can be quite slow because the arguments and result are converted four times
+ * through the package manager for each call. Thefore it should only be used for small requests or
+ * when Naan semantics must be maintained across the address space transition to the worker.
+ *     The rpc() method has a very low overhead, but converts everything to JavaScript before making
+ * the call. The procedure is specified as a name and must exist as a symbol in the current
+ * namespace of the worker. The arguments are specified as a tuple, and will be converted using the
+ * normal Naan exporting protocol. So for example, tuples become arrays and symbols become strings.
+ * The result will also be in JavaScript types.
+ *
+ * Allowable options are:
+ *  {
+ *      maxcount: <integer>                                                 // maximum workers, default 4
+ *      initeval: `(<expr>, <put>, <get>)                                   // initializes each new worker
+ *      basename: <string>                                                  // worker label for UI, default "batch"
+ *  }
+ *
+ */
+
+closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, crValue) {
+    maxcount = options.maxcount
+    if !maxcount
+        maxcount = 4                                                        // default is 4 workers
+    basename = options.basename
+    if !string(basename)
+        basename = "batch"
+    exqueue = []                                                            // waiting for execution
+    parallel = new(object, this)
+    parallel.workers = []                                                   // array of worker executors
+    parallel.contexts = new(weakmap)                                        // map workers to contexts
+    parallel.available = []                                                 // array of available workers
+
+    // acquireWorker
+    //
+    // Return the next available worker. If no workers are available and we haven't hit the maximum 
+    // then create an additional worker and return it. If we cannot allocate another worker then this 
+    // returns false.
+    
+    closure acquireWorker(local workdex, name, worker, context, result) {
+        if parallel.available.length > 0
+            return (parallel.available.pop())
+        workdex = parallel.workers.length
+        if workdex >= maxcount
+            return (false)
+        parallel.workers[workdex] = false                                   // reserve our spot
+        name = basename.concat("-", workdex+1)
+        worker = App.nide.track.spawn("Local", name, "ExecutorParallel")
+        if worker.0 {                                                       // ### wasting space on workers list
+            debuglog("execParallel: cannot spawn worker:", ErrorString(worker.0))
+            return (false)
+        }
+        worker = worker.1
+        context = worker.context()
+        if context.0 {
+            debuglog("execParallel: cannot create worker context:", ErrorString(context.0))
+            worker.destroy()
+            return (false)
+        }
+        context = context.1
+        parallel.workers[workdex] = worker
+        parallel.contexts[worker] = context
+        if tuple(options.initeval) {
+            result = apply(context.eval, options.initeval)
+            if result.0
+                debuglog("execParallel: cannot initialize worker", name, ErrorString(result.0)) }
+        return (worker)
+    }
+    
+    // releaseWorker
+    //
+    // Release the specified worker to the pool.
+    
+    closure releaseWorker(worker) {
+        parallel.available.push(worker)
+    }
+
+    // execNext
+    //
+    // Run the next operation, if any are pending. It's possible that this will acquire a worker and
+    // during that process another worker completes and leaves us with nothing to do. In that case we
+    // release the worker and do nothing. Another case is where this tries to acquire a worker and
+    // cannot at this time, because they are all busy and there is no room for more. This is why we
+    // don't remove work from the queue until we already have a worker.
+    //
+
+    closure execNext(local worker, result) {
+        if exqueue.length > 0 {
+            worker = acquireWorker()                                        // false if none available
+            if !worker {
+                if maxcount > 0 && parallel.workers.length == 0             // maxcount zero when being destroyed
+                    throw("execParallel: cannot allocate any workers at all")
+                return                                                      // we're busy, so try again later
+            }
+            future(function(local next, context) {
+                next = exqueue.splice(0, 1).0                               // remove oldest entry, from start
+                if !next {
+                    releaseWorker(worker)                                   // someone else already processed this
+                    return
+               }
+                context = parallel.contexts[worker]
+                if next.eval
+                    result = apply(context.eval, next.args)
+                else if next.proc
+                    result = context.rpc(next.proc, next.args)
+                else
+                    debuglog("execNext: exqueue item without task", next.*)
+                next.pending.signal(result)
+                releaseWorker(worker)
+                execNext()                                                  // start the next one, if there is one
+            }, 1)
+        }
+    }
+
+    // eval
+    //
+    // Evaluate the specified expression in the next available worker, creating workers as required.
+    // This blocks the caller until the operation is complete, and returns the result.
+    //
+
+    parallel.eval = closure evalf(expr, put, get, local pending) {
+        if !maxcount
+            return (crValue)                                                // already destroyed
+        pending = new(nonce)
+        exqueue.push({
+            eval: list(expr, put, get)
+            pending: pending
+        })
+        execNext()
+        pending.wait()
+    }
+    
+    // evalq
+    //
+    // Evaluate the specified QUOTED expression in a remote worker.
+    //
+    
+    parallel.evalq = macro evalq(expr, put, get) {
+        evalf(expr, eval(put), eval(get))
+    }
+    
+    // rpc
+    //
+    // Execute a procedure call in a remote worker.
+    //
+    
+    parallel.rpc = closure rpc(proc, args, local pending) {
+        if !maxcount
+            return (crValue)                                                // already destroyed
+        pending = new(nonce)
+        exqueue.push({
+            proc: proc
+            args: args
+            pending: pending
+        })
+        execNext()
+        pending.wait()
+    }
+
+    // destroy
+    //
+    // Destroy the object by destroying the workers and failing pending requests with cancelResult.
+    //
+    
+    parallel.destroy = closure destroy(cancelResult, local worker, next) {
+        if !maxcount
+            return (false)                                                  // already destroyed
+        crValue = cancelResult
+        maxcount = 0
+        parallel.available = false
+        parallel.contexts = false
+        while parallel.workers.length > 0 {
+            worker = parallel.workers.pop()
+            parallel.contexts[worker] = false
+            worker.destroy()
+        }
+        while exqueue.length > 0 {
+            next = exqueue.pop()
+            next.pending.signal(crValue)
+        }
+        true
+    }
+
+    // finis
+
+    parallel
+};
+
+
+/*
+ * ExecutorTracker
+ *
+ *     Track Naan execution instances.
+ *
+ */
+
+closure ExecutorTracker(local xtrak) {
+    xtrak = new(object, this)
+    xtrak.instances = []
+    xtrak.watchers = []
+    xtrak.makers = {}
+    
+    // notify
+    // Notify the watchers by calling a named procedure
+    
+    closure notify(changes, local watch) {
+        for watch in xtrak.watchers
+            call(watch, changes)
+    }
+
+    // add
+    // Add an execution instance at the specified location.
+
+    xtrak.add = closure add(executor, local instance) {
+        instance = new(nonce)
+        instance.executor = executor
+        xtrak.instances.push(instance)
+        notify({ added: [executor] })
+    }
+
+    // delete
+    // Delete an execution instance.
+
+    xtrak.delete = closure delete(executor) {
+        xtrak.instances = xtrak.instances.filter(function(item){
+            !(item.executor eq executor)
+        })
+        notify({ deleted: [executor] })
+    }
+
+    // update
+    // Notify watchers of an update on an execution instance.
+
+    xtrak.update = closure update(executor) {
+        notify({ updated: [executor] })
+    }
+    
+    // attention
+    // Notify watchers that our instance wants attention.
+
+    xtrak.attention = closure attention(executor) {
+        notify({ attention: [executor] })
+    }
+
+    // enumlist
+    // Enumerate the list of executors.
+    
+    xtrak.enumlist = function enumlist(local results) {
+        results = []
+        for instance in xtrak.instances
+            results.push(instance.executor)
+        results
+    }
+
+    // watch
+    // Watch for changes on execution instance status.
+
+    xtrak.watch = function watch(watcher) {
+        if xtrak.watchers.indexOf(watcher) < 0
+            xtrak.watchers.push(watcher)
+    }
+
+    // unwatch
+    // Stop watching for changes on execution instance status.
+
+    xtrak.unwatch = function unwatch(watcher) {
+        xtrak.watchers.filter(function(item){
+            !(item eq watcher)
+        })
+    }
+    
+    // register
+    // Register an executor type.
+    
+    xtrak.register = function register(maker, type) {
+        xtrak.makers[type] = maker
+    }
+    
+    // spawn
+    // Spawn a new executor with (type, args), returning a standard (error, result) tuple.
+    
+    xtrak.spawn = closure spawn args {
+        function spawnit(type, args) {
+            if !xtrak.makers[type]
+                list(Error("unknown executor type", type))
+            else
+                apply(xtrak.makers[type], cons(xtrak, args))
+        } (pop(args), args)
+    }
+    
+    xtrak.register(execLambda, "Lambda")
+    
+    // finis
+    xtrak
+};
+
+
+/*
+ * execLambda
+ *
+ *     Make a Lambda executor connected through web sockets.
+ *
+ */
+
+closure execLambda(track, url, name, workerID, local target, nlregex, clientID, serverID) {
+    target = ExecutorBase(track, "Lambda", name)
+    clientID = "DebugWorkers"
+    serverID = "Workers"
+    nlregex = RegExp("\\n", "g")
+    if !workerID
+        workerID = "myAwsDebugWorker"
+    target.workerID = workerID
+    target.msgQueue = []
+    
+    // connect
+    // Connect with the host if not already connected.
+    function connect() {
+        if !target.ws
+            target.ws = xnew(js.w.WebSocket, "wss://8h5htw8bfj.execute-api.us-east-1.amazonaws.com/dev")
+    
+        // onopen
+        // The WebSocket connection is now open.
+        target.ws.onopen = function onopen(e) {
+            target.msgCounter = 1
+            sendControl("spawn", {
+                reset: true
+                options: {
+                }
+            })
+        }
+
+        // onmessage
+        // A message was received from the worker via WebSockets.
+        
+        target.ws.onmessage = function onmessage(e, local message, msg) {
+            if target.msgQueue
+                target.msgQueue.push(e.data)
+            else
+                target.doMessage(e.data)
+        }
+        
+        // onerror
+        // An error occurred on the WebSocket connection.
+        target.ws.onerror = function onerror(e) {
+            target.debugWrite("connection error: ".concat(e.toString()), 3)
+        }
+        
+        // onclose
+        // The WebSocket connection was closed.
+        target.ws.onclose = function onclose(e) {
+            target.debugWrite("connection closed: ".concat(e.code, " ", e.reason), 3)
+            target.ws = false
+        }
+    }
+    
+    //
+    // doOneMessage
+    //
+    //     Process the specified undecoded message.
+    function doOneMessage(message, local msg) {
+        if message.respOp == "msgarray" {
+            for msg in message.payload
+                doOneMessage(msg)
+        } else if message.respOp == "msgout" {
+            msg = message.payload
+            if msg.id == "textout" {
+                target.written = true
+                target.term.Write(msg.text.replace(nlregex, "\r\n")) }
+            else if msg.id == "debugtext" {
+                target.written = true
+                target.debugWrite(msg.text, msg.level) }
+            else if msg.id == "msgout"
+                target.listener(msg.data)
+            else if msg.id == "started"
+                { }
+            else if msg.id == "typed"
+                target.term.Write(msg.text.replace(nlregex, "\r\n"))
+            else if msg.id == "status"
+                target.statusCB(target, msg.status)
+            else
+                debuglog("unknown AWS worker message:", msg.id)
+        } else if message.respOp == "error"
+            debuglog("worker controller error:", ErrorString(message.payload[0]))
+        else if message.respOp == "linked"
+            future(function termLinked(){
+                if !target.written
+                    target.term.WriteLn("(reconnected)")
+            }, 1000).run()
+        else
+            debuglog("unknown AWS response message:", message.respOp)
+    }
+        
+    //
+    // doMessage
+    //
+    //     Process the specified undecoded message.
+    target.doMessage = function doMessage(text, local message) {
+        try {
+            message = new(js.w.JSON.parse(text))
+            if message.connectionId && string(message.message)
+                target.debugWrite("AWS response: ".concat(message.message), 3)
+            else if message.clientID != clientID || message.serverID != serverID || message.workerID != target.workerID
+                debuglog("AWS response doesn't match:", message.clientID, message.serverID, message.workerID)
+            else
+                doOneMessage(message)
+        } catch {
+            if true
+                return (debuglog("can't decode incoming ws message:", exception))
+        }
+    }
+
+    //
+    // sendControl
+    //
+    //     Send a message to the worker controller.
+
+    target.sendControl = function sendControl(workerOp, payload) {
+        target.ws.send(js.w.JSON.stringify({
+            clientID: clientID
+            serverID: serverID
+            workerID: target.workerID
+            workerOp: workerOp
+            payload: payload
+            msgCounter: target.msgCounter++
+        }))
+    }
+    
+    //
+    // send
+    //
+    //     Send a message to the worker.
+    
+    target.send = function send(msg) {
+        // msg.save = true                                                  // save state for this invocation
+        sendControl("msgin", msg)
+    }
+
+    //
+    // oninterrupt
+    //
+
+    function oninterrupt() {
+        send({                                                              // send interrupt to worker
+            id: "interrupt"
+        })
+    }
+
+    //
+    // onreturn
+    //
+
+    function onreturn(local text) {
+        text = target.term.TakeText()
+        send({                                                              // send user-entered text to worker
+            id: "keyline",
+            text: text,
+            typed: "\x1b[90m\x1b[3m".concat(text, "\x1b[0m\n")              // dark-grey, italic
+        })
+    }
+
+    //
+    // target.PostMessage
+    //
+    //     Post a message to the target.
+    //
+
+    target.PostMessage = function PostMessage(data) {
+        target.ws.send({                                                    // send user-entered text to worker
+            id: "msgin",
+            data: data
+        })
+    }
+    
+    //
+    // target.debugWrite
+    //
+    //     Write a debug message to the repl.
+    //
+    
+    target.debugWrite = function(text, level) {
+        if (level >= 5)
+            target.term.WriteLn(text, target.term.Cyan)                     // cyan for builtin logging
+        else if (level >= 4)
+            target.term.WriteLn(text, target.term.Blue)                     // blue for Naan function logging
+        else if (level >= 3)
+            target.term.WriteLn(text, target.term.Red)                      // light red for warnings
+        else if (level >= 2)
+            target.term.WriteLn(text, target.term.Green)                    // green for Naan.debug.debuglog logging
+        else
+            target.term.WriteLn(text, target.term.Red+target.term.Bold)     // heavy red for errors
+    }
+
+    //
+    // termAttach
+    //
+    //     A terminal was attached to our instance.
+    
+    target.termAttach = function termAttach(repl, db, statusCB, local msg) {
+        connect()                                                           // ensure we are connected
+        target.term = repl
+        target.debugger = db
+        target.statusCB = statusCB
+        if target.termSaved {
+            target.term.StateLoad(target.termSaved)
+            target.termSaved = false }
+        else
+            target.term.Reset()
+        while target.msgQueue.length > 0 {
+            for msg in target.msgQueue.splice(0)                            // all current messages
+                target.doMessage(msg)
+        }
+        target.msgQueue = false
+        target.term.On("interrupt", oninterrupt.proc)
+        target.term.On("return", onreturn.proc)
+        target.term.Focus()
+    }
+        
+    //
+    // termDetach
+    //
+    //     The terminal is being deattached from our instance.
+    
+    target.termDetach = function termDetach(repl) {
+        target.term.On("interrupt")
+        target.term.On("return")
+        target.msgQueue = []
+        target.termSaved = target.term.StateSave()
+        target.statusCB = false
+        target.debugger = false
+        target.term = false
+    }
+    
+    track.add(target)
+    connect()                                                               // connect right away to start receiving messages
+
+    // finis
+
+    list(false, target)
+};
+
+
+/*
+ * execInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function execInit(local manifest) {
+
+    manifest = `(ExecutorBase, ExecutorContext, ExecutorParallel, ExecutorTracker, execLambda, execInit)
+
+    Naan.module.build(module.id, "executors", function(modobj, compobj) {
+        require("./running.nlg")
+        compobj.manifest = manifest
+        modobj.exports.ExecutorBase = ExecutorBase
+        modobj.exports.ExecutorContext = ExecutorContext
+        modobj.exports.ExecutorParallel = ExecutorParallel
+        modobj.exports.ExecutorTracker = ExecutorTracker
+    })
+} ();

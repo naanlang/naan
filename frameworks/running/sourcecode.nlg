@@ -1,0 +1,346 @@
+/*
+ * sourcecode.nlg
+ *
+ *     Source code manager for debugging.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * CodeManager
+ *
+ *     Manage source code for debugging, with caching, tuple/location conversion, etc. The caller
+ * can provide a manifest and get a CodeComposite object that tracks source code and tuple locations
+ * within it. Creation options are:
+ *  {
+ *      cacheSize:      <integer>               // number of unparser instances to cache
+ *  }
+ *
+ */
+
+closure CodeManager(options,  local coman, cache)
+{
+    coman = modlist().CLI.exports.Utils(options)
+    coman.independent = new(nonce)                                          // caches are ephemeral
+
+    // composite
+    //
+    //     Return a code composite for the specified list of symbols.
+    //
+    coman.composite = function composite(manifest) {
+        CodeComposite(coman, manifest)
+    }
+    
+    // component
+    //
+    //     Return a code composite for the specified module and component, or false if not found.
+    // This will return an "independent" component if it was already created by procComponent.
+    //
+    coman.component = function component(modname, compname, local component) {
+        component = modlist()[modname].components[compname]
+        if !component
+            return (coman.independent[modname.concat(":-:", compname)])
+        CodeComposite(coman, component.manifest, modname, compname)
+    }
+    
+    // procComponent
+    //
+    //     Return a code composite for the specified procedure definition. If the module / component
+    // cannot be identified then this returns an independent "component". A complexity here is that
+    // we always do source operations from the original base procedure of a closure or macro, not the
+    // instantiated derivations. This allows us to cache only one copy of the unparser for all the
+    // instances, but also prevents a GC problem if you unparse an active closure with a lot of state
+    // and then cache it. Turns out these can be very large.
+    //
+    coman.procComponent = function procComponent(procdef, local sym, mod, modname, compname, component) {
+        procdef = baseproc(rootproc(procdef))                               // only work with the bases, not instances
+        sym = procdef.1
+        mod = module.owner.findModule(sym.namespace)
+        for `(compname, component) in mod.components
+            if member(sym, component.manifest)
+                return (CodeComposite(coman, component.manifest, mod.id, compname))
+        if sym == car(sym.proc.1)
+            sym = car(sym.proc.1)                                           // use interned symbol
+        if string(mod.id)
+            modname = mod.id
+        else
+            modname = "<".concat(sym.namespace.tostring, ">")               // create independent module
+        compname = "<".concat(sym, ">")                                     // create independent component
+        coman.independent[modname.concat(":-:", compname)] = CodeComposite(coman, sym, modname, compname)
+    }
+    
+    // parseExprs
+    //
+    //     Parse an array of text expressions and return a corresponding array of result tuples with
+    // standard `(error, expr) format. The optional locals are symbols to provide context.
+    //
+    coman.parseExprs = function parseExprs(texts, locals,
+        local output, text, source, registry, dialect, error, expr)
+    {
+        output = []
+        for text in texts {
+            if !string(text) || text == "" {
+                output.push(false)
+                continue
+            }
+            try {
+                source = new(textstream, text.concat(" ;"))                 // avoid EOF
+                if locals
+                    source.setsymbols(locals)
+                registry = modlist().Lib.exports.Registry                   // dialect registry
+                dialect = registry.findName(registry.dialects().0)          // ### default dialecct
+                output.push(dialect.parse(source))
+            } catch {
+                if true {
+                    output.push(list(exception))
+                }
+            }
+        }
+        output
+    }
+    
+    // cacheAdd
+    //
+    //     Add a CodeComposite to our cache. If we really wanted to be fancy we'd have more than one
+    // entry, but then we'd need to design an invalidation strategy and the big win here is stepping
+    // within the same component--the common case.
+    
+    coman.cacheAdd = function cacheAdd(cocode, manifest, local item, mandefs) {
+        for item in manifest
+            push(item.proc, mandefs)
+        cacne = new(nonce)
+        cache.modname = cocode.modname
+        cache.compname = cocode.compname
+        cache.mandefs = mandefs
+        cache.cocode = cocode
+        cache
+    }
+    
+    // cachGet
+    //
+    //     Get a CodeComposite from our cache, or false.
+    
+    coman.cachGet = function cachGet(cocode, manifest, local entry, item, mandefs) {
+        if cache.modname != cocode.modname || cache.compname != cocode.compname || cache.manifest != manifest
+            return (false)
+        for item in manifest
+            push(item.proc, mandefs)
+        if cache.mandefs === mandefs
+            cache.cocode
+        else
+            false
+    }
+
+    // finis
+    coman
+};
+
+
+/*
+ * CodeComposite
+ *
+ *     Return a code composite for the specified manifest. The composite generates a header and then
+ * unparses each of the procedures in order, keeping track of the line ranges. Methods retrieve the
+ * source text and allow conversions from a tuple in a procedure to the code location of the tuple in
+ * the text. This is most useful for displaying the entire manifest in a scrolling view of lines and
+ * finding locations in the view for tuples found on the callstack.
+ *
+ */
+
+closure CodeComposite(coman, manifest, modname, compname, local cocode) 
+{
+    cocode = new(object, this)
+    cocode.modname = modname
+    cocode.compname = compname
+    if symbol(manifest) && atom(manifest) {
+        manifest = list(manifest)
+        cocode.unlisted = true                                              // not in any component
+    }
+    if coman.cachGet(cocode)
+        return
+    coman.cacheAdd(cocode)
+
+    // lineCount
+    //
+    //     Count the lines (actually line endings) in a text string. If the string does not end with
+    // newline then the partial line afterwards is not counted.
+    //
+    function lineCount(str) {
+        str.length - str.replace(RegExp("\n", "g"), "").length              // credit: https://stackoverflow.com/users/2037832/chris-jr
+    }
+
+    // populate
+    //
+    //     Populate the composite from the specified manifest, if needed. Each element has the
+    // following structure:
+    //  {
+    //      startno:    <integer>               // first line number in composite, zero-based
+    //      item:       <symbol>                // symbol in manifest
+    //      text:       <string>                // text of item, including any procedure
+    //      offset:     <integer>               // number of lines in element text preceding unparse
+    //      linecount:  <integer>               // total linecount of item
+    //  }
+    //
+    function populate(local lineno, output, item, comment, prop, element) {
+        if cocode.elements
+            return                                                          // already populated
+        cocode.elements = []
+        lineno = 0
+        for item in manifest {
+            output = ""
+            comment = item@\.sourcemap.comments.0                           // first comment for item
+            if comment.0 != 0 || comment.1 != -1
+                output = output.concat("/*\n",                              // make our own header comment
+                    " * ", item.tostring, "\n",
+                    " * \n"
+                    " */\n\n")
+            if car(item) !== item
+                output = output.concat(item, " = ", coman.unparser(car(item)).string(), ";\n\n")
+            comment = output
+            for prop in item@* {
+                if !prop.startsWith(".")
+                    output = output.concat("@", prop, " = ", coman.unparser(item@[prop]).string(), ";\n")
+            }
+            if comment != output
+                output = output.concat("\n")                                // must have output properties
+            element = {
+                startno:    lineno
+                item:       item
+                text:       output
+                offset:     lineCount(output)                               // number of lines preceding procedure, if any
+            }
+            if item.proc
+                element.text = output.concat(coman.unparser(item.proc).string(), "\n\n")
+            element.linecount = lineCount(element.text)
+            cocode.elements.push(element)
+            lineno += element.linecount
+        }
+    }
+    
+    // findproc
+    //
+    //     Find the element for the specified procedure definition. ### Eventually this should find
+    // the procedure in the item value or item properties.
+    //
+    function findproc(procdef, local element) {
+        for element in cocode.elements
+            if element.item.proc === procdef || element.item.proc.1 == procdef.1
+                return (element)
+        false
+    }
+        
+    // findline
+    //
+    //     Find the element for the specified text line number.
+    //
+    function findline(lineno, local elem, prev) {
+        for elem in cocode.elements
+            if elem.startno >= lineno
+                break
+            else
+                prev = elem
+        prev
+    }
+
+    // string
+    //
+    //     Return the total text string of the composite.
+    //
+    cocode.string = function string(local output, elem) {
+        populate()
+        output = ""
+        for elem in cocode.elements
+            output = output.concat(elem.text)
+        output
+    }
+
+    // textpos
+    //
+    //     Return the text position for the specified procedure/task.  The return value is a
+    // dictionary with a tuple key and first/last fields defined, each a tuple of row and column.
+    // One of the complexities here is that an instantiated closure nested in a parent procedure is
+    // not listed in the parent's child procedures because it's a 1:N mapping. This checks if the
+    // base of the root matches the original procedure definition, and if needed computes the task
+    // context within the original root, base procedure.
+    //
+    cocode.textpos = function textpos(procdef, task,
+        local baserootdef, element, lineoff, unpar, path, baseprocdef, taskpath, location) {
+        populate()
+        baserootdef = baseproc(rootproc(procdef))                           // work with base
+        element = findproc(baserootdef)
+        if element {
+            lineoff = element.startno + element.offset
+            unpar = coman.unparser(baserootdef)
+            if baserootdef !== procdef {                                    // nested and/or instantiated...
+                path = procpath(procdef)                                    // procnames path within root
+                baseprocdef = pathmatch(baserootdef.1, cdr(path)).proc      // base peer to desired procdef
+                taskpath = tuplepath(procdef, task)                         // indexes path within original procdef
+                task = apply(`., list(baseprocdef, taskpath))               // base peer to desired task
+            }
+            location = unpar.findtuple(task)
+            {
+                first: list(location.first.0 + lineoff, location.first.1)
+                last: list(location.last.0 + lineoff, location.last.1)
+                line: unpar.string(location.first, list(location.first.0))
+            }
+        }
+    }
+
+    // findbreak
+    //
+    //     Return a procdef and task for the zero-based (line, col) text position. This returns a
+    // dictionary with the actual text location with the procedure/task to target:
+    //  {
+    //      first:  (line, col)
+    //      last:   (line, col)
+    //      proc:   <procdef>
+    //      task:   <task-tuple>
+    //  }
+    //
+    cocode.findbreak = function findbreak(lineno, column, local element, lineoff, output, unpar, result) {
+        populate()
+        element = findline(lineno)
+        lineoff = element.startno + element.offset
+        if element {
+            output = {
+                proc:   element.item.proc
+                task:   cdddr(element.item.proc)
+                first:  list(lineoff, 0)
+                last:   list(lineoff, 1)
+            }
+            unpar = coman.unparser(element.item.proc)
+            result = unpar.findbreak(list(lineno-lineoff, column))
+            if result {
+                output.first = list(result.first.0 + lineoff, result.first.1)
+                output.last = list(result.last.0 + lineoff, result.last.1)
+                output.task = result.tuple
+                output.line = unpar.string(result.first, list(result.first.0))
+            }
+            output
+        }
+    }
+
+    // finis
+    cocode
+};
+
+
+/*
+ * codeInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function codeInit(local manifest) {
+    manifest = `(CodeManager, CodeComposite, codeInit)
+    Naan.module.build(module.id, "sourcecode", function(modobj, compobj) {
+        require("./running.nlg")
+        compobj.manifest = manifest
+        modobj.exports.CodeManager = CodeManager
+    })
+} ();

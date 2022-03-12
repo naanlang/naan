@@ -1,0 +1,143 @@
+/*
+ * proj_folder.nlg
+ * Naanlib/frameworks/project/
+ *
+ * Controllers for generic folder projects.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2019-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * proj_folderInstance
+ *
+ *     Create an instance of the folder projects type. Folder projects are generic for any folder in
+ * a filesystem. Given a new instance you can either load (which fails of the project is not valid)
+ * or create (which fails if the project already exists.) Unless other noted the methods all return
+ * standard (error, data) tuples.
+ *
+ */
+
+closure proj_folderInstance(projman, where, projID, local project) {
+    project = new(object, this)
+    project.name = where.name
+    project.where = where
+    project.projID = projID
+    
+    // create
+    //
+    // Create the project with the specified name, and leave it loaded if no error.
+    project.create = function create() {
+        load()
+    }
+
+    // load
+    //
+    // Load the project, which fails if it does not already exist.
+    project.load = closure load(local error, info) {
+        if project.loaded
+            return (list(false, { ok: true }))
+        `(error, data) = projman.locate.connect(where.locationID, "NideFS", where.path)
+        if !data
+            return (list(Error("project load failed", error)))
+        project.fs = data
+       `(error, info) = project.fs.info("")
+        if info {
+            if info.type == "directory" {
+                project.fm = storageFileManager.FileManager(project.fs)
+                project.fm.load()
+                project.loaded = true }
+            else {
+                info = false
+                error = Error("project root must be directory", where.path)
+            }
+        }
+        list(error, info)
+    }
+
+    // run
+    //
+    // Run the project by building and then launching.
+    project.run = closure run(buildonly) {
+        debuglog("folder run project stub")
+        list(false, { ok: true })
+    }
+
+    // close
+    //
+    // Close the project, releasing resources.
+    project.close = function close() {
+        project.fm = false
+        project.loaded = false
+    }
+
+    // finis
+    project
+};
+
+
+/*
+ * proj_folderType
+ *
+ *     Create a project type object for folder objects.
+ *
+ */
+
+closure proj_folderType(projman, local folderProj) {
+    folderProj = new(object, this)
+    folderProj.classID = "folder"
+    folderProj.classLabel = "folder tree"
+    folderProj.connect = projConnector(projman, folderProj)
+    
+    // testActiveLocation
+    //
+    // Test if we can handle a project at the specified location.
+    
+    folderProj.testActiveLocation = function testActiveLocation(where, local error, fs, info) {
+        if !where.locationID || !where.path
+            return (false)
+        `(error, fs) = projman.locate.connect(where.locationID, "NideFS", where.path)
+        if fs
+            `(error, info) = fs.info("")
+        if info.type == "directory" {
+            where.name = fs.path.basename(where.path)
+            if where.name == ""
+                where.name = "root"                                         // an empty name wouldn't be pretty
+            where.typeID = folderProj.classID                               // use this because there's no config to read
+            100                                                             // type of last resort
+        }
+    }
+
+    // instantiate
+    //
+    // Instantiate a project object for the specified where data.
+    
+    folderProj.instantiate = function instantiate(where, projID) {
+        proj_folderInstance(projman, where, projID)
+    }
+
+    // finis
+    folderProj
+};
+
+
+/*
+ * proj_folderInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function proj_folderInit(local manifest) {
+
+    manifest = `(proj_folderInstance, proj_folderType, proj_folderInit)
+
+    Naan.module.build(module.id, "proj_folder", function(modobj, compobj) {
+        require("./project.nlg")
+        storageFileManager = require("../storage/file_manager.nlg")
+        compobj.manifest = manifest
+    })
+}();

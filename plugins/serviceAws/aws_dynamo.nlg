@@ -1,0 +1,509 @@
+/*
+ * aws_dynamo.nlg
+ * serviceAws
+ *
+ *     Access to DynamoDB services for AWS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * DynaTable
+ *
+ *     DynamoDB table.
+ *
+ */
+
+closure DynaTable(dyna, tablename, local table) {
+    table = new(object, this)
+    table.name = tablename
+    
+    // fieldTypeDynToNaan
+    // Convert field type from DynamoDB to Naan
+    //
+    function fieldTypeDynToNaan(dtype) {
+        if dtype == "S",
+            "utf8"
+        else if dtype == "N",
+            "numeric"
+        else if dtype == "B",
+            "binary"
+        else
+            "unknown"
+    }
+        
+    // fieldTypeNaanToDyn
+    // Convert field type from Naan to DynamoDB
+    //
+    function fieldTypeNaanToDyn(ntype) {
+        if ntype == "utf8",
+            "S"
+        else if ntype == "numeric",
+            "N"
+        else if ntype == "binary",
+            "B"
+        else
+            false
+    }
+
+    // datumNaanToDyn
+    // Convert a Naan datum to DynamoDB format.
+    //
+    function datumNaanToDyn(datum, local output, ntype, dtype) {
+        output = { }
+        if tuple(datum)
+            datum = datum.toarray
+        if array(datum) {
+            dtype = "L"                                                     // heterogenous list
+            datum = datum.map(function(item) {
+                datumNaanToDyn(item)
+            })
+        } else {
+            ntype = typeof(datum)
+            if ntype == xobject
+                dtype = "B"                                                 // assume binary
+            else if ntype == dictionary {
+                dtype = "M"
+                datum = recordNaanToDyn(datum)
+            }
+            else if numeric(datum) {
+                dtype = "N"
+                datum = tostring(datum)
+            }
+            else if ntype == string
+                dtype = "S"
+            else if ntype == symbol {
+                if datum === null {
+                    dtype = "NULL"
+                    datum = "true"
+                }
+                else if datum === true || datum === false
+                    dtype = "BOOL"
+                else if datum === undefined
+                    datum = undefined
+                else
+                    dtype = "S"                                             // some other symbol is string
+            } else
+                debuglog("DynaTable.datumNaanToDyn: invalid type", ntype)
+        }
+        output[dtype] = datum
+        output
+    }
+
+    // recordNaanToDyn
+    // Convert a Naan dictionary to DynamoDB format.
+    //
+    function recordNaanToDyn(nitem, local output, key, data) {
+        output = { }
+        for `(key, data) in nitem
+            output[key] = datumNaanToDyn(data)
+        output
+    }
+
+    // datumDynToNaan
+    // Convert a DynamoDB typed attribute to Naan format.
+    //
+    function datumDynToNaan(dtype, dvalue, local output) {
+        if dtype == "BS" || dtype == "SS"
+            dvalue
+        else if dtype == "NS"
+            new(dvalue).map(function(item) {
+                if item.indexOf(".") >= 0
+                    Number.parseFloat(item)
+                else
+                    Number.parseInt(item)
+            })
+        else if dtype == "M"
+            recordDynToNaan(dvalue)
+        else if dtype == "L"
+            new(dvalue).map(function(item, local itype) {
+                itype = item.*.0
+                datumDynToNaan(itype, item[itype])
+            })
+        else if dtype == "BOOL"
+            dvalue && true
+        else if dtype == "N" {
+            if dvalue.indexOf(".") >= 0
+                Number.parseFloat(dvalue)
+            else
+                Number.parseInt(dvalue) }
+        else if dtype == "NULL"
+            null
+        else if dtype == "B" || dtype == "S"
+            dvalue
+        else {
+            debuglog("DynaTable.datumDynToNaan: unknown type", dtype, typeof(dvalue), dvalue)
+            false }
+    }
+
+    // recordDynToNaan
+    // Convert a DynamoDB typed item dictionary to Naan format.
+    //
+    function recordDynToNaan(ditem, local output, key, data, dtype, dvalue) {
+        output = { }
+        for `(key, data) in ditem {
+            dtype = data.*.0
+            dvalue = data[dtype]
+            output[key] = datumDynToNaan(dtype, dvalue)
+        }
+        output
+    }
+    
+    //
+    // dynQueryPager
+    //
+    // Perform a dynamo paged query. This implements paging conventions specific to CWL. The callback
+    // should return the number of items found in the data, or false to stop looping.
+    //
+    closure dynQueryPager(procname, params, remaining, doneCB) {
+        params.Limit = remaining
+        QueryPager(cwlogs.aws, procname, params, function(data, local processed) {
+            processed = doneCB(data)
+            if processed
+                remaining -= processed
+            if processed && (!remaining || remaining > 0)
+                && data.LastEvaluatedKey && data.LastEvaluatedKey != params.ExclusiveStartKey {
+                params.Limit = remaining                                // set up for next iteration
+                params.ExclusiveStartKey = data.LastEvaluatedKey
+                true                                                    // continue looping
+            }
+        })
+    }
+
+    //
+    // info
+    //
+    //     Return info about the table, or an error, in standard (error, dictionary) tuple format.
+    //
+    // info dictionary:
+    //  {
+    //      name:       <name>                  // table name
+    //      created:    <date-time>             // when created
+    //      size:       <number>                // size of table in bytes
+    //      length:     <number>                // number of items in table
+    //      status:     <string>                // ACTIVE | CREATING | etc.
+    //      hash:       <name>                  // primary hash key attribute name
+    //      hashType:   <type>                  // string | numeric
+    //      range:      <name>                  // primary range key attribute name (if exists)
+    //      rangeType:  <name>                  // string | numeric (if exists)
+    //  }
+    //
+    table.info = closure info(local params, pending, info) {
+        if !dyna.aws
+            return (list(Error("DynaTable.info: not logged into AWS")))
+        params = {
+            TableName: tablename
+        }
+        pending = new(nonce)
+        dyna.aws.describeTable(params, function(error, data, local output, key) {
+            if error {
+                dynaTableError = error
+                debuglog("aws.describeTable failed", tablename, error)
+            } else {
+                data = data.Table
+                output = {
+                    name:       data.TableName                              // table name
+                    created:    data.CreationDateTime                       // when created
+                    byteSize:   data.TableSizeBytes                         // size of table in bytes
+                    length:     data.ItemCount                              // number of items in table
+                    status:     data.TableStatus                            // ACTIVE | CREATING | etc.
+                }
+                for key in data.KeySchema
+                    if key.KeyType == "HASH"
+                        output.hash = key.AttributeName
+                    else if key.KeyType == "RANGE"
+                        output.range = key.AttributeName
+                for key in data.AttributeDefinitions
+                    if key.AttributeName == output.hash
+                        output.hashType = fieldTypeDynToNaan(key.AttributeType)
+                    else if key.AttributeName == output.range
+                        output.rangeType = fieldTypeDynToNaan(key.AttributeType)
+                table.hashKey = output.hash                                 // hash attribute name
+                table.rangeKey = output.range                               // range attribute name or false
+            }
+            pending.signal(list(error, output))
+        })
+        pending.wait()
+    }
+
+    //
+    // create
+    //
+    //     Create the table with specified parameters, blocking until the table is ready for use.
+    //
+    // parameters dictionary:
+    //  {
+    //      hash:       <name>                  // primary hash key attribute name
+    //      hashType:   <type>                  // string | numeric
+    //      range:      <name>                  // primary range key attribute name (optional)
+    //      rangeType:  <name>                  // string | numeric (if range specified)
+    //  }
+    
+    table.create = closure create(parameters, local hashType, rangeType, params, pending, error, data, start) {
+        if !dyna.aws
+            return (list(Error("DynaTable.create: not logged into AWS")))
+        hashType = fieldTypeNaanToDyn(parameters.hashType)
+        if !parameters.hash || !hashType
+            return (list(Error("DynoTable.create: primary key hash/hashType required")))
+        params = {
+            TableName: tablename
+            AttributeDefinitions: [
+                {
+                    AttributeName: parameters.hash
+                    AttributeType: hashType
+                }
+            ]
+            KeySchema: [
+                {
+                    AttributeName: parameters.hash
+                    KeyType: "HASH"
+                }
+            ]
+        }
+        if parameters.range {
+            rangeType = fieldTypeNaanToDyn(parameters.rangeType)
+            if !rangeType
+                return (list(Error("DynoTable.create: range requires rangeType")))
+            params.AttributeDefinitions.push({
+                AttributeName: parameters.range
+                AttributeType: rangeType
+            })
+            params.KeySchema.push({
+                AttributeName: parameters.range
+                KeyType: "RANGE"
+            })
+        }
+        pending = new(nonce)
+        dyna.aws.createTable(params, function(error, data) {
+            if error {
+                dynaTableError = error
+                debuglog("aws.createTable failed", tablename, error)
+            }
+            pending.signal(list(error, data))
+        })
+        `(error, data) = pending.wait()
+        if error
+            return(list(Error("aws.createTable failed", error)))
+        start = milliseconds()
+        loop {
+            `(error, data) = info()
+            if data.status == "ACTIVE"
+                break
+            if milliseconds() - start > 20000 {                             // 20 seconds
+                if !error
+                    error = data.status
+                return(list(Error("DynoTable.create: timeout waiting for new table to become active", error)))
+            }
+            sleep(2000)
+        }
+        list(false, data)
+    }
+
+    //
+    // putRecord
+    //
+    //     Put an record in the table, replacing any existing record with the same key.
+        
+    table.putRecord = closure putRecord(record, local result, params, pending) {
+        if !table.hashKey {
+            result = info()
+            if result.0
+                return(result)
+        }
+        params = {
+            TableName: tablename
+            Item: recordNaanToDyn(record)
+        }
+        pending = new(nonce)
+        dyna.aws.putItem(params, function(error, data, local output) {
+            if error {
+                dynaTableError = error
+                debuglog("aws.putItem failed", tablename, error)
+            }
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    //
+    // getRecord
+    //
+    //     Get a record from the table with the specified hash value, and optional range value.
+        
+    table.getRecord = closure getRecord(hashValue, rangeValue, local result, params, pending) {
+        if !table.hashKey {
+            result = info()
+            if result.0
+                return(result)
+        }
+        params = {
+            TableName: tablename
+            Key: { }
+        }
+        params.Key[table.hashKey] = datumNaanToDyn(hashValue)
+        if table.rangeKey
+            params.Key[table.rangeKey] = datumNaanToDyn(rangeValue)
+        pending = new(nonce)
+        dyna.aws.getItem(params, function(error, data, local output) {
+            if error {
+                dynaTableError = error
+                debuglog("aws.getItem failed", tablename, error)
+            } else
+                data = recordDynToNaan(data.Item)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    //
+    // queryRecords
+    //
+    // Options:
+    //  {
+    //      index:      <string>                                            // index name in table
+    //      range:      <expression-dictionary>                             // range of keys to retrieve
+    //      reverse:    <boolean>                                           // reverse order
+    //      limit:      <number>                                            // maximum count of results
+    //  }
+    //
+    // range dictionary:
+    //  {
+    //      "=":        <expression>                                        // exclusive of other comparisons
+    //      ">":        <expression>                                        // exclusive of other comparisons
+    //      "<":        <expression>                                        // exclusive of other comparisons
+    //      beginsWith: <string-expression>                                 // exclusive of other comparisons
+    //      ">=":       <expression>                                        // with <= or alone
+    //      "<=":       <expression>                                        // with >= or alone
+    //  }
+    //
+
+    table.queryRecords = closure queryRecords(hashValue, options
+        local result, params, op, expr, rangex, output, error)
+    {
+        if !table.hashKey {
+            result = info()
+            if result.0
+                return(result)
+        }
+        params = {
+            TableName: tablename
+            ExpressionAttributeValues: {
+                ":v1": datumNaanToDyn(hashValue)
+            }
+            KeyConditionExpression: strcat(table.hashKey, " = :v1")
+        }
+        if options.range {
+            for `(op, expr) in options.range {
+                function dupeop() { list(Error("DynaTable.queryRecords: cannot combine", op, "with", rangex.0)) }
+                if op == ">=" {
+                    if rangex.0 == "<="
+                        rangex = list("between", expr, rangex.1)
+                    else if rangex.0
+                        return (dupeop())
+                    else
+                        rangex = list(op, expr) }
+                else if op == "<=" {
+                    if rangex.0 == ">="
+                        rangex = list("between", rangex.1, expr)
+                    else if rangex.0
+                        return (dupeop())
+                    else
+                        rangex = list(op, expr) }
+                else if rangex.0
+                    return (dupeop())
+                else
+                    rangex = list(op, expr)
+            }
+            if rangex {
+                params.ExpressionAttributeValues[":v2"] = datumNaanToDyn(rangex.1)
+                if rangex.0 == "between" {
+                    params.ExpressionAttributeValues[":v3"] = datumNaanToDyn(rangex.2)
+                    expr = strcat(" between :v2 and :v3")
+                }
+                else
+                    expr = strcat(space, rangex.0, " :v2")
+                params.KeyConditionExpression = params.KeyConditionExpression.concat(" and ", table.rangeKey, expr)
+            }
+        }
+        output = []
+        `(error) = cwlQueryPager(`query, params, options.limit, function(data) {
+            if data.Count >= 0
+                output = output.concat(recordDynToNaan(data.Items))
+            data.Count
+        })
+        if error
+            output = false
+        list(error, output)
+    }
+
+    // finis
+    
+    table
+};
+
+
+/*
+ * DynamoDB
+ *
+ *     DynamoDB access objects.
+ *
+ */
+
+closure DynamoDB(local dyna) {
+    dyna = new(object, this)
+
+    //
+    // login
+    //
+    dyna.login = closure login(creds) {
+        dyna.aws = xnew(awsSDK.DynamoDB, {
+            apiVersion:         "2012-08-10",
+            accessKeyId:        creds.keyID,
+            secretAccessKey:    creds.keySecret,
+            region:             creds.region })
+    }
+    
+    //
+    // table
+    //
+    //     Return a new table access object for the table of the specified name. The table may not 
+    // yet exist; see DynaTable for methods.
+    //
+    // parameters:
+    //  {
+    //      hash:       <name>                  // primary hash key attribute name (required)
+    //      hashType:   <type>                  // string | numeric (required)
+    //      range:      <name>                  // primary range key attribute name (optional)
+    //      rangeType:  <name>                  // string | numeric (required if range specified)
+    //  }
+    //
+    dyna.table = closure table(name) {
+        DynaTable(dyna, name)
+    }
+
+    // finis
+    dyna
+}
+
+
+/*
+ * dynadaInit
+ *
+ *     Initialize the DynamoDB module.
+ *
+ */
+
+function dynadaInit(local manifest) {
+    manifest = `(DynaTable, DynamoDB, dynadaInit)
+
+    Naan.module.build(module.id, "aws_dynamo", function(modobj, compobj) {
+        require("./serviceAws.nlg")
+        compobj.manifest = manifest
+        modobj.exports.DynamoDB = DynamoDB
+    })
+
+} ();

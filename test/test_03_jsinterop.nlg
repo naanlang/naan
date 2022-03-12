@@ -1,0 +1,137 @@
+/*
+ * test_03_jsinterop.nlg
+ * Test
+ *
+ * Perform basic unit tests for Naan.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Test Category 3 - JSinterop
+ *
+ */
+
+RegisterTestCategory("JSinterop", [
+    [ "4+3;", "7" ],                                                        // generic first test
+
+
+    //
+    // external objects
+    //
+    
+    [ "o=xnew();", "[object Object]" ],
+    [ "o.a=true;", "true" ],
+    [ "o.a;", "true" ],
+    [ "o.a=false;", "false" ],
+    [ "o.a;", "false" ],
+    [ "o.a=undefined;", "undefined" ],
+    [ "o.a;", "undefined" ],    
+    [ "o.nodef;", "undefined" ],
+
+    [ "o(3);", { errors: "xcall \"[object Object]\": TypeError: e[3].apply is not a function" } ],
+    [ "o(Number);", { errors: "xcall \"[object Object]\": TypeError: e[3].apply is not a function" } ],
+    [ "Number(3);", "[Number 3]" ],
+    [ "Number(3).toString();", "\"3\"" ],
+    [ "tostring(Number(3));", "\"[Number 3]\"" ],
+    [ "tostring(Number(3), true);", "\"[Number 3]\"" ],
+    [ "call(Number, 3);", "[Number 3]" ],
+    [ "tostring(call(Number, 3));", "\"[Number 3]\"" ],
+    [ "String(\"hi there\");", "[String hi there]" ],
+    [ "String(\"hi there\").toString();", "\"hi there\"" ],
+    [ "tostring(String(\"hi there\"));", "\"[String hi there]\"" ],
+    [ "tostring(String(\"hi there\"), true);", "\"[String hi there]\"" ],
+    [ "xcall({});", "false" ],
+
+    [ "sqrt = false;", "false" ],
+    [ "Math.sqrt(9);", "3" ],                                               // ensure method selector is not evalulated
+    
+    [ "xnew(js.g.Promise, function() {});", "[object Promise]" ],
+    
+    
+    //
+    // child processes
+    // ### only on NodeJS
+    //
+    
+//  [ "xnew(js.g.Promise, function() {});", "[object Promise]" ],
+//  [ "js.g.process.version;", "v12.18.2" ],
+//  [ "js.r(\"child_process\").spawnSync(\"node\", list(\"--version\")).output.1.toString();", "v12.18.2" ],
+    
+    
+    //
+    // stacktrap
+    //
+    
+    [ "closure spread (nth) { stacktrap(nth,function&(x) { print(\"in-\",x,\"-\",nth) }) };", "spread" ],
+    [ "spread(0);", "in-Dictionary{0}-0|{ }" ],
+    [ "spread(1);", "in-Dictionary{0}-1|{ }" ],
+    [ "spread(2);", "in-Dictionary{0}-2|{ }" ],
+    [ "spread(3);", "in-Dictionary{0}-3|{ }" ],
+    [ "spread(4);", "in-Dictionary{0}-4|{ }" ],
+    [ "spread(5);", "in-Dictionary{0}-5|{ }" ],
+    [ "spread(6);", "in-Dictionary{0}-6|{ }" ],
+    [ "spread(7);", "in-1-7|{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"in-\", x, \"-\", nth)\n"
+    "    } }" ],
+    [ "spread(8);", "in-1-8|{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"in-\", x, \"-\", nth)\n"
+    "    } }" ],
+    [ "spread(9);", "{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"in-\", x, \"-\", nth)\n"
+    "    } }" ],
+    
+    [ "closure nospread nthl { stacktrap(nthl.0,function&(x) { print(\"in-\",x,\"-\",nthl.0) }) };", "nospread" ],
+    [ "nospread(0);", "in-Dictionary{0}-0|{ }" ],
+    [ "nospread(1);", "in-Dictionary{0}-1|{ }" ],
+    [ "nospread(2);", "in-Dictionary{0}-2|{ }" ],
+    [ "nospread(3);", "in-Dictionary{0}-3|{ }" ],
+    [ "nospread(4);", "in-Dictionary{0}-4|{ }" ],
+    [ "nospread(5);", "in-Dictionary{0}-5|{ }" ],
+    [ "nospread(6);", "in-Dictionary{0}-6|{ }" ],
+    [ "nospread(7);", "in-1-7|{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"in-\", x, \"-\", nthl.0)\n"
+    "    } }" ],
+    [ "nospread(8);", "in-1-8|{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"in-\", x, \"-\", nthl.0)\n"
+    "    } }" ],
+    [ "nospread(9);", "{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"in-\", x, \"-\", nthl.0)\n"
+    "    } }" ],
+
+    [ "Array(0,1,2,3,4,5,6,7,8,9,10).filter(function&(nth) { stacktrap(nth,function&() { print(\"in-\",nth, \" \") }) });",
+        { text: "in-0 in-1 in-nth in-nth in-nth in-nth in-nth in-nth in-nth in-nth in-nth" } ],
+        
+    [ "loop { stacktrap(0,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],
+    [ "loop { stacktrap(1,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],
+    [ "loop { stacktrap(2,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],
+    [ "loop { stacktrap(3,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],
+    [ "loop { stacktrap(4,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],
+    [ "loop { stacktrap(5,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],
+    [ "loop { stacktrap(6,function&(x) { print(\"loop-\",x) }), break };", "loop-1|{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"loop-\", x)\n"
+    "    } }" ],
+    [ "loop { stacktrap(7,function&(x) { print(\"loop-\",x) }), break };", "loop-1|{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"loop-\", x)\n"
+    "    } }" ],
+    [ "loop { stacktrap(8,function&(x) { print(\"loop-\",x) }), break };", "{\n"
+    "    trap: function& (x) {\n"
+    "        print(\"loop-\", x)\n"
+    "    } }" ],
+
+    [ "function&(top,local nth){ nth=0, loop { print(nth), closure(nth) { stacktrap(nth,function&(x) { print(\" loop-\",x,\"-\",nth) }) }(nth), if nth >= top break else nth = nth+1 }, }(9);",
+        "0 loop-Dictionary{0}-01 loop-Dictionary{0}-123456789 loop-true-2 loop-true-3 loop-true-4 loop-true-5 loop-true-6 loop-true-7 loop-true-8 loop-true-9|true" ]
+
+]);

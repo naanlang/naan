@@ -1,0 +1,29 @@
+/*
+ * project.nlg
+ * Naanlib/frameworks/project/
+ *
+ *     Root component for Naanide projects.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * prorInit
+ *
+ *     Initialize the project module.
+ *
+ *
+ */
+
+function prorInit(local manifest) {
+    manifest = `(prorInit)
+
+    Naan.module.build(module.id, "project", function(modobj, compobj) {
+        require("../common").LiveImport()
+        compobj.manifest = manifest
+    })
+} ();

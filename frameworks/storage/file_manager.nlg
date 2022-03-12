@@ -1,0 +1,772 @@
+/*
+ * file_manager.nlg
+ * frameworks/storage
+ *
+ *     File manager for working with contents of a folder.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * FileManager
+ *
+ *     The file manager provides an interface between the a storage client and the contents of an
+ * underlying folder, ensuring a consistent view of the file state with integrated caching and source
+ * control operations, and high-level functions for searching, indexing (one day), and managing the
+ * contents of the folder. The return value is the file manager object.
+ *
+ */
+
+closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
+    files = new(object, this)
+    files.fs = fs
+    files.nodes = []                                                        // array of nodes, one per file or folder
+    files.stores = {}                                                       // file storage sessions
+    files.loadPending = new(nonce)                                          // delay callers while working
+    watch = commonWatching.Watchable()
+    files.watch = watch.watch                                               // watch for file changes
+    files.unWatch = watch.unwatch                                           // stop watching for file changes
+
+    // compareNodes
+    //
+    // Compare path objects for sorting.
+    //
+    function compareNodes(a, b) {
+        if a.path < b.path
+            return (-1)
+        else if a.path > b.path
+            return (1)
+        0
+    }
+
+    // pathIndex
+    //
+    // Find the specified path in the nodes list using a binary search on the sorted nodes, returning
+    // the index of the node or false.
+    //
+    function pathIndex(sought, local upper, lower, z) {
+        upper = files.nodes.length
+        if upper == 0
+            return (false)                                                  // not found
+        lower = z = 1
+        loop {
+            z = (upper + lower) / 2
+            if sought <= files.nodes[z-1].path
+                upper = z - 1
+            if sought >= files.nodes[z-1].path
+                lower = z + 1
+            if upper < lower
+                break
+        }
+        if lower - upper > 1
+            return (z - 1)
+        false
+    }
+
+    // flatten
+    //
+    // Flatten the specified tree into an array of path objects. This accomodates the possibility
+    // that a node name is empty. In compliance with DBtables filesystem mapping, this uses pathsep
+    // as the pathname for an empty directory. So "a" is a file in the root, "/a" is a file in the
+    // empty-named directory in the root, and "a//b" is in the empty directory inside of "a", etc.
+    //
+    function flatten(tree, local nodes, pathsep) {
+        nodes = []
+        if !tree
+            return(nodes)                                                   // no tree to enumerate
+        pathsep = tree.data.pathsep
+        function addPaths(parent, node, local item, items, child) {         // add nodes for tree children, if any
+            if parent == "" {                                               // either root or empty directory
+                if node.name == ""
+                    parent = pathsep                                        // node in empty-named directory
+                else
+                    parent = node.name }                                    // node in root
+            else if parent == pathsep
+                parent = parent.concat(node.name)                           // child of empty directory
+            else if parent
+                parent = parent.concat(pathsep, node.name)                  // deeper than root
+            else
+                parent = ""                                                 // root itself
+            item = {
+                path: parent
+                name: node.name
+            }
+            if node.deleted
+                item.deleted = node.deleted                                 // copy the deleted flag
+            nodes.push(item)
+            if !node.children
+                return (item)
+            items = []                                                      // children
+            if array(node.children) {                                       // e.g. "symlink" if not array
+                for child in node.children
+                    if child.name.charAt(0) != "." {                        // ### should check hidden flag
+                        child = addPaths(parent, child)                     // child becomes new node/subtree
+                        if child
+                            items.push(child) }
+            }
+            item.children = items.sort(compareNodes.proc)
+            item
+        } (false, tree)
+        nodes
+    }
+
+    // difftree
+    //
+    // Update our nodes array with a new tree, returning the differences.
+    //
+    function difftree(updated, local original, added, deleted, changed, odex, udex, store) {
+        original = files.nodes
+        added = []
+        deleted = []
+        changed = []
+        updated = updated.sort(compareNodes.proc)
+        odex = udex = 0
+        while odex < original.length || udex < updated.length {
+           if odex >= original.length || original[odex].path > updated[udex].path
+                added.push(updated[udex++])
+            else if udex >= updated.length || original[odex].path < updated[udex].path {
+                store = files.stores[original[odex].path]
+                if store
+                    store.deleted = true
+                deleted.push(original[odex++])
+            }
+            else {
+                if original[odex].meta
+                    updated[udex].meta = original[odex].meta                // meta copied over
+                if original[odex].gitstat
+                    updated[udex].gitstat = original[odex].gitstat          // gitstat copied over
+                if original[odex].info != updated[udex].info                // info is change items to compare
+                    changed.push(original[odex])
+                ++odex
+                ++udex
+            }
+        }
+        files.nodes = updated
+        if added.length > 0 || deleted.length > 0 {
+            {                                                               // return changes dictionary
+                added: added
+                deleted: deleted
+                changed: changed
+            }
+        }
+    }
+
+    // parentPath
+    //
+    // Return the parent path of the specified node, or "" for the root.
+    //
+    function parentPath(node) {
+        path = node.path
+        if path.slice(-1) == files.pathsep
+            path = path.slice(0,-1)
+        path.split(files.pathsep).slice(0,-1).join(files.pathsep)
+    }
+    
+    // opBeginOrReschedule
+    //
+    // Begin an asynchronous operation if we're idle, or schedule it to be performed when we're
+    // done with the current operation.
+    //
+    function opBeginOrReschedule(newproc) {
+    
+        function opExecute(proc, local pending, result) {
+            files.loadPending.reset()
+            pending = new(nonce)
+            call(proc, function(error, data) {
+                pending.signal(list(error, data))
+            })
+            result = pending.wait()
+            files.loadPending.signal(result)
+        }
+
+        if opqueue
+            opqueue.push(newproc)                                           // already have a runner
+        else {
+            opqueue = [newproc]
+            future(function() {                                             // schedule a runner
+                while opqueue.length > 0 {
+                    opExecute(opqueue.0)
+                    opqueue.shift() 
+                }
+                opqueue = false
+            }).run()
+        }
+    }
+    
+    // refreshDir
+    //
+    // Asynchronously refresh the specified directory, enumerating its children and updating our
+    // records. This emits change notifications to our watchers.
+    //
+    closure refreshDir(parpath) {
+        opBeginOrReschedule(closure(callback) {
+            files.fs.util.treeDirUpdate("", parpath, files.tree, function(error, changes, local updated) {
+                if error {                                                  // need better error reporting
+                    ErrorDebuglog("FileManager.refreshDir failed", error)
+                    return (callback(error))
+                }
+                updated = flatten(files.tree)
+                changes = difftree(updated)
+                if changes
+                    watch.notify("folder", changes)
+                callback(false, files.nodes)
+            })
+        })
+    }
+
+    // load
+    //
+    // Initialize our knowledge of the project by loading a tree of the files and folders. This can
+    // require some time so it takes place asynchronously once started.
+    //
+    files.load = closure load() {
+        update()
+    }
+
+    // update
+    //
+    // Update our project storage tree and tell the watchers about any changes.
+    //
+    files.update = closure update() {
+        opBeginOrReschedule(closure(callback) {
+            files.fs.tree("", false, function (error, tree, local updated, changes) {
+                if error {                                                  // need better error reporting
+                    ErrorDebuglog("FileManager.update failed", error)
+                    return (callback(error))
+                }
+                files.tree = tree
+                files.pathsep = tree.data.pathsep
+                updated = flatten(tree)
+                changes = difftree(updated)
+                if changes
+                    watch.notify("folder", changes)
+                schedGitRefresh()                                           // schedule the initial git update
+                callback(false, files.nodes)
+            })
+        })
+    }
+
+    // fileList
+    //
+    // Return an array of files in the project by local pathname. The first element is the root and
+    // will have a children array for tree-structured traversal.
+    // Each path object has:
+    //  {
+    //      path:       -- relative pathname string
+    //      name:       -- just our node name
+    //      [children:] -- array of child path objects, if a directory
+    //  }
+    //
+    files.fileList = function fileList() {
+        files.nodes
+    }
+    
+    // waitFileList
+    //
+    // Wait until the filelist is loaded, and then callback or return.
+    //
+    files.waitFileList = closure waitFileList(callback) {
+        if callback
+            future(function() { apply(callback, files.loadPending.wait()) }).run()
+        else
+            files.loadPending.wait()
+    }
+
+    // findConfig
+    //
+    // Make a find configuration dictionary defining a search pattern and parameters. This can be
+    // duplicated or modified freely.
+    //
+    files.findConfig = function findConfig() {
+        {                                                                   // ### these should come from files.fs (?)
+            pattern: ""
+            fixed: true
+            ignoreCase: true
+            returnText: true
+        }
+    }
+    
+    // findRegex
+    //
+    // Return a RegExp for the specified findConfig, or false if invalid.
+    //
+    files.findRegex = function findRegex(config, global, local pattern, flags, matchRE) {  // ### move to files.fs (?)
+        pattern = config.pattern
+        flags = ""
+        if config.fixed
+            pattern = pattern.replace(RegExp("\\.|\\0|\\\\|\\[|\\||\\(|\\)|\\*|\\+|\\?|\\{", "g"), function(match) {
+                "\\".concat(match)                                          // escape all special RegExp characters
+            })
+        if global
+            flags = "g"
+        if config.ignoreCase
+            flags = flags.concat("i")
+        try {
+            matchRE = RegExp(pattern, flags)
+        } catch {
+            if true {
+                debuglog("files.findRegex: invalid pattern", pattern)
+                return (false)
+            }
+        }
+        matchRE
+    }
+    
+    // findLines
+    //
+    // Find matching lines for the specified findConfig. This returns a standard result tuple, which
+    // on success will provide an output dictionary listing the matching files and lines. The output
+    // dictionary is structured as follows:
+    //  {
+    //      config: <findConfig>            -- the configuration we used for the search
+    //      files: [                        -- array of files having results
+    //          {   node: <local>           -- file node
+    //              lines: []   } ]         -- array of integer line numbers in that file, zero-based
+    //  }
+    // What we really want is indexed search, but since there isn't time for that right now this will
+    // use grepLines or dirSearch if they are available, and otherwise read the files and apply the
+    // find pattern to each line.
+    //
+    files.findLines = closure findLines(config, local startMS, output, fileCount, foundFileCount, lineCount) {
+        
+        // processGrep
+        // Apply the specified search method to our directory tree.
+        function processGrep(method, local curfile, curlines, error, line, lines) {
+            fileCount = files.nodes.length
+            `(error, lines) = method("", config)
+            if error
+                debuglog("search failed:", ErrorString(error))
+            else {
+                function startFile(path) {
+                    if path {
+                        curfile = files.nodes[pathIndex(path)]
+                        if !curfile
+                            debuglog("files.findLines: unknown path", path) }
+                    else
+                        curfile = false
+                    curlines = []
+                }
+                function doneFile() {
+                    if curfile && curlines.length > 0 {
+                        output.files.push({
+                            node: curfile
+                            lines: curlines
+                        })
+                        ++foundFileCount }
+                }
+                startFile()
+                for line in lines {
+                    ++lineCount
+                    if line.0 != curfile.path {
+                        doneFile()
+                        startFile(line.0)
+                    }
+                    curlines.push([line.1, line.2])
+                }
+                doneFile() }
+        }
+
+        startMS = milliseconds()
+        output = {
+            config: config
+            files: []
+        }
+        fileCount = 0
+        foundFileCount = 0
+        lineCount = 0
+
+        if files.fs.grepLines
+            processGrep(files.fs.grepLines)
+        else if files.fs.dirSearch
+            processGrep(files.fs.dirSearch)
+        else {
+            asyncArray(files.nodes, 5, closure(node, index, elements, local error, lines) {
+                ++fileCount
+                `(error, lines) = files.fs.readLines(node, config)
+                if error
+                    debuglog("cannot search", node, ErrorString(error))
+                else if lines.length > 0 {
+                    ++foundFileCount
+                    output.files.push({
+                        node: node
+                        lines: lines
+                    })
+                    lineCount += lines.length
+                }
+            }).wait()
+        }
+        output.elapsedMS = milliseconds()-startMS                           // elapsed time in milliseconds
+        output.foundCount = lineCount                                       // number of lines containing the pattern
+        output.foundFileCount = foundFileCount                              // number of files containing the pattern
+        output
+    }
+    
+    // gitRefresh
+    //
+    // Refresh the git status of the project folder, and return a list of the changes.
+    //
+    files.gitRefresh = closure gitRefresh() {
+        if !files.fs.gitStatus
+            return                                                          // no git checking available
+        opBeginOrReschedule(closure(callback) {
+            willgit = true
+            files.fs.gitStatus(false, function (error, statlist, local changed, delgit, unknownFiles, unknownFileStatus, changes, classID) {
+                if error {
+                    files.gitvalid = false
+                    return (callback(error))
+                }
+                files.gitvalid = true
+    
+                // setParentStatus
+                // Set the git status of the parents of a node. This is not used to clear status.
+                
+                function setParentStatus(node, local parpath, parnode) {
+                    parpath = parentPath(node)
+                    if parpath != "" {
+                        hadgit[parpath] = 1
+                        delgit[parpath] = undefined
+                        parnode = files.nodes[pathIndex(parpath)]
+                        if parnode.gitstat != node.gitstat && parnode.gitstat != "**" {
+                            if !parnode.gitstat
+                                parnode.gitstat = node.gitstat              // directory status becomes child status
+                            else
+                                parnode.gitstat = "**"                      // directory has diverse child status
+                            changed.push(parnode) }
+                        setParentStatus(parnode) } }                        // must visit all parents each time to ensure hadgit/delgit are complete
+    
+                // setStatus
+                // Set or clear the status of a node.
+    
+                function setStatus(path, status, local node) {
+                    if (node = files.nodes[pathIndex(path)]) {
+                        if node.gitstat != status {
+                            node.gitstat = status
+                            changed.push(node) }
+                        if status                                           // if no status then parent will be set directly
+                            setParentStatus(node) }                         // always visit all parents
+                    else {
+                        unknownFiles.push(path)
+                        unknownFileStatus[path] = status }
+                    }
+    
+                changed = []
+                unknownFiles = []
+                unknownFileStatus = {}
+                delgit = hadgit
+                hadgit = {}
+                willgit = false
+                for item in statlist {
+                    hadgit[item.path] = 1
+                    delgit[item.path] = undefined
+                    setStatus(item.path, item.status)
+                }
+                if unknownFiles.length > 0 {                                // add any deleted files that git knows about
+                    files.fs.util.treeAddFiles(unknownFiles, files.tree)
+                    changes = difftree(flatten(files.tree))
+                    for item in changes.added {                             // update node and parent status
+                        item.gitstat = unknownFileStatus[item.path]
+                        hadgit[item.path] = 1
+                        delgit[item.path] = undefined
+                        setParentStatus(item) }
+                }
+                if changes
+                    classID = "folder"
+                else {
+                    classID = "git"                                         // status up date only
+                    changes = { }
+                }
+                for item in delgit {
+                    if item.deleted {                                       // file that previously had deleted status is now gone
+                        if !changes.deleted
+                            changes.deleted = []
+                        changes.deleted.push(item) }                        // not actually deleted at this time, but filtered in UI
+                    else
+                        setStatus(item, false) }
+                if changed.length > 0
+                    changes.changed = changed
+                if changes.added.length > 0 || changes.changed.length > 0
+                    watch.notify(classID, changes)
+                callback(false, files.nodes)
+            })
+        })
+    }
+    
+    // schedGitRefresh
+    //
+    // Schedule a git refresh. This ensures we only do one refresh per time interval.
+    //
+    files.schedGitRefresh = function schedGitRefresh() {
+        if !willgit {
+            willgit = true
+            future(gitRefresh, 1000)                                        // one scheduled refresh per 1000 msec
+        }
+    }
+
+    // path2node
+    //
+    // Return the node for a path, or false if not in the tree.
+    //
+    files.path2node = function path2node(path) {
+        files.nodes[pathIndex(path)]
+    }
+        
+    // delete
+    //
+    // Delete a file or directory.
+    //
+    files.delete = function delete(node, local parpath, options, result) {
+        parpath = parentPath(node)
+        if node.children
+            options = { recursive: true }
+        result = files.fs.delete(node.path, options)
+        refreshDir(parpath)
+        result
+    }
+        
+    // duplicate
+    //
+    // Duplicate a file or directory.
+    //
+    files.duplicate = function duplicate(node, local parpath, result) {
+        parpath = parentPath(node)
+        result = files.fs.util.duplicate(node.path)
+        refreshDir(parpath)
+        result
+    }
+                
+    // newFile
+    //
+    // Create a new empty file with an appropriate default name.
+    //
+    files.newFile = function newFile(node, local parpath, result) {
+        if node.children
+            parpath = node.path                                             // create file in selected folder
+        else
+            parpath = parentPath(node)                                      // create file in same folder as selected file
+        result = files.fs.util.newFile(parpath)
+        refreshDir(parpath)
+        result
+    }
+
+    // newFolder
+    //
+    // Create a new directory with an appropriate default name.
+    //
+    files.newFolder = function newFolder(node, local parpath, result) {
+        if node.children
+            parpath = node.path                                             // create folder in selected folder
+        else
+            parpath = parentPath(node)                                      // create folder in same folder as selected file
+        result = files.fs.util.newFolder(parpath)
+        refreshDir(parpath)
+        result
+    }
+
+    // rename
+    //
+    // Rename a file or directory to the new name.
+    //
+    files.rename = function rename(node, newname, local parpath, result) {
+        parpath = parentPath(node)
+        result = files.fs.copy(node.path, newname, { move: true })
+        refreshDir(parpath)
+        result
+    }
+        
+    // reveal
+    //
+    // Reveal a file or directory in the host shell.
+    //
+    files.reveal = function reveal(node) {
+        files.fs.reveal(node.path)
+    }
+    
+    // store
+    //
+    // Return a fimaStore object for the specified file, creating it if needed.
+    //
+    files.store = function store(node) {
+        if files.stores[node.path]
+            return
+        files.stores[node.path] = fimaStore(files, path2node(node.path))
+    }
+    
+    // stored
+    //
+    // Return a fimaStore object for the specified file if it already exists.
+    //
+    files.stored = function stored(node) {
+        files.stores[node.path]
+    }
+   
+    // annotate
+    //
+    // Annotate a node with an editor annotations array.
+    //
+    files.annotate = function annotate(path, annotations, local node) {
+        node = path2node(path)
+        if node {
+            node.annotations = annotations
+            watch.notify("annotations", { changed: [node] })
+        }
+    }
+    
+    // clearAnnotations
+    //
+    // Clear editor annotations from all nodes.
+    //
+    files.clearAnnotations = function clearAnnotations(local changes, node) {
+        changes = []
+        for node in files.nodes
+            if node.annotations {
+                node.annotations = false
+                changes.push(node)
+            }
+        if changes.length > 0
+            watch.notify("annotations", { changed: changes })
+    }
+
+    // finis
+
+    files
+};
+
+
+/*
+ * fimaStore
+ *
+ *     A fimaStore object is responsible for storage services for a particular file being edited.
+ * This includes reading and writing the contents to and from the edit buffer, updating on changes or
+ * determining that a conflict exists between changes in storage and editor, etc. A fimaStore should
+ * be referenced independent of file location, so that someday it will be possible to accommodate
+ * renames and path changes without interrupting the editing.
+ *
+ */
+
+closure fimaStore(fm, node, local store) {
+    store = new(object, this)
+    store.fm = fm
+    store.fs = fm.fs
+    store.uuid = UUID()
+    store.name = node.name
+    store.path = node.path
+    store.deleted = node.deleted
+    
+    // hashData
+    //
+    // Hash data of unknown type.
+    //
+    function hashData(data, local hash) {
+        try {
+            hash = HashMD5(data)
+        } catch {
+            if true
+                hash = 0x5fa5                                               // this data is not hashable
+        }
+        hash
+    }
+    
+    // node
+    //
+    // Return the store's node.
+    
+    store.node = function getnode() {
+        node
+    }
+    
+    // read
+    //
+    // Read contents of a file into a string, updating our hash record of the stored version.
+    //
+    store.read = closure read(options, callback) {
+        store.fs.readFile(store.path, options, function(error, data, local content) {
+            if !error {
+                store.storageHash = hashData(data)
+                content = { hash: store.storageHash }
+                if string(data)
+                    content.text = data
+                else
+                    content.binary = data }
+            callback(error, content) 
+        })
+    }
+        
+    // write
+    //
+    // Write a file with contents of a string, updating our hash record of the stored version.
+    //
+    store.write = closure write(data, options, callback) {
+        if !options
+            options = { }
+        options.md5 = store.storageHash
+        store.fs.writeFile(store.path, data, options, function(error, result) {
+            if !error
+                store.storageHash = result = hashData(data)                 // ### get this from result?
+            fm.schedGitRefresh()
+            callback(error, result)
+        })
+    }
+    
+    // exists
+    //
+    // True iff the file still exists in the tree.
+    //
+    store.exists = function exists() {
+        store.fm.path2node(store.path)
+    }
+    
+    // gitLoadFileHead
+    //
+    // Get the contents of the file at the git Head, or report an error. This
+    //
+    store.gitLoadFileHead = closure gitLoadFileHead(callback) {
+        store.fs.gitLog(store.path, function (error, loglist, local data, content) {
+            if error && store.fm.gitvalid
+                callback(Error("gitLoadFileHead failed", error))
+            else if !(loglist.length >= 1)
+                callback(false, { })                                        // no revisions to report
+            else {
+                `(error, data) = store.fs.gitShowFile(store.path, loglist.0.hash)
+                if error
+                    callback(Error("gitLoadFileHead couldn't retrieve revision", loglist.0.hash, error))
+                else {
+                    store.storageHashRight = hashData(data)
+                    content = { hash: store.storageHashRight }
+                    if string(data)
+                        content.text = data
+                    else
+                        content.binary = data
+                    callback(false, content) }
+            }
+        })
+    }
+
+    // finis
+    
+    store
+};
+
+
+/*
+ * fimaInit
+ *
+ *     Initialize the file manager component.
+ *
+ */
+
+function fimaInit(local manifest) {
+
+    manifest = `(FileManager, fimaStore, fimaInit)
+
+    Naan.module.build(module.id, "fileManager", function(modobj, compobj) {
+        require("./storage.nlg")
+        commonWatching = require("../common/watching.nlg")
+        compobj.manifest = manifest
+        module.exports.FileManager = FileManager
+    })
+
+}();

@@ -1,0 +1,30 @@
+/*
+ * browser.nlg
+ * Naanlib/frameworks/browser
+ *
+ *     Root component for browser-specific functionality.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * brorInit
+ *
+ *     Initialize the browser module.
+ *
+ *
+ */
+
+function brorInit(local manifest) {
+    manifest = `(brorInit)
+
+    Naan.module.build(module.id, "browser", function(modobj, compobj) {
+        require("../common").LiveImport()
+        compobj.manifest = manifest
+        runningExecutors = require("../running/executors.nlg")
+    })
+} ();

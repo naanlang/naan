@@ -1,0 +1,317 @@
+/*
+ * clientops.nlg
+ * gitClient
+ *
+ *     Git client for Git API services.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * GitClient
+ *
+ *     An object to perform git client operations with a given Git repo and local filesystem folder.
+ * Both repo and directory must already exist, so create them first before creating this. Once you
+ * have a GitClient object, you can call connect() to ensure the filesystem is ready to hold content
+ * from the repo, which may modify the filesystem. Call status() to determine what changes exist.
+ *     GitClient does not have a local copy of the repo like a normal git client. Instead it keeps
+ * a working tree, a staging area, and an index. There is no need for a refresh operation because it
+ * attempts to connect with the remote each time this object is queried. The contents of the current
+ * checked-out branch cannot change remotely. Only the reference names and available commits can
+ * change.
+ *     Updating the current branch to the latest commit is readily accomplished by a new checkout of 
+ * the same branch. Checkouts never overwrite modified local files, so it is safe to update or move
+ * to a new branch at any time. Reverting a change to a remote file requires that the remote API be
+ * accessible and the file(s) will be recopied. Staging a change makes an extra copy of the changed
+ * file in a staging area.
+ *     Merging branches is not currently implemented. Instead, commit local changes, and then pull
+ * the repo into a different client elsewhere for merging and conflict resolution.
+ *
+
+/ch gitClient
+
+rr  = App.nide.locate.connect("04d1e9aa-d154-4e99-b60f-3a67d4033ac4", "GitAPI").1;
+glr = rr.repo(rr.repolist().1.1).1;
+gc  = GitClient(glr).1;
+fs  = App.nide.locate.connect("Host", "NideFS", "/Users/richardz/temp/").1;
+      gc.connect(fs, "gitlablip");
+
+fst = fs.tree("gitlablip");
+      gc.gtree.refresh();
+grt = glr.tree();
+      gc.gtree.sync(grt);
+      gc.gtree.gittree;
+
+      gc.gtree.fetch(false, closure(shaRepo, shaStage, path) {
+            glr.showfile(shaRepo)
+      });
+      gc.gtree.gittree;
+
+      gc.gtree.status({untracked:true,unchanged:true,ignored:true});
+ * 
+ *
+ */
+
+closure GitClient(repo, local gitc) {
+    gitc = new(object, this)
+    gitc.repo = repo
+    gitc.gtree = GitTree()
+    
+    // refresh
+    //
+    // Refresh the current working directory for the specified operation, returning false on success
+    // else an error.
+    //
+    function refresh(command, local error, result) {
+        if !gitc.connected
+            return (list(Error(command.concat(" failed: tree not connected"))))
+        `(error, result) = gitc.gtree.refresh()
+        if error
+            return (list(Error(command.concat(" failed: cannot refresh working directory"), error)))
+        false
+    }
+    
+    // notlive
+    //
+    // Ensure the repo is live, returning false. Otherwise return the error.
+    //
+    function notlive(command, local error, result) {
+        if !gitc.connected
+            return (list(Error(command.concat(" failed: tree not connected"))))
+        `(error, result) = repo.validate()
+        if error
+            return (list(Error(command.concat(" failed: cannot access remote repository"), error)))
+        false
+    }
+
+    // connect
+    //
+    // Connect the repo to the filesystem working directory at the specified path. This will create
+    // a .ngit folder in the working directory if not yet present. This still works if the remote 
+    // repo is unavailable, but only status and staging commands are available in that case.
+    //
+    gitc.connect = function connect(fs, reporoot, local error, result) {
+        `(error, result) = gitc.gtree.init(fs, reporoot)
+        if !error
+            gitc.connected = true
+        list(error, result)
+    }
+    
+    // disconnect
+    //
+    // Disconnect the filesystem from the repo.
+    //
+    gitc.disconnect = function disconnect() {
+        gitc.connected = false
+        list(false, { ok: true })
+    }
+
+    // checkout
+    //
+    // Check out the specified branch to the filesystem, leaving locally modified files unchanged.
+    // This operates by performing a sync with update, after which the following status changes
+    // occur:
+    //
+    //      Current State    |    In New Branch     |  Not in New Branch
+    //  ---------------------|----------------------|-----------------------
+    //      unchanged        |   unchanged          |   (not present)
+    //      unversioned      |   modified           |   unversioned
+    //      modified         |   modified           |   unversioned
+    //      missing          |   missing            |   (not present)
+    //      modified-staged  |   modified-staged    |   added
+    //      added            |   modified-staged    |   added
+    //      added-modified   |   modified-staged    |   added-modified
+    //      removed          |   removed            |   (not present)
+    //      (not present)    |   unchanged          |   (not present)
+    //
+    // It's possible that round-trip sync to a new and then back to an original branch will not 
+    // leave the working tree in exactly the same state because an user-modified file can become
+    // unchanged if the new branch has an identical copy. If staged files become unmodified then
+    // the files remain staged, though they will not be committed in that state.
+    //
+    gitc.checkout = function checkout(branch, local error, result, tree, obsoletes) {
+        if refresh("checkout")
+            return                                                          // local repo refresh failed
+        if notlive("checkout")
+            return                                                          // can't access remote git API
+        `(error, result) = gitc.gtree.refresh()                             // refresh for filesystem changes
+        if !error {
+            if branch
+                options = { ref: branch }
+            `(error, tree) = repo.tree(options)
+        }
+        if !error {
+            obsoletes = gitc.gtree.sync(tree)
+            `(error, result) = gitc.gtree.vacate(obsoletes) }
+        if !error
+            `(error, result) = gitc.gtree.fetch(false , closure(shaRepo, path) {
+                repo.showfile(shaRepo)                                      // fetch a file (async)
+            })
+        if error
+            return (list(Error("checkout failed: error fetching remote content", error)))
+        list(false, { ok: true })
+    }
+
+    // branch
+    //
+    // Create a branch for the specified ref, or by default the current HEAD.
+    //
+    gitc.branch = function branch(name, ref) {
+        if notlive("branch")
+            return                                                          // can't access remote git API
+        throw("GitClient.branch not implemented")                           // ### to be implemented
+    }
+
+    // delbranch
+    //
+    // Delete the named branch.
+    //
+    gitc.delbranch = function delbranch(name) {
+        if notlive("delbranch")
+            return                                                          // can't access remote git API
+        throw("GitClient.delbranch not implemented")                        // ### to be implemented
+    }
+
+    // status
+    //
+    // Report the status of the working tree and staging area relative to the currently checked out 
+    // repo branch. This does not require the repo to be available because its state is cached.
+    //
+    gitc.status = function status() {
+        if refresh("status")
+            return                                                          // local repo refresh failed
+        list(false, gitc.gtree.status({untracked:true,unchanged:true,ignored:true}))
+    }
+
+    // stage
+    //
+    // Stage any changes among the array of pathnames, which may overwrite existing staged files.
+    //
+    gitc.stage = function stage(filelist) {
+        if refresh("stage")
+            return                                                          // local repo refresh failed
+        gitc.gtree.stage(filelist)
+    }
+
+    // unstage
+    //
+    // Unstage the specified files. The actual files will be removed during a future gc operation.
+    //
+    gitc.unstage = function unstage(filelist) {
+        if refresh("unstage")
+            return                                                          // local repo refresh failed
+        gitc.gtree.unstage(filelist)
+    }
+
+    // discard
+    //
+    // Discard changes to the specified files, including restoring deleted files. If tostage is true
+    // the the files will be restored to the staged state if it exists, or left unchanged otherwise.
+    // If tostage is false then the files will be restored to the repo state.
+    //
+    gitc.discard = function discard(filelist, tostage, local error, tofetch, result) {
+        if refresh("revert")
+            return                                                          // local repo refresh failed
+        if notlive("revert")
+            return                                                          // can't access remote git API
+        `(error, tofetch) = gitc.gtree.discard(filelist, tostage)
+        if !error
+            `(error, result) = gitc.gtree.fetch(tofetch, closure(shaRepo, shaStage, path) {
+                if tostage
+                    gitc.gtree.readstage(shaStage)                          // discard to stage
+                else
+                    repo.showfile(shaRepo)                                  // discard to repo
+            })
+        if error
+            list(error)
+        else
+            list(false, { ok: true })
+    }
+
+    // commit
+    //
+    // Commit changes to the repo on the current branch. If a filelist is specified then only the
+    // listed files are committed. Any staged files are committed from the staging area, leaving
+    // the working tree untouched.
+    //
+    gitc.commit = function commit(message, filelist, local comitinfo) {
+        if refresh("commit")
+            return                                                          // local repo refresh failed
+        if notlive("commit")
+            return                                                          // can't access remote git API
+        comitinfo = gitc.gtree.getcommit({
+            staged: staged
+            moveok: repo.info
+        })
+        // ### upload blobs and tree
+        // ### perform commit
+    }
+
+    // tag
+    //
+    // Create a tag for the current commit or optional reference, with optional message.
+    //
+    gitc.tag = function tag(tagname, ref, message) {
+        if notlive("tag")
+            return                                                          // can't access remote git API
+        throw("GitClient.tag not implemented")                              // ### to be implemented
+    }
+
+    // untag
+    //
+    // Delete the specified tag(s).
+    //
+    gitc.untag = function untag(tagnames) {
+        if notlive("untag")
+            return                                                          // can't access remote git API
+        throw("GitClient.untag not implemented")                            // ### to be implemented
+    }
+
+    // log
+    //
+    // Report the commit history for the specified filepath.
+    //
+    gitc.log = function log(filepath) {
+        if notlive("log")
+            return                                                          // can't access remote git API
+        repo.commits(filepath)
+    }
+
+    // reflist
+    //
+    // Report all named references, including branches and tags.
+    //
+    gitc.reflist = function reflist() {
+        if notlive("reflist")
+            return                                                          // can't access remote git API
+        throw("GitClient.reflist not implemented")                          // ### to be implemented
+    }
+
+    // finis
+    
+    list(false, gitc)
+};
+
+
+/*
+ * gcopInit
+ *
+ *     Initialize the gitops module.
+ *
+ */
+
+function gcopInit(local manifest) {
+
+    manifest = `(GitClient, gcopInit)
+
+    Naan.module.build(module.id, "gitops", function(modobj, compobj) {
+        require("./gitClient.nlg")
+        compobj.manifest = manifest
+        modobj.exports.GitClient = GitClient
+    })
+
+}();

@@ -1,0 +1,769 @@
+/*
+ * dbt_aws.nlg
+ * serviceAws
+ *
+ *     Naan database tables using AWS for browser and NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2021 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * dawsValidateName
+ *
+ *     True iff the specified name is valid here.
+ *
+ */
+
+function dawsValidateName(key, path) {
+    
+};
+
+
+/*
+ * dawsBucket
+ *
+ *     Create an S3 access object for a bucket, with as few added semantics as possible. Callbacks
+ * are required for these member functions; they don't provide a sync adapter. AWS Credentials 
+ * including the desired region must be preconfigured in AWS.config before creating a dawsBucket
+ * instance. The return value is tuple of (error, bucket).
+ *
+ */
+
+closure dawsBucket(s3, local bucket) {
+    bucket = new(object, this)
+    bucket.s3 = s3
+    bucket.name = s3.config.params.Bucket
+    bucket.region = s3.config.region
+    if not s3 || !string(bucket.region) || bucket.region.length == 0 || !string(bucket.name) || bucket.bucket.length == 0
+        return (list(Error("invalid S3 parameter")))
+
+    // asyncResult
+    //
+    // Invoke a callback function asynchronously. The first argument is the callback, followed by
+    // any others desired.
+
+    closure asyncResult args {
+        future(function() { apply(pop(args), args) }).run()
+    }
+
+    // close
+    //
+    // Close the bucket, preventing future i/o. It's important that the methods below check
+    // that the bucket is still open before beginning (or continuing) any operations.
+    
+    bucket.close = function close() {
+        bucket.s3 = false                                                   // just remove access
+        list(false, { })
+    }
+
+    // get
+    //
+    // Get an object from the bucket. This omits the content if "nodata" is true.
+    
+    bucket.get = closure get(key, nodata, callback, local params) {
+        if !string(key) || length(key) == 0
+            return (asyncResult(callback, Error("invalid arguments")))
+        if !s3
+            return (asyncResult(callback, Error("database closed")))
+        params = {
+            Key: key
+        }
+
+        function s3GetCB(error, resp) {
+            if error
+                error = Error("can't get object", error, key)
+            else if resp.ETag.length == 34
+                resp.md5 = resp.ETag.substring(1,33)                        // ETags have to have quotes, but our hash doesn't
+            callback(error, resp)
+        }
+
+        if nodata
+            s3.headObject(params, s3GetCB.proc)
+        else
+            s3.getObject(params, s3GetCB.proc)
+    }
+    
+    // put
+    //
+    // Put an object in the bucket. Parameters include:
+    //      key         - the object name, which may not be empty or start with "/"
+    //      data        - optional content to store
+    //      metadata    - optional dictionary of keys to store
+    
+    bucket.put = closure put(key, data, metadata, callback, local params, mimeType, md5) {
+        if !string(key) || length(key) == 0 || key.substring(0,1) == "/" || metadata && !dictionary(metadata)
+            return (asyncResult(callback, Error("invalid arguments")))
+        if !s3
+            return (asyncResult(callback, Error("database closed")))
+        params = {
+            Key: key
+        }
+        if data {
+            if !integer(data.byteLength) && !string(data) {                 // non-buffer/non-string translated to JSON string
+                data = JSONstringify(data)
+                params.ContentType = "application/json" }
+            else {
+                mimeType = {
+                    "css":  "text/css",
+                    "csv":  "text/csv",
+                    "htm":  "text/html",
+                    "html": "text/html",
+                    "ico":  "image/x-icon",
+                    "ics":  "application/octet-stream",
+                    "jpeg": "image/jpeg",
+                    "jpg":  "image/jpeg",
+                    "js":   "text/javascript",
+                    "json": "application/json",
+                    "mp3":  "audio/mpeg",
+                    "mp4":  "video/mp4",
+                    "nlg":  "text/plain",
+                    "npk":  "application/json",
+                    "svg":  "image/svg+xml",
+                    "text": "text/plain",
+                    "txt":  "text/plain",
+                    "zip":  "application/octet-stream"
+                }[JSpath.extname(key).substring(1)]
+                if !mimeType {
+                    if string(data)
+                        mimeType = "text/plain"
+                    else
+                        mimeType = "application/octet-stream"
+                }
+                if mimeType.startsWith("text/")
+                    mimeType = mimeType.concat("; charset=UTF-8")
+                params.ContentType = mimeType
+            }
+        }
+        if metadata
+            params.Metadata = metadata
+        if data
+            params.Body = data
+        else
+            data = ""                                                       // empty string for default MD5 hash
+        params.ContentMD5 = HashMD5_base64(data)                            // base64 string
+        md5 = HashMD5(data)                                                 // hex character string
+        s3.putObject(params, function(error, resp) {
+            if error
+                error = Error("can't put object", error, key)
+            else {
+                resp.length = length(data)
+                if resp.ETag.length == 34 {                                 // multipart S3 ETag will is longer and will be ignored
+                    resp.md5 = resp.ETag.substring(1,33)                    // ETags have to have quotes, but our hash doesn't
+                    if md5 != resp.md5 {
+                        error = Error("hash match failure", md5, resp.md5)  // has match failed on round-trip
+                        resp = false } } }
+            callback(error, resp)
+        })
+    }
+    
+    // delete
+    //
+    // Delete an object.
+    
+    bucket.delete = closure delete(key, callback, local params) {
+        if !string(key) || length(key) == 0
+            return (asyncResult(callback, Error("invalid arguments")))
+        if !s3
+            return (asyncResult(callback, Error("database closed")))
+        params = {
+            Key:    key
+        }
+        s3.deleteObject(params, function(error, resp) {
+            if error
+                error = Error("can't delete object", error, key)
+            callback(error, resp)
+        })
+    }
+    
+    // copy
+    //
+    // Copy an object within a bucket.
+    
+    bucket.copy = closure copy(srckey, destkey, callback, local params) {
+        if !string(srckey) || length(srckey) == 0 || !string(destkey) || length(destkey) == 0
+            return (asyncResult(callback, Error("invalid arguments")))
+        if !s3
+            return (asyncResult(callback, Error("database closed")))
+        params = {
+            Bucket: bucket.name
+            CopySource: js.w.encodeURIComponent(bucket.name).concat("/", js.w.encodeURIComponent(srckey))
+            Key: destkey
+        }
+        s3.copyObject(params, function(error, resp) {
+            if error
+                error = Error("can't copy object", error)
+            callback(error, resp)
+        })
+    }
+
+    // list
+    //
+    //     List objects matching an (optional) prefix. This does not attempt parallel i/o so that
+    // sorting is not required. If onelevel is true then this only lists one level of object. Use 
+    // this to build a tree in parallel.
+    //     The result is an (error, result) tuple, with the following result dictionary on success:
+    //
+    // { Prefix         : "joe/bill/",
+    //   CommonPrefixes : [
+    //      { Prefix: "test/folderA/" },
+    //      { Prefix: "test/folderB/" }],
+    //   Contents : [
+    //      {
+    //          Key         :   "john",
+    //          LastModified:   [Date Sat Apr 04 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
+    //          ETag        :   "55ff07fb005494c4bd42322d4845e858"
+    //          Size        :   156043
+    //          StorageClass:   "STANDARD" },
+    //      {
+    //          Key         :   "jill",
+    //          LastModified:   [Date Sat Apr 22 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
+    //          ETag        :   "f53f07fb00d42322dc4bd42322d4845e"
+    //          Size        :   155
+    //          StorageClass:   "STANDARD" } ] }
+    //
+    
+    bucket.list = closure listobjects(prefix, onelevel, callback, local params, output) {
+
+        function listOne() {                                                // list one chunk of objects
+            s3.listObjectsV2(params, function(error, resp) {
+                if error
+                    callback(Error("list objects failed", error))
+                else {
+                    if output {
+                        output.Contents = output.Contents.concat(resp.Contents)
+                        output.CommonPrefixes = output.CommonPrefixes.concat(resp.CommonPrefixes) }
+                    else
+                        output = {
+                            Prefix: resp.Prefix
+                            CommonPrefixes: resp.CommonPrefixes
+                            Contents: resp.Contents
+                        }
+                    if resp.IsTruncated {
+                        params.ContinuationToken = resp.NextContinuationToken
+                        listOne()
+                    } else
+                        callback(false, output)
+                } }) }
+
+        if !s3
+            return (asyncResult(callback, Error("database closed")))
+        params = { }
+        if string(prefix)
+            params.Prefix = prefix
+        if onelevel
+            params.Delimiter = "/"                                          // don't go deep; just list children
+        listOne()
+    }
+    
+    list(false, bucket)
+
+};
+
+
+/*
+ * dawsTable
+ *
+ *     Create a database table access object.
+ *
+ *     If a callback function is specified then it is called when the operation completes with the 
+ * usual (error, result) arguments. If a callback function is not specified then the call blocks 
+ * until the operation is complete, and an (error, result) tuple is returned.
+ *     Records are presented as dictionaries to the client of this interface. The client's data is
+ * stored under <record>.content, while the record key is available under <record>.key.
+ *
+ * Internals
+ *     AWS offers a limited number of buckets per account (initially 100) but we may need a large
+ * number of records. The key structuring scheme here allows us to segregate buckets into independent 
+ * folders sharing a single bucket.
+ *     An S3DB instance has an S3 context that specifies the region and bucketname, along with all
+ * necessary access credentials. This is normally initialized from a credentials vault.
+ *     Within each bucket, a table instance has a path starting with "" representing the root of the
+ * database. All records in the bucket having that path as a prefix belong to this table instance.
+ * instance. A pseudo-folder structure is implemented using "/" (slash) characters as delimiters.
+ *     AWS S3 by itself does not offer conflict detection or change notification. Those can be done
+ * by lambdas if required.
+ *
+ */
+
+closure dawsTable(database, path, local table) {
+    table = new(object, this)
+    table.type = database.type
+    table.db = database
+    table.path = path
+    table.s3prefix = makePrefix(path)
+        
+    // makePrefix
+    //
+    // Make a key prefix from a path.
+
+    function makePrefix(path) {
+        if path == ""
+            path                                                            // in the root
+        else if path.slice(-1) == "/"
+            path                                                            // already complete prefix
+        else
+            path.concat("/")                                                // non-root prefix always ends in slash
+    }
+
+    // makeID
+    //
+    // Make an internal ID string from an external key, using the table's pre-determined prefix.
+
+    function makeID(key) {
+        if key eq `prefix
+            table.s3prefix
+        else if integer(key)
+            table.s3prefix.concat(tostring(key))
+        else if not string(key)
+            return (Error("invalid key type: ", typeof(key)))
+        else
+            table.s3prefix.concat(key)
+    }
+
+    // s3resp2doc
+    //
+    // Convert an S3 get response to a new table document.
+    
+    function s3resp2doc(resp, local doc, metadata, metakey) {
+        if resp.Metadata.naandbt
+            try {
+                doc = new(JSONparse(resp.Metadata.naandbt))
+            } catch {
+                if true { }
+            }
+        if !dictionary(doc)
+            doc = { }                                                       // invalid metadata
+        if resp.key
+            doc.key = resp.key
+        if resp.Body
+            doc.content = resp.Body
+        if resp.LastModified
+            doc.modified = resp.LastModified
+        if resp.ContentLength
+            doc.length = resp.ContentLength
+        if resp.ContentType
+            doc.contentType = resp.ContentType
+        if resp.md5
+            doc.md5 = resp.md5
+        doc
+    }
+    
+    // metadata2s3
+    //
+    // Convert a dictionary to S3 params metadata. If valid this returns the data to be defined
+    // on params.Metadata, otherwise it returns false.
+    
+    function metadata2s3(metadata, local metakeep, metakey) {
+        if metadata {
+            metakeep = { }
+            for metakey in metadata
+                if !member(metakey, `("key", "content")) && metakey.substring(0,1) != "_"
+                    metakeep[metakey] = metadata[metakey]                   // valid metadata
+            if length(metakeep) > 0
+                return ({ naandbt: JSONstringify(metakeep) })
+        }
+        false
+    }
+
+    // add
+    //
+    // Add a new record to the table with optional metadata. This will fail if the key already
+    // exists. The metadata is stored with the record and cannot be changed without calling update.
+    // Metadata keys cannot begin with underscore ("_").
+    //
+    // The returned document, which can be used with update, has the following keys:
+    //      key         - the key name of the record
+    //      content     - the body content stored under in the record
+    //      md5         - the MD5 hash of the content
+    //      <...>       - the various metadata keys
+
+    table.add = closure add(key, content, metadata, callback, local id, doc) {
+        if !callback
+            return (syncAdapter(add, key, content, metadata))
+        id = makeID(key)
+        if !string(id)
+            return (asyncResult(callback, id))                                 // error from makeID
+        if  metadata && !dictionary(metadata)
+            return (asyncResult(callback, Error("invalid arguments")))
+        if metadata
+            doc = new(metadata)                                             // start with metadata
+        else
+            doc = { }
+        doc.key = key
+        doc.id = id
+        if content
+            doc.content = content
+        metadata = metadata2s3(metadata)                                    // filter out any invalid metadata
+        database.bucket.put(id, content, metadata, function(error, resp) {
+            if error
+                error = Error("add failed", error, id, { status: error.statusCode })
+            else {
+                doc.md5 = resp.md5                                          // update the original doc
+                doc.length = resp.length }
+            callback(error, doc)
+        })
+    }
+
+    // update
+    //
+    // Update a record in the table using the document previously returned by add or get.
+
+    table.update = closure update(doc, callback, local metadata) {
+        if !callback
+            return (syncAdapter(update, doc))
+        if !doc._id || !doc._id.startsWith(table.s3prefix) || !doc.md5
+            return (asyncResult(callback, Error("invalid argument")))
+        metadata = metadata2s3(doc)
+        database.bucket.put(doc._id, doc.content, metadata, function(error, resp) {
+            if error
+                error = Error("update failed", error, doc._id, { status: error.statusCode })
+            else {
+                doc.md5 = resp.md5                                          // update the original doc
+                doc.modified = undefined                                    // we don't know exact modify date
+                doc.length = resp.length }
+            callback(error, doc)
+        })
+    }
+
+    // delete
+    //
+    // Delete a record in the table using the document previously returned by add or get. This
+    // marks the record deleted but does not actually reclaim storage.
+
+    table.delete = closure delete(doc, callback) {
+        if !callback
+            return (syncAdapter(delete, doc))
+        if !doc._id || !doc._id.startsWith(table.s3prefix) || !doc.md5
+            return (asyncResult(callback, Error("invalid argument")))
+        database.bucket.delete(doc._id, function(error, resp) {
+            if error
+                error = Error("delete failed", error, doc._id, { status: error.statusCode })
+            callback(error, resp)
+        })
+    }
+
+    // get
+    //
+    // Get the record in the table stored in the specified key.
+
+    table.get = closure get(key, callback, local id) {
+        if !callback
+            return (syncAdapter(get, key))
+        id = makeID(key)
+        if !string(id)
+            return (asyncResult(callback, id))                              // error from makeID
+        database.bucket.get(id, false, function(error, resp) {
+            if error
+                error = Error("get failed", error, id, { status: error.statusCode })
+            else {
+                resp.key = key
+                resp = s3resp2doc(resp)
+                if resp.contentType == "application/json; charset=UTF-8" {
+                    try {
+                        resp.content = new(JSONparse(resp.content))
+                    } catch {
+                        if true
+                            resp._error = "JSON decoding failed"
+                    } }
+                else if resp.contentType.startsWith("image/")
+                    { }                                                     // already "decoded", e.g. base64
+                else if jsTypedArray(resp.content)
+                    resp.content = xnew(TextDecoder, "utf-8").decode(resp.content)
+                resp._id = id }
+            callback(error, resp)
+        })
+    }
+    
+    // md5
+    //
+    // Compute the MD5 hash of the content of the specified record if it exists. The result is "" if
+    // no content exists. The metadata is not part of the hash.
+
+    table.md5 = closure md5(key, callback, local id) {
+        if !callback
+            return (syncAdapter(md5, key))
+        id = makeID(key)
+        if !string(id)
+            return (asyncResult(callback, id))                                 // error from makeID
+        database.bucket.get(id, true, function(error, resp) {
+            if error
+                error = Error("md5 failed", error, id, { status: error.statusCode })
+            else if resp._md5
+                resp = resp._md5
+            else
+                resp = ""
+            callback(error, resp)
+        })
+    }
+    
+    // head
+    //
+    // Return the header of the specified record, i.e. everything except the content.
+
+    table.head = closure head(key, callback, local id) {
+        if !callback
+            return (syncAdapter(head, key))
+        id = makeID(key)
+        if !string(id)
+            return (asyncResult(callback, id))                                 // error from makeID
+        database.bucket.get(id, true, function(error, resp) {
+            if error
+                error = Error("head failed", error, id, { status: error.statusCode })
+            else {
+                resp.key = key
+                resp = s3resp2doc(resp)
+                resp._id = id }
+            callback(error, resp)
+        })
+    }
+
+    // copy
+    //
+    // Copy a record from a source key to a new record under a destination key.
+
+    table.copy = closure copy(srckey, destkey, callback, local srcid, destid) {
+        if !callback
+            return (syncAdapter(copy, srckey, destkey))
+        srcid = makeID(srckey)
+        if !string(srcid)
+            return (asyncResult(callback, srcid))                              // error from makeID
+        destid = makeID(destkey)
+        if !string(destid)
+            return (asyncResult(callback, destid))                             // error from makeID
+        database.bucket.copy(srcid, destid, function(error, resp) {
+            if error
+                error = Error("copy failed", {
+                    source: srckey
+                    destination: destkey
+                    status: error.statusCode
+                }, error)
+            callback(error, resp)
+        })
+    }
+    
+    // listfetch
+    //
+    // Update each element in the input array with a doc record from get or head.
+    
+    closure listfetch(input, nodata, local kqdex, fetcher, pending) {
+
+        // queuemore
+        //
+        // Make more requests, or signal when all are completed
+        
+        function queuemore() {
+            while kqdex < input.length {
+                if pending.active >= 10
+                    return                                                  // too busy
+                closure (kdex, local key) {                                 // separate closure to keep record context
+                    key = input[kdex].key
+                    if key {                                                // this record is fetchable
+                        ++pending.active
+                        fetcher(key, function(error, doc) {
+                            if error
+                                input[kdex].error = error                   // this record failed
+                            else
+                                input[kdex].doc = doc                       // this record succeeded
+                            --pending.active
+                            queuemore()
+                        }) }
+                } (kqdex++)                                                 // issue one request
+            }
+            if pending.active == 0
+                pending.signal()                                            // no more to do, and all done
+        }
+
+        if nodata
+            fetcher = table.head
+        else
+            fetcher = table.get
+        pending = new(nonce)
+        pending.active = 0
+        kqdex = 0
+        queuemore()
+        pending.wait()
+    }
+
+    // records
+    //
+    // List all records in the table with the following options:
+    //  prefix: <string>        -- only records with the specified key prefix are included
+    //  deep: true|false        -- if true, include transitive children; default false
+    //  head: true|false        -- if true, include doc element with header for each record
+    //  get: true|false         -- if true, include doc element with content for each record
+    //
+    // The return structure has the following form:
+    //
+    // {prefix  : "joe/bill/",
+    //  rows : [
+    //      {
+    //          key         :   "john",
+    //          _modified   :   [Date Sat Apr 04 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
+    //          _md5        :   "55ff07fb005494c4bd42322d4845e858"
+    //          _length     :   156043
+    //         [ doc | error:  <document from "get" or "head"> | <error from get|head> ] },
+    //      {
+    //          key         :   "jill",
+    //          _modified   :   [Date Sat Apr 22 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
+    //          _md5        :   "f53f07fb00d42322dc4bd42322d4845e"
+    //          _length     :   155
+    //         [ doc         :  <document from "get" or "head"> ] } ] }
+    //
+    // All transitive nested children are included with the options.deep flag non-false. Otherwise
+    // only immediate children are listed, with directories at the end--and no metadata for them.
+    //
+
+    table.records = closure records(options, callback, local s3prefix, output) {
+        if !callback
+            return (syncAdapter(records, options))
+        output = {
+            rows: [] }
+        if options.prefix {
+            if !string(options.prefix)
+                return (asyncResult(callback, Error("prefix option must be string")))
+            output.prefix = options.prefix
+            s3prefix = table.s3prefix.concat(makePrefix(options.prefix)) }
+        else
+            s3prefix = table.s3prefix
+        database.bucket.list(s3prefix, !options.deep, function(error, objects, local obj, key) {
+            if error
+                error = Error("records list failed", error, options.prefix, { status: error.statusCode })
+            else {
+                for obj in objects.Contents {
+                    if obj.Key.startsWith(table.s3prefix)
+                        key = obj.Key.substring(table.s3prefix.length)
+                    else
+                        key = "*key error*"                                 // should not happen
+                    output.rows.push({
+                        key:        key
+                        _id:        obj.Key
+                        modified:   obj.LastModified
+                        md5:        obj.ETag.substring(1,33)
+                        length:     obj.Size
+                    }) }
+                for obj in objects.CommonPrefixes                          // children, if !options.deep
+                    if obj.Prefix.startsWith(s3prefix)
+                        output.rows.push({
+                            key: obj.Prefix.slice(table.s3prefix.length)
+                            _id: obj.Prefix })
+                if options.head || options.get
+                    listfetch(output.rows, options.head)                    // fetch doc records
+            }
+            callback(error, output)
+        })
+    }
+    
+    // finis
+
+    list(false, table)
+};
+
+
+/*
+ * S3DB
+ *
+ *     Make a database access object for an S3 bucket.  Naan databases create an abstraction of
+ * "tables" that segment a database for different usage. For S3 databases the "table" is a name
+ * prefix shared among multiple objects. Subtables may also exist, like any hierarchy.
+ *     Return values from the various methods are typically a two-element tuple of (error, data),
+ * where at most one of the two values is non-false.
+ *
+ */
+
+closure S3DB(s3, local database, result) {
+    database = new(object, this)
+    result = dawsBucket(s3)
+    if result.0
+        return (result)                                                     // can't access bucket
+    database.bucket = result.1
+    database.s3 = s3
+    database.type = "Amazon S3"
+
+    // isopen
+    //
+    //     False iff the database is not open.
+    
+    database.isopen = function isopen() {
+        !!database.bucket
+    }
+
+    // close
+    //
+    // Close the database. In-progress io may continue for a while.
+
+    database.close = function close() {
+        if !database.bucket
+            return (list(Error("database closed")))
+        database.bucket.close()
+        database.bucket = false
+        database.s3 = false
+        list(false, { ok: true })
+    }
+
+    // info
+    //
+    // Return implementation-specific database info.
+
+    database.info = function info(local result) {
+        if !database.bucket
+            return (list(Error("database closed")))
+        result = {
+            type: database.type
+            info: {
+                region: s3.config.region
+                bucket: s3.config.params.Bucket
+            }
+        }
+        list(false, result)
+    }
+
+    // destroy
+    //
+    // Delete the database and close it.
+
+    database.destroy = function destroy(local pending) {
+        if !database.bucket
+            return (list(Error("database closed")))
+        list(Error("not sure how to destroy this database"))                // ### delete the base object?
+    }
+
+    // table
+    //
+    // Return a table-access object for the table.
+
+    database.table = function table(path) {
+        if !database.bucket
+            return (list(Error("database closed")))
+        if !string(path)
+            return (list(Error("invalid table path")))
+         dawsTable(database, path)
+    }
+    
+    // finis
+
+    list(false, database)
+};
+
+
+/*
+ * dawsInit
+ *
+ *     Initialize the Database module.
+ *
+ */
+
+function dawsInit(local manifest) {
+
+    manifest = `(dawsValidateName, dawsBucket, dawsTable, S3DB, dawsInit)
+
+    Naan.module.build(module.id, "dbt_aws", function(modobj, compobj) {
+        require("./serviceAws.nlg")
+        compobj.manifest = manifest
+        modobj.exports.S3DB = S3DB
+    })
+
+}();
