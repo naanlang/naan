@@ -10,7 +10,7 @@
  *
  */
 
-var CurrentCacheName = "Naan IDE 1.0.0-1"
+var CurrentCacheName = "Naan IDE 1.0.1-2"
 
 
 //
@@ -31,20 +31,20 @@ var msgport;
 
 var promiseport = new Promise(function (resolve, reject) {
     self.addEventListener('message', function(event) {
-        console.log("[1.0.0-1] port received");
+        console.log("[1.0.1-2] port received");
         msgport = event.data.hereIsYourPort;
         msgport.onmessage = function(msg) {
             msg = msg.data;
             if (msg.id == "response")
                 postResponse(msg);
             else if (msg.id == "text")
-                console.log("[1.0.0-1] msg received:", msg.text);
+                console.log("[1.0.1-2] msg received:", msg.text);
         };
 /*
         // don't clutter the log
         msgport.postMessage({
             id: "text",
-            text: "port received by 1.0.0-1",
+            text: "port received by 1.0.1-2",
         });
 */
         resolve(msgport);
@@ -74,7 +74,7 @@ var promiseport = new Promise(function (resolve, reject) {
  */
 
 self.addEventListener('install', function(event) {
-    console.log("[1.0.0-1] install");
+    console.log("[1.0.1-2] install");
     self.skipWaiting();
 });
 
@@ -103,14 +103,14 @@ self.addEventListener('fetch', function(event) {
                     promise = self.clients.matchAll({
                         includeUncontrolled: true
                     }).then(function(clientList) {
-                        console.log("[1.0.0-1] requesting new msgport");
+                        console.log("[1.0.1-2] requesting new msgport");
                         var urls = clientList.map(function(client) {
                             client.postMessage({                                // tell client(s) we need a fetch source
                                 msg: "Naan_need_fetch_port"
                             });
                             return (client.url);
                         });
-                        console.log('[1.0.0-1] matching clients:', urls.join(', '));
+                        console.log('[1.0.1-2] matching clients:', urls.join(', '));
                         return (promiseport);
                     });
                 }
@@ -128,14 +128,14 @@ self.addEventListener('fetch', function(event) {
                         msgport.postMessage({
                             id: "fetch",
                             seq: seqno,
-                            version: "1.0.0-1",
+                            version: "1.0.1-2",
                             request: {
                                 method: event.request.method,
                                 url: event.request.url
                             },
                         });
                     } else {
-                        console.log("[1.0.0-1] fetch has no msgport");
+                        console.log("[1.0.1-2] fetch has no msgport");
                         return (reject("fatal delegation error"));
                     }
                 }) });
@@ -165,26 +165,26 @@ self.addEventListener('fetch', function(event) {
  */
 
 self.addEventListener('activate', function(event) {
-    console.log("[1.0.0-1] activate");
+    console.log("[1.0.1-2] activate");
     self.clients.matchAll({                                                 // for debugging, list controlled clients           
         includeUncontrolled: true
     }).then(function(clientList) {
         var urls = clientList.map(function(client) {
             return (client.url);
         });
-        console.log('[1.0.0-1] matching clients:', urls.join(', '));
+        console.log('[1.0.1-2] matching clients:', urls.join(', '));
     });
     var promise = caches.keys().then(function(cacheNames) {                 // delete old cache entries
             return (Promise.all(
                 cacheNames.map(function(cacheName) {
                     if (cacheName !== CurrentCacheName) {
-                        console.log('[1.0.0-1] deleting old cache:', cacheName);
+                        console.log('[1.0.1-2] deleting old cache:', cacheName);
                         return (caches.delete(cacheName));
                     }
                 })
             ));
         }).then(function() {                                                // claim all clients
-            console.log('[1.0.0-1] claiming clients for version', CurrentCacheName);
+            console.log('[1.0.1-2] claiming clients for version', CurrentCacheName);
             return (self.clients.claim());
         });
     if (event.waitUntil)
