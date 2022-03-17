@@ -344,8 +344,8 @@ exports.NaanControllerWeb = function() {
         var statedoc = {};
         statedoc.curversion = kStateCurrentVersion;
         statedoc.firstver = kStateFirstVersion;
-        statedoc.licensee = "$Licensee$";
-        statedoc.verstring = "$Version$";
+        statedoc.licensee = "Zulch Laboratories, Inc.";
+        statedoc.verstring = "1.0.2-1";
         statedoc.date = new Date().toISOString();
         statedoc.prefs = prefs;
         statedoc.naan = naanlib.saveState(true);                            // true to optimize, which is a bit slower
@@ -362,8 +362,8 @@ exports.NaanControllerWeb = function() {
         if (statedoc===undefined || statedoc.naan === undefined
             || statedoc.firstver > kStateCurrentVersion
             || statedoc.curversion < kStateFirstVersion
-            || statedoc.licensee != "$Licensee$"
-            || statedoc.verstring != "$Version$")
+            || statedoc.licensee != "Zulch Laboratories, Inc."
+            || statedoc.verstring != "1.0.2-1")
             return (false);
         naanstate = statedoc.naan;
         replstate = statedoc.replstate;                                     // get terminal state, if any

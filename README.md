@@ -4,7 +4,7 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     Naan for NPM version 1.0.1-2
+     Naan for NPM version 1.0.2-1
      Copyright (c) 2017-2022 Zulch Laboratories, Inc.
 
 #### Features
@@ -17,7 +17,7 @@ Naan is an async-first software platform for rapid development.
 - Preserves referential integrity when communicating among workers or hosts
 - Plugin architecture enables alternate languages and functionality
 - Custom language syntax can be added through simplified dialect extensions
-- Integrates transparently with all exising JavaScript libraries
+- Integrates transparently with all existing JavaScript libraries
 - Can save and reload running program state across page loads or lambda invocations
 - Lightweight and efficient
 
@@ -67,7 +67,7 @@ Now make it executable with chmod:
 
 
 #### Dependencies:
-     We greatfully acknowlege these software packages used with Naan:
+     We gratefully acknowledge these software packages used with Naan:
 - [jszip.js](http://stuartk.com/jszip) - read and write zip files
 - [NodeJS-path](https://nodejs.org/) - NodeJS path utilities
 - [PouchDB](https://pouchdb.com/) - synchronizing database

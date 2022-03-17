@@ -32,50 +32,53 @@ var eval_text;
 var do_interactive;
 var cmd_text = "nodeparse('node_repl_init.nlg');;\n";
 
-process.argv.forEach((val, index) => {
+process.argv.every((val, index) => {
     if (index < 2)
-        return;
+        return (true);
     if (val == "-e") {
         eval_text = 1;
-        return;
+        return (true);
     }
+    if (eval_text == 1 && val.substring(0,1) == "-")
+        return (false);
     if (val == "-h" || val == "--help") {
         console.log(
             "Usage: naan [options] [source file] [arguments]\n\n" +
             "Options:\n" +
             "  -e <expression>      evaluate an expression\n" +
             "  -i, --interactive    use REPL with -e or [source file]\n" +
-            "  -v, --version        print the Naan version\n" +
-            "  -vv                  print the version and build\n"
+            "  --version            print the Naan version\n" +
+            "  --buildno            print the version and build\n" +
+            "  -h, --help           print this usage information\n"
         );
         process.exit(0);
     }
     if (val == "-i" || val == "--interactive") {
         do_interactive = true;
-        return;
+        return (true);
     }
-    if (val == "-v" || val == "--version") {
-        console.log("1.0.1");
+    if (val == "--version") {
+        console.log("1.0.2");
         process.exit(0);
     }
-    if (val == "-vv") {
-        console.log("1.0.1-2");
+    if (val == "--buildno") {
+        console.log("1.0.2-1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {
         console.log("naan: bad option: " + val);
         process.exit(9);
     }
-    if (eval_text) {
-        if (eval_text == 1)
-            eval_text = val + '\n';
-        return;
+    if (eval_text == 1) {
+        eval_text = val + '\n';
+        return (true);
     }
     if (!cmd_file) {
         cmd_file = val;
-        return;
+        return (true);
     }
     // ignore extra arguments
+    return (true);
 });
 
 if (eval_text == 1) {

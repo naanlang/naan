@@ -510,7 +510,7 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
             if creds == "HostFS"
                 api = connector.api
             else
-                `(error, api) = MakeNideAPIclient(creds.urlName)            // API to remote NodeJS filesystem
+                api = MakeNideAPIclient(creds.urlName)                      // API to remote NodeJS filesystem
         }
         if error
             list(error)
