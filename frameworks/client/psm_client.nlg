@@ -123,7 +123,28 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     view.writeFile = function writeFile(path, data, options, callback) {
         psmRemote(path, "writeFile", options, data, callback)
     }
-            
+      
+    // readlink
+    //
+    // Read the contents of a symbolic link at the specified path
+    
+    view.readlink = function readlink(path, callback) {
+        psmRemote(path, "readlink", { }, false, callback)
+    }
+
+    // symlink
+    //
+    // Create a symbolic link path pointing to (containing the string) target
+    
+    view.symlink = function symlink(target, path, options, callback) {
+        if options
+            options = new(options)
+        else
+            options = { }
+        options.target = target
+        psmRemote(path, "symlink", options, false, callback)
+    }
+      
     // delete
     //
     // Delete a file or directory at the specified path
@@ -134,12 +155,45 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
 
     // info
     //
-    // Get file info at the specified path
+    // Get file or directory info at the specified path
     
-    view.info = function info(path, callback) {
-        psmRemote(path, "info", { }, false, callback)
+    view.info = function info(path, options, callback) {
+        if !options
+            options = { }
+        psmRemote(path, "info", options, false, callback)
+    }
+          
+    // setInfo
+    //
+    // Set file or directory info obtained from info() call.
+    
+    view.setInfo = function setInfo(path, info, callback) {
+        psmRemote(path, "setInfo", {
+            encoding: "json"
+        }, info, callback)
     }
      
+    // setOwnerGroup
+    //
+    // Set file or directory owner or group at the specified path
+    
+    view.setOwnerGroup = function setOwnerGroup(path, uid, gid, callback) {
+        psmRemote(path, "setOwnerGroup", {
+            uid: uid
+            gid: gid
+        }, false, callback)
+    }
+     
+    // setMode
+    //
+    // Set file or directory mode at the specified path
+    
+    view.setMode = function setMode(path, mode, callback) {
+        psmRemote(path, "setMode", {
+            mode: mode
+        }, false, callback)
+    }
+
     // setTimes
     //
     // Set file modify and access times at the specified path
@@ -157,7 +211,7 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     
     view.dirList = function dirList(path, options, callback) {
         psmRemote(path, "dirList", {
-            head: options.head
+            stat: options.stat
         }, false, callback)
     }
 
@@ -167,7 +221,7 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     
     view.readir = function readir(path, callback) {
         psmRemote(path, "dirList", {
-            head: true
+            stat: true
         }, false, callback)
     }
 
@@ -209,7 +263,9 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // delete the source after the copy.
     
     view.copy = closure copy(srcpath, dest, options, callback, local parameters) {
-        if !options
+        if options
+            options = new(options)
+        else
             options = { }
         options.destination = JSpath.resolve(rootpath, dest)
         psmRemote(srcpath, "copy", options, false, callback)
@@ -325,7 +381,7 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
     connector.psm = psm
     connector.api = nicc.api
     connector.vault = psm.vault(connClassID)
-    connector.label = "Naan IDE Server"
+    connector.label = "Naan-Server"
     watch = psm.watchable(connector)
 
     // uifields
@@ -337,57 +393,44 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
             placeholder:    "http://host.com/endpoint"
             key:            "urlName" },
         {
-            label:          "Auth Name"
-            placeholder:    "account name"
-            key:            "authName" },
-        {
-            label:          "Auth Password"
-            placeholder:    "account password"
-            key:            "authPW"
-            type:           "password" },
+            label:          "Auth Secret"
+            placeholder:    "guid"
+            key:            "authSecret" }
         ]
-    }
-        
-    // hashResourceID
-    //
-    // Make a stable hash based on the resource credentials that we can persist or share between
-    // different domains accessing the same resource.
-    connector.hashResourceID = function hashResourceID(resource, local ident) {
-        ident = resource.urlName
-        if resource.label
-            ident = ident.concat(resource.label)
-        HashSHA256(ident)
     }
 
     // findResource
     //
-    // Find a resource with the specified contents, returning the resID or false. The loose criteria
-    // is: if added, would the specified contents be redundant to an existing resource?
+    // Find a resource with the specified contents, returning the resID or false.
     connector.findResource = function findResource(resource, local resID, creds) {
         for resID in listResources().1 {
             creds = access(resID).1
-            if resource.urlName == creds.urlName
-                && (!resource.label || resource.label == creds.label)
-                && resource.authName == creds.authName
+            if ((!resource.urlName || resource.urlName == creds.urlName)
+                && (!resource.label || resource.label == creds.label))
                 return (resID)
         }
         false
     }
 
-    // addResource
+
+    // writeResource
     //
-    // Add credentials for a named resource. The resource is a dictionary comprising these keys:
+    // Add or update credentials for a named resource. If no resID is specified this adds a new
+    // resource; otherwise it updates an existing one. The resource is a dictionary comprising these
+    // keys:
     //      label       - [optional] label we use for this resource
     //      urlName     - URL (e.g. "http://host.com/node/fsapi")
-    //      authName    - [optional] the authentication name for a URL
-    //      authPW      - [optional] the autentication password, required if authname is provided
+    //      authSecret  - access-control token for this URL
     //      hidden      - [optional] don't enumerate to user
     //      locked      - [optional] don't allow user delete
     //
-    // The return value is (error, resID) tuple. Error, if non-false, is a dictionary of field
+    // The return value is an (error, resID) tuple. Error, if non-false, is a dictionary of field
     // keys and error diagnostic strings.
-    connector.addResource = function addResource(resource, local creds, errors, error, resID, data) {
+    connector.writeResource = function writeResource(resource, resID,
+        local creds, errors, error, data, change) {
+        // badField - test for a bad string
         function badField(str) { !string(str) || str.trim().length == 0 }
+
         creds = { urlName: resource.urlName }
         errors = { }
         if resource.label
@@ -396,13 +439,13 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
             creds.label = resource.urlName
         if badField(creds.label)
             errors.label = "invalid label"
+        else if !resID && findResource({ label: creds.label })
+            errors.label = "duplicate name"
         if badField(resource.urlName)
             errors.urlName = "required field"
-        if !badField(resource.authName) {
-            creds.authName = resource.authName
-            creds.authPW = resource.authPW
-            if badField(resource.authPW)
-                errors.authPW = "required if Auth Name specified" }
+        if badField(resource.authSecret)
+            errors.authSecret = "required field"
+        creds.authSecret = resource.authSecret
         if length(errors) > 0
             error = errors
         else {
@@ -410,14 +453,36 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
                 creds.hidden = resource.hidden
             if resource.locked
                 creds.locked = resource.locked
-            resID = hashResourceID(resource)
-            `(error, data) = connector.vault.addResource(resID, creds)
+            if resID {
+                `(error, data) = connector.vault.updateResource(resID, creds)
+                change = { changed: [resID] }
+            } else {
+                resID = UUID()
+                `(error, data) = connector.vault.addResource(resID, creds)
+                change = { added: [resID] }
+            }
             if data {
-                watch.notify(connClassID, { added: [resID] })
-                data = resID } }
+                watch.notify(connClassID, change)
+                data = resID
+            }
+        }
         list(error, data)
     }
-    
+
+    // addResource
+    //
+    // Add a new resource, returning a standard error tuple per writeResource.
+    connector.addResource = function addResource(resource) {
+        writeResource(resource)
+    }
+
+    // updateResource
+    //
+    // Update an existing resource, returning a standard error tuple per writeResource.
+    connector.updateResource = function updateResource(resID, resource) {
+        writeResource(resource, resID)
+    }
+
     // getResource
     //
     // Get credentials for a named resource, matching the dictionary semantics of addResource. The
@@ -432,10 +497,8 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
         }
         if string(creds.urlName)
             resource.urlName = creds.urlName
-        if string(creds.authName)
-            resource.authName = creds.authName
-        if string(creds.authPW)
-            resource.authPW = creds.authPW
+        if string(creds.authSecret)
+            resource.authSecret = creds.authSecret
         list(false, resource)
     }
     
@@ -510,7 +573,7 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
             if creds == "HostFS"
                 api = connector.api
             else
-                api = MakeNideAPIclient(creds.urlName)                      // API to remote NodeJS filesystem
+                api = MakeNideAPIclient(creds.urlName, creds.authSecret)    // API to remote NodeJS filesystem
         }
         if error
             list(error)

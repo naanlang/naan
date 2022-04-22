@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2021 by Richard C. Zulch
+ * Copyright (c) 2017-2022 by Richard C. Zulch
  *
  */
 
@@ -36,6 +36,7 @@ closure MakeAPI(port, options, callback, local chroot, server) {
     server.psm = require("./psm_server.nlg").MakeServerPSM(server)
     server.root = chroot
     server.app = express()
+    server.guid = options.guid
     server.notifyq = []
     server.responseq = []
     server.projects = { }
@@ -99,8 +100,9 @@ closure MakeAPI(port, options, callback, local chroot, server) {
     // body parsing
     //
 
-    server.app.use(bodyParser.text({limit: "20mb"}))
-    server.app.use(bodyParser.raw({limit: "20mb"}))
+    server.app.use(bodyParser.json({limit: "5mb"}))
+    server.app.use(bodyParser.text({limit: "25mb"}))
+    server.app.use(bodyParser.raw({limit: "25mb"}))
 
     //
     // Express.js endpoints
@@ -121,15 +123,18 @@ closure MakeAPI(port, options, callback, local chroot, server) {
     //  "/"
 
     server.app.get("/", function(req, res) {
-        res.send("<u>NaanIDE API</u><br>\r\n"
+        res.send("<u>naan-server API</u><br>\r\n"
         "   /readfile?path=<i>filepath</i><br>\r\n"
         "   /status?timeout=<i>msec</i>&after=<i>stamp</i><br>\r\n")
     })
 
     //  "/readfile"
 
-    server.app.get("/readfile", closure(req, res) {
-        if not string(req.query.path)
+    server.app.get("/readfile", closure(req, res, local guid) {
+        guid = req.get("x-naanlang-api-guid")
+        if server.guid && guid != server.guid
+            res.status(403).send("unauthorized")
+        else if not string(req.query.path)
             res.status(400).send("Invalid filename")
         else if RegExp("^\\.\\.[/\\\\]|[/\\\\]\\.\\.$|[/\\\\]\\.\\.[/\\\\]").test(req.query.path)
             res.status(403).send("\"Parent path references forbidden\"")
@@ -156,7 +161,10 @@ closure MakeAPI(port, options, callback, local chroot, server) {
 
     //  "/status"
 
-    server.app.get("/status", closure(req,res, local timeoutms, after, responder) {
+    server.app.get("/status", closure(req, res, local guid, timeoutms, after, responder) {
+        guid = req.get("x-naanlang-api-guid")
+        if server.guid && guid != server.guid
+            res.status(403).send("unauthorized")
         timeoutms = toint(req.query.timeout)
         after = toint(req.query.after)
         if not integer(timeoutms) or timeoutms > 10000
@@ -187,8 +195,11 @@ closure MakeAPI(port, options, callback, local chroot, server) {
 
     //  "/psm"
 
-    server.app.all("/psm", closure(req, res) {
-        if !server.hostfs
+    server.app.all("/psm", closure(req, res, local guid) {
+        guid = req.get("x-naanlang-api-guid")
+        if server.guid && guid != server.guid
+            res.status(403).send("unauthorized")
+        else if !server.hostfs
             res.status(503).send("host filesystem not available")
         else
             server.hostfs.api(req, res)
@@ -227,7 +238,6 @@ closure MakeAPI(port, options, callback, local chroot, server) {
         server.ws = WebSocketServer(server)
         server.port = port
         callback(false, port, server)                                           // notify of success
-        debuglog("server open on port", port)
         result = server.psm.conns.NodeFS.connect("Host", "NideFS", list(""))    // ### this should go through resource tracker
         if result.0
             ErrorDebuglog(Error("can't access HostFS", result.0))
@@ -264,7 +274,7 @@ closure WebSocketServer(server, local websocks) {
     // Event handlers
 
     websocks.wss.on("connection", function(socket, request) {
-        websocks.conns.push(WesCon(websocks, socket, request))
+        websocks.conns.push(WesCon(server, websocks, socket, request))
     })
                 
     server.wss.on("error", function(error) {
@@ -303,7 +313,7 @@ closure WebSocketServer(server, local websocks) {
  *
  */
 
-closure WesCon(websocks, socket, request, local wescon) {
+closure WesCon(server, websocks, socket, request, local wescon) {
     wescon = new(object, this)
     wescon.socket = socket
     wescon.serverIDs = []
@@ -315,7 +325,9 @@ closure WesCon(websocks, socket, request, local wescon) {
     socket.on("message", function onmessage(text, local message, error) {
         try {
             message = new(js.g.JSON.parse(text))
-            if message.clientID && websocks.subsystems[message.serverID] {
+            if server.guid && message.guid != server.guid
+                error = Error("unauthorized")
+            else if message.clientID && websocks.subsystems[message.serverID] {
                 wescon.serverIDs.push(message.serverID)                     // ### track subsystems for closing
                 websocks.subsystems[message.serverID].wsReceive(message, wescon)
             }

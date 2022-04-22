@@ -24,6 +24,7 @@ function sawsInit(local manifest) {
     Naan.module.build(module.id, "serviceAws", function(modobj, compobj) {
         compobj.manifest = manifest
         require("frameworks/common").LiveImport()
+        require("./aws_utils.nlg")
         function sawsPostload() {
             if js.g
                 awsSDK = js.r("aws-sdk")

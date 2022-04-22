@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2022 by Richard C. Zulch
  *
  */
 
@@ -259,6 +259,8 @@ closure dawsBucket(s3, local bucket) {
         listOne()
     }
     
+    // finis
+
     list(false, bucket)
 
 };
@@ -502,7 +504,10 @@ closure dawsTable(database, path, local table) {
     
     // head
     //
-    // Return the header of the specified record, i.e. everything except the content.
+    // Return the header of the specified record, i.e. everything except the content. This operates
+    // on directories (with names ending in slash) differently because AWS does not support calling
+    // headObject upon them. We simply want to confirm that the directory exists, so we list objects
+    // that have the name without the slash and we get a common prefix if it exists.
 
     table.head = closure head(key, callback, local id) {
         if !callback
@@ -510,15 +515,30 @@ closure dawsTable(database, path, local table) {
         id = makeID(key)
         if !string(id)
             return (asyncResult(callback, id))                                 // error from makeID
-        database.bucket.get(id, true, function(error, resp) {
-            if error
-                error = Error("head failed", error, id, { status: error.statusCode })
-            else {
-                resp.key = key
-                resp = s3resp2doc(resp)
-                resp._id = id }
-            callback(error, resp)
-        })
+        if id.slice(-1) == "/"
+            database.bucket.list(id.slice(0,-1), true, function blcb(error, resp) {
+                if error
+                    error = Error("head failed", error, id, { status: error.statusCode })
+                else if id != resp.CommonPrefixes.0.Prefix {
+                    error = Error("head not found", id, resp.CommonPrefixes.0.Prefix, { status: 404 })
+                    resp = false
+                }
+                else {
+                    resp.key = key
+                    resp = s3resp2doc(resp)
+                    resp._id = id }
+                callback(error, resp)
+            })
+        else
+            database.bucket.get(id, true, function bgcb(error, resp) {
+                if error
+                    error = Error("head failed", error, id, { status: error.statusCode })
+                else {
+                    resp.key = key
+                    resp = s3resp2doc(resp)
+                    resp._id = id }
+                callback(error, resp)
+            })
     }
 
     // copy

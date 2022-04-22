@@ -256,6 +256,8 @@ TextEncoder = false;
 TextDecoder = false;
 EncodeURIComponent = false;
 DecodeURIComponent = false;
+EncodeBase64 = false;
+DecodeBase64 = false;
 JSONstringify = false;
 JSONparse = false;
 
@@ -288,6 +290,10 @@ function comrInit(local manifest) {
             TextDecoder = wsg.TextDecoder
             EncodeURIComponent = wsg.encodeURIComponent
             DecodeURIComponent = wsg.decodeURIComponent
+            //
+            // everywhere: Base65
+            EncodeBase64 = wsg.btoa
+            DecodeBase64 = wsg.atob
             //
             // everywhere: JSON
             JSONstringify = wsg.JSON.stringify
@@ -338,7 +344,7 @@ function comrInit(local manifest) {
             //
             DecodeBase64url = function decodeBase64url(base64url, local padding) {
                 base64url = base64url.replace(RegExp("-", "g"), '+').replace(RegExp("_", "g"), '/')
-                wsg.atob(base64url)
+                DecodeBase64(base64url)
             }
             //
             // For browser windows and web workers
@@ -358,7 +364,7 @@ function comrInit(local manifest) {
                 //
                 // HashMD5 in base64
                 HashMD5_base64 = function browserMD5_base64(data) {
-                    wsg.btoa(browserMD5(data, true)) }
+                    EncodeBase64(browserMD5(data, true)) }
                 //
                 // browserDigest - only in secure contexts (localhost and HTTPS)
                 //
@@ -431,6 +437,8 @@ function comrInit(local manifest) {
                     HashMD5 =
                     HashMD5_base64 =
                     HashSHA1 =
+                    HashSHA256 =
+                    HashSHA256_base64 =
                     RandomBytes = function() { throw(Error("crypto functions unavailable")) }
                 }
             }
@@ -442,6 +450,8 @@ function comrInit(local manifest) {
             modobj.exports.TextDecoder = TextDecoder
             modobj.exports.EncodeURIComponent = EncodeURIComponent
             modobj.exports.DecodeURIComponent = DecodeURIComponent
+            modobj.exports.EncodeBase64 = EncodeBase64
+            modobj.exports.DecodeBase64 = DecodeBase64
             modobj.exports.JSONstringify = JSONstringify
             modobj.exports.JSONparse = JSONparse
             modobj.exports.JsonStringify = JsonStringify

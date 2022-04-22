@@ -540,36 +540,26 @@ closure DbConnector(psm, local connClassID, connector, watch) {
             type:           "password" },
         ]
     }
-    
-    // hashResourceID
-    //
-    // Make a stable hash based on the resource credentials that we can persist or share between
-    // different domains accessing the same resource.
-    connector.hashResourceID = function hashResourceID(resource, local ident) {
-        ident = resource.urlName
-        if resource.label
-            ident = ident.concat(resource.label)
-        HashSHA256(ident)
-    }
 
     // findResource
     //
-    // Find a resource with the specified contents, returning the resID or false. The loose criteria
-    // is: if added, would the specified contents be redundant to an existing resource?
+    // Find a resource with the specified contents, returning the resID or false.
     connector.findResource = function findResource(resource, local resID, creds) {
         for resID in listResources().1 {
             creds = access(resID).1
-            if resource.urlName == creds.urlName
+            if ((!resource.urlName ||resource.urlName == creds.urlName)
                 && (!resource.label || resource.label == creds.label)
-                && resource.authName == creds.authName
+                && (!resource.authName || resource.authName == creds.authName))
                 return (resID)
         }
         false
     }
 
-    // addResource
+    // writeResource
     //
-    // Add credentials for a named resource. The resource is a dictionary comprising these keys:
+    // Add or update credentials for a named resource. If no resID is specified this adds a new
+    // resource; otherwise it updates an existing one. The resource is a dictionary comprising these
+    // keys:
     //      label       - [optional] label we use for this resource
     //      urlName     - URL (e.g. "http://domain.com/dbname")
     //                  - filepath (e.g. "/Users/richardz/dbname")  - NodeJS filesystem access
@@ -579,10 +569,13 @@ closure DbConnector(psm, local connClassID, connector, watch) {
     //      hidden      - [optional] don't enumerate to user
     //      locked      - [optional] don't allow user delete
     //      existng     - [optional] true to enable using existing database
-    // The return value is (error, result) tuple. Error, if non-false, is a dictionary of field
-    // keys and error diagnostic strings. The special key "label" refers to the label string
-    connector.addResource = function addResource(resource, local errors, creds, original, error, resID, data) {
+    // The return value is an (error, resID) tuple. Error, if non-false, is a dictionary of field
+    // keys and error diagnostic strings.
+    connector.writeResource = function writeResource(resource, resID, 
+        local errors, creds, original, error, data) {
+        // badField - test for a bad string
         function badField(str) { !string(str) || str.trim().length == 0 }
+
         creds = { urlName: resource.urlName }
         errors = { }
         if resource.label
@@ -591,6 +584,8 @@ closure DbConnector(psm, local connClassID, connector, watch) {
             creds.label = resource.urlName
         if badField(creds.label)
             errors.label = "invalid label"
+        else if !resID && findResource({ label: creds.label })
+            errors.label = "duplicate name"
         if badField(resource.urlName)
             errors.urlName = "required field"
         else if !resource.existing {
@@ -612,15 +607,36 @@ closure DbConnector(psm, local connClassID, connector, watch) {
                 creds.hidden = resource.hidden
             if resource.locked
                 creds.locked = resource.locked
-            resID =  hashResourceID(resource)
-            `(error, data) = connector.vault.addResource(resID, creds)
+            if resID {
+                `(error, data) = connector.vault.updateResource(resID, creds)
+                change = { changed: [resID] }
+            } else {
+                resID = UUID()
+                `(error, data) = connector.vault.addResource(resID, creds)
+                change = { added: [resID] }
+            }
             if data {
-                watch.notify(connClassID, { added: [resID] })
-                data = resID }
+                watch.notify(connClassID, change)
+                data = resID
+            }
         }
         list(error, data)
     }
-    
+
+    // addResource
+    //
+    // Add a new resource, returning a standard error tuple per writeResource.
+    connector.addResource = function addResource(resource) {
+        writeResource(resource)
+    }
+
+    // updateResource
+    //
+    // Update an existing resource, returning a standard error tuple per writeResource.
+    connector.updateResource = function updateResource(resID, resource) {
+        writeResource(resource, resID)
+    }
+
     // getResource
     //
     // Get credentials for a named resource, matching the dictionary semantics of addResource. The

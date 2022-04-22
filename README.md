@@ -4,7 +4,7 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     Naan for NPM version 1.0.2-1
+     Naan for NPM version 1.0.3-1
      Copyright (c) 2017-2022 Zulch Laboratories, Inc.
 
 #### Features
@@ -27,11 +27,11 @@ Please ensure you have a recent version of [node.js](http://nodejs.org/)
 
 For use everywhere as a command line app:
 
-    npm install naan -g
+    npm install @naanlang/naan -g
 
 For use as a library in the current project:
 
-    npm install naan
+    npm install @naanlang/naan
 
 #### Command line execution
 

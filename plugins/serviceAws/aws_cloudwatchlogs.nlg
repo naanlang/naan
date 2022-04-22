@@ -114,7 +114,7 @@ function cwlogsInit(local manifest) {
     manifest = `(CloudWatchLogs, cwlogsInit)
 
     Naan.module.build(module.id, "aws_cloudwatchlogs", function(modobj, compobj) {
-        require("./aws_utils.nlg")
+        require("./serviceAws.nlg")
         compobj.manifest = manifest
         modobj.exports.CloudWatchLogs = CloudWatchLogs
     })

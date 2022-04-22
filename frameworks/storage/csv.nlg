@@ -1,0 +1,120 @@
+/*
+ * csv.nlg
+ * Naanlib/frameworks/storage
+ *
+ *     CSV file parsing and generation.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * csvParse
+ *
+ *     Parse text lines in CSV format into a row array of column arrays. The delimiter defaults to
+ * comma, but can be replaced with anything that's not crazy. Normally missing columns are replaced
+ * with false, but the empty parameter can be used to override this. For example, specify "" to
+ * use an empty string for the empty column.
+ *     The parse regex is derived from the following Stack Overflow article:
+ * https://stackoverflow.com/questions/1293147/example-javascript-code-to-parse-csv-data
+ * Please see the answer by Joshua McLauchlan.
+ *
+ */
+
+function csvParse(text, delim, empty, local res, parseRx, quoteRx, result, matches) {
+    if !string(text)
+        return (false)                                                      // don't hang or be stupid
+    res = '(,|\r?\n|\r|^)(?:"([^"]*(?:""[^"]*)*)"|([^,\r\n]*))'
+    if delim
+        res = res.replace(RegExp(',', 'g'), delim)
+    else
+        delim = ','
+    parseRx = RegExp(res, 'gi')
+    quoteRx = RegExp('""', 'g')
+    result = [[]]
+    while !!(matches = parseRx.exec(text)) {
+        if !matches[0]
+            break                                                           // should never happen, but don't hang
+        if matches[1].length > 0 && matches[1] !== delim
+            result.push([])                                                 // first column in row
+        result[result.length-1].push(cond(
+            if matches[2] !== undefined
+                matches[2].replace(quoteRx, '"')                            // quoted string, including ""
+            else if matches[3] !== ""
+                matches[3]                                                  // unquoted, non-empty
+            else
+                empty                                                       // empty column
+        ))
+    }
+    result
+};
+
+
+/*
+ * csvPrint
+ *
+ *     Print an array of row arrays of columns to a string, reversing csvParse.
+ *
+ */
+
+function csvPrint(rows, local output, quoter, row, line, delim, col) {
+    quoter = csvQuoteGenerator()
+    output = ""
+    for row in rows {
+        delim = line = ""
+        for col in row {
+            line = line.concat(delim, quoter(col))
+            delim = ","
+        }
+        output = output.concat(line, "\n")
+    }
+    output
+};
+
+
+/*
+ * csvQuoteGenerator
+ *
+ *     Return a function that quotes a string as needed for a CSV file with the given delimiter. This
+ * is a generator because it will likely be needed frequently. Comma is the default delimeter, just 
+ * like God intended for a *C*sv file.
+ *
+ */
+
+closure csvQuoteGenerator(delimiter, local rxComma, rxQuote) {
+    if !delimiter
+        delimiter = ','
+    rxDelimiter = RegExp('['.concat('"\\', delimiter, ']'))
+    rxQuote = RegExp("\"", "g")
+
+    // csvQuote
+    // Quote a string for a CSV file as specified.
+    function csvQuote(str) {
+        if rxDelimiter.test(str)
+            return ("\"".concat(str.replace(rxQuote, "\"\""), "\""))
+        return (str)
+    }
+};
+
+
+/*
+ * csvInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function csvInit(local manifest) {
+    manifest = `(csvParse, csvPrint, csvQuoteGenerator, csvInit)
+
+    Naan.module.build(module.id, "csv", function(modobj, compobj) {
+        require("./storage.nlg")
+        compobj.manifest = manifest
+        module.exports.csvParse = csvParse
+        module.exports.csvPrint = csvPrint
+        module.exports.csvQuoteGenerator = csvQuoteGenerator
+    })
+}();

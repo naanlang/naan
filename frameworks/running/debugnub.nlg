@@ -217,7 +217,7 @@ closure DebugNub(local nub, debug, paused) {
     // constant string, with corresponding arguments defined as follows:
     //
     //  "startpause"        - pause at start of evaluating an expression
-    //      tuple               - expression being evaluated
+    //      tuple               - dictionary of current step info
     //  "breakpoint"        - hit a breakpoint
     //      where               - dictionary
     //      value               - applied value
@@ -237,10 +237,7 @@ closure DebugNub(local nub, debug, paused) {
         if entry != "steptrap"
             lineStepClear()
         if entry == "startpause" {
-            if atom(arg1)
-                msg.error = Error("can't debug atom:", arg1)
-            else
-                msg.expr = arg1
+            msg.expr = arg1
         } else if entry == "breakpoint" {
             if breakpointHit(msg, arg1, arg2)
                 return

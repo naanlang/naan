@@ -18,7 +18,7 @@
  *
  */
 
-closure ServiceWorker(local serv, callback) {
+closure ServiceWorker(pubID, pubVersion, local serv, callback) {
     serv = new(object, this)
 
     //
@@ -32,7 +32,11 @@ closure ServiceWorker(local serv, callback) {
         mchan = xnew(js.w.MessageChannel)
         serv.msgport = mchan.port2
         serv.msgport.onmessage = workerMsg.proc
-        serv.sw.postMessage({ hereIsYourPort: mchan.port1 }, [mchan.port1])
+        serv.sw.postMessage({
+            hereIsYourPort: mchan.port1
+            hereIsMyID: pubID
+            hereIsMyVersion: pubVersion
+        }, [mchan.port1])
     }
     
     //
@@ -50,7 +54,11 @@ closure ServiceWorker(local serv, callback) {
                 request: msg.request
                 version: msg.version
             })
-        } else if msg.id == "text"
+        } else if msg.id == "upgrade" {
+            if msg.version != msg.previous                                  // same version: new install
+                debuglog("service worker version upgrade to:", msg.version, "from", msg.previous)
+        }
+        else if msg.id == "text"
             debuglog("sw[".concat(serv.scope, "]: "), msg.text)             // handy remote debug capability
     }
     
@@ -174,10 +182,10 @@ closure ServiceWorker(local serv, callback) {
  *
  */
 
-closure ScopedServiceWorker(local scoper, result) {
+closure ScopedServiceWorker(pubID, pubVersion, local scoper, result) {
     scoper = new(object, ScopedServiceWorker)
     scoper.scopes = {}
-    scoper.serv = ServiceWorker()
+    scoper.serv = ServiceWorker(pubID, pubVersion)
     result = scoper.serv.register("/", closure(error, data, local response, filepath, scope) {
         if data.message == "fetch" {
             response = {
@@ -201,7 +209,7 @@ closure ScopedServiceWorker(local scoper, result) {
             filepath = xnew(js.w.URL, data.request.url).pathname
             filepath = DecodeURIComponent(filepath)                         // "/run/<scope>/path..."
             filepath = filepath.slice(4)                                    // "/<scope>/path..."
-            error = true
+            error = true                                                    // stays true iff not in scope
             for scope in scoper.scopes {
                 if filepath.startsWith(scope) {
                     filepath = filepath.slice(scope.length+1)               // remove scope including "/"
@@ -209,8 +217,6 @@ closure ScopedServiceWorker(local scoper, result) {
                     break
                 }
             }
-            if error === true
-                debuglog("ScopedServiceWorker: couldn't find scope", scope, "in", totuple(scoper.scopes))
 
             // read resource failed
             if error {
@@ -353,12 +359,14 @@ closure TrackedScope(track, scope, fs, rootpath, local trope, result) {
 /*
  * TrackServiceWorkers
  *
- *     Configure service workers to be tracked in the execution tracker.
+ *     Configure service workers to be tracked in the execution tracker. The pubID identifies us as
+ * the publisher for this service worker, and the version allows it to clear its cache when versions
+ * change.
  *
  */
 
-closure TrackServiceWorkers(track, local error) {
-    `(error, serviceWorker) = ScopedServiceWorker()
+closure TrackServiceWorkers(track, pubID, pubVersion, local error) {
+    `(error, serviceWorker) = ScopedServiceWorker(pubID, pubVersion)
     if error
         ErrorDebugLog("TrackServiceWorkers: cannot load service worker", error)
     track.register(TrackedScope, "V-Site")

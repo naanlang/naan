@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2016-2021 by Richard C. Zulch
+ * Copyright (c) 2016-2022 by Richard C. Zulch
  *
  */
 
@@ -150,40 +150,36 @@ closure projConnector(projman, projtype, local connector, watch) {
     connector.label = projtype.classLabel
     connector.vault = projman.vault(projtype.classID)
     watch = projman.watchable(connector)
-        
-    // hashResourceID
-    //
-    // Make a stable hash based on the resource credentials that we can persist or share between
-    // different domains accessing the same resource.
-    connector.hashResourceID = function hashResourceID(resource, local ident) {
-        ident = resource.name.concat(resource.locationID, resource.path)
-        HashSHA256(ident)
-    }
 
     // findResource
     //
-    // Find a resource with the specified contents, returning the resID or false. The loose criteria
-    // is: if added, would the specified contents be redundant to an existing resource?
+    // Find a resource with the specified contents, returning the resID or false.
     connector.findResource = function findResource(resource, local resID, resInfo) {
         for resID in listResources().1 {
             resInfo = access(resID).1
-            if resource.name == resInfo.name
-                && resource.locationID == resInfo.locationID
-                && resource.path == resInfo.path
+            if ((!resource.name || resource.name == resInfo.name)
+                && (!resource.locationID || resource.locationID == resInfo.locationID)
+                && (!resource.path || resource.path == resInfo.path))
                 return (resID)
         }
         false
     }
 
-    // addResource
+    // writeResource
     //
-    // Add credentials for a named resource. The resource is a dictionary comprising these keys:
+    // Add or update credentials for a named resource. If no resID is specified this adds a new
+    // resource; otherwise it updates an existing one. The resource is a dictionary comprising these
+    // keys:
     //      name:       <string>        - the user visible name of the project
     //      locationID: <string>        - resID of location resource where this project resides
     //      path:       <string>        - path to project within location
-    // Error, if non-false, is a dictionary of field keys and error diagnostic strings.
-    connector.addResource = function addResource(resource, local errors, error, resID, data) {
+    // The return value is an (error, resID) tuple. Error, if non-false, is a dictionary of field
+    // keys and error diagnostic strings.
+    connector.writeResource = function writeResource(resource, resID,
+        local errors, error, data, change) {
+        // badField - test for a bad string
         function badField(str) { !string(str) || str.trim().length == 0 }
+
         errors = { }
         if badField(resource.name)
             errors.name = "invalid name"
@@ -197,19 +193,40 @@ closure projConnector(projman, projtype, local connector, watch) {
         if length(errors) > 0
             error = errors
         else {
-            resID =  hashResourceID(resource)
-            `(error, data) = connector.vault.addResource(resID, resource)
+            if resID {
+                `(error, data) = connector.vault.updateResource(resID, resource)
+                change = { changed: [resID] }
+            } else {
+                resID = UUID()
+                `(error, data) = connector.vault.addResource(resID, resource)
+                change = { added: [resID] }
+            }
             if data {
-                watch.notify(projtype.classID, { added: [resID] })
-                data = resID }
+                watch.notify(projtype.classID, change)
+                data = resID
+            }
         }
         list(error, data)
+    }
+
+    // addResource
+    //
+    // Add a new resource, returning a standard error tuple per writeResource.
+    connector.addResource = function addResource(resource) {
+        writeResource(resource)
+    }
+
+    // updateResource
+    //
+    // Update an existing resource, returning a standard error tuple per writeResource.
+    connector.updateResource = function updateResource(resID, resource) {
+        writeResource(resource, resID)
     }
 
     // deleteResource
     //
     // Delete information for a project. The return value is (error, result) tuple.
-    connector.deleteResource = function deleteResource(resID, local error, creds, db) {
+    connector.deleteResource = function deleteResource(resID) {
         connector.vault.deleteResource(resID)
         watch.notify(projtype.classID, { deleted: [resID] })
         list(false, { ok: true})
@@ -276,7 +293,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.2-1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.3-1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -539,7 +556,11 @@ closure projConfig(projman, where, local procon, fs, configpath) {
         if error
             return (list(Error("can't access publishing filesystem", error)))
         inpath = fs.path.join(proj_configDataFolder, rules.products, publish.input)
-        fs.util.deepcopy(inpath, publish.sources, outfs, publish.output)
+        fs.util.deepcopy(inpath, publish.sources, outfs, publish.output, {
+            erase: true
+            overwrite: true
+            follow: true
+        })
     }
 
     // close

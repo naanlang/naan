@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2021 by Richard C. Zulch
+ * Copyright (c) 2019-2022 by Richard C. Zulch
  *
  */
 
@@ -170,6 +170,7 @@ closure TermHost(track, api, name, workerID, options,
 
     target.sendControl = function sendControl(workerOp, payload) {
         target.ws.send(js.w.JSON.stringify({
+            guid: api.guid
             clientID: clientID
             serverID: serverID
             workerID: target.workerID
@@ -355,7 +356,7 @@ closure TermHost(track, api, name, workerID, options,
  */
 
 closure TermLocal(track, name, workerID, options,
-    local target, nlregex)
+    local target, nlregex, listener)
 {
     if workerID == "NaanIDE" {
         if !js.t
@@ -363,8 +364,6 @@ closure TermLocal(track, name, workerID, options,
         termInstallVirtualWatcher(track, js.t)
         return (termIDE(track, name, workerID, js.t))                       // connect to IDE execution instance itself
     }
-    if not js.w.Worker
-        return (list(Error("Local environment does not support workers")))
     if dictionary(options)
         options = new(options)
     else
@@ -372,13 +371,27 @@ closure TermLocal(track, name, workerID, options,
     target = runningExecutors.ExecutorBase(track, "Local", name)
     nlregex = RegExp("\\n", "g")
     target.workerID = workerID
-    target.worker = xnew(js.w.Worker, "env_webworker.js")
     target.msgQueue = []
+    if workerID == "NaanIDE-Debug" {
+        target.worker = js.w.open(js.w.location.href, "_blank")
+        target.worker.addEventListener("beforeunload", function(e) {        // our target is closing
+            destroy()
+        })
+        js.w.addEventListener("beforeunload", function(e) {                 // we are closing
+            // ### tell target we are closing (if needed)
+        })
+        listener = js.w
+    } else {
+        if not js.w.Worker
+            return (list(Error("Local environment does not support workers")))
+        target.worker = xnew(js.w.Worker, "env_webworker.js")
+        listener = target.worker
+    }
 
     // onmessage
     // A message was received from the worker.
     
-    target.worker.onmessage = function(e, msg) {
+    listener.addEventListener("message", function(e, msg) {
         msg = new(e.data)
         if msg.id != "targetout" && msg.id != "loaded" {
             if msg.id == "status"
@@ -388,14 +401,14 @@ closure TermLocal(track, name, workerID, options,
                     target.msgQueue.push(msg)
                 return  } }
         target.doMessage(msg)
-    }
+    })
 
     // onerror
     // The worker had an error.
     
-    target.worker.onerror = function(e) {
+    target.worker.addEventListener("error", function(e) {
         target.execClosed(Error("instance error", e.message))
-    }
+    })
 
     //
     // oninterrupt

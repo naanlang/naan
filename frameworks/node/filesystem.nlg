@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2021 by Richard C. Zulch
+ * Copyright (c) 2017-2022 by Richard C. Zulch
  *
  */
 
@@ -273,11 +273,48 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
                 callback(false, { md5: md5data })
         })
     }
-    
+       
+    // readlink
+    //
+    // Read the contents of a symbolic link.
+
+    files.readlink = closure readlink(path, callback, local error, localpath) {
+        if !callback
+            return (syncAdapter(readlink, path))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        fs.readlink(localpath, function(err, linkString) {
+            if err
+                callback(Error("fs.readlink failed:", localpath, err))
+            else
+                callback(false, linkString)
+        })
+    }
+       
+    // symlink
+    //
+    // Create a symbolic link "path" that points to "target". No options are currently supported.
+
+    files.symlink = closure symlink(target, path, options, callback,
+        local error, localpath) {
+        if !callback
+            return (syncAdapter(symlink, target, path, options))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        fs.symlink(target, localpath, function(err) {
+            if err
+                callback(Error("fs.symlink failed:", target, localpath, err))
+            else
+                callback(false, { ok: true })
+        })
+    }
+
     // delete
     //
     // Delete the file at the specified path, or a directory if the options dictionary includes:
-    //     recursive: true          -- "recursively" delete directory and children
+    //     recursive: true          -- recursively delete directory and children
 
     files.delete = closure delete(path, options, callback, local error, localpath) {
         if !callback
@@ -286,9 +323,9 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         if error
             return (asyncResult(callback, error))
         if options.recursive
-            fs.rmdir(localpath, function(err) {
+            fs.rm(localpath, { recursive: true, force: true }, function(err) {
                 if err
-                    callback(Error("fs.rmdir failed:", localpath, err))
+                    callback(Error("fs.rm failed:", localpath, err))
                 else
                     callback(false, { ok: true })
             })
@@ -303,15 +340,22 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
 
     // info
     //
-    //     Report info on a file or directory.
+    //     Report info on a file or directory. The options are:
+    //  {
+    //      follow:                             <boolean>                   // follow links
+    //  }
 
-    files.info = closure info(path, callback, local error, localpath) {
+    files.info = closure info(path, options, callback, local error, localpath, fsop) {
         if !callback
-            return (syncAdapter(info, path))
+            return (syncAdapter(info, path, options))
         `(error, localpath) = localPath(path)
         if error
             return (asyncResult(callback, error))
-        fs.lstat(localpath, function(err, stat, local data, info, nodetype) {
+        if options.follow
+            fsop = `stat
+        else
+            fsop = `lstat
+        fs[fsop](localpath, function(err, stat, local data, info, nodetype) {
             if err
                 return (callback(Error("fs.stat failed:", localpath, err)))
             info = {
@@ -336,9 +380,102 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         })
     }
 
+    // setInfo
+    //
+    //     Set selected info on a file or directory. The info dictionary has the same layout as that
+    // returned by files.info(), and every applicable key defined in the dictionary is set. To omit
+    // setting some of the information, remove its key from the info dictionary. The applicable keys
+    // are:
+    //  {
+    //      mtimeMs:                            <milliseconds>
+    //      mtime:                              <date>
+    //      nodejs_stat: {
+    //          mode:                           <number>
+    //          uid:                            <uid>
+    //          gid:                            <gid>
+    //          atimeMs:                        <milliseconds>
+    //          atime:                          <date>
+    //          mtimeMs:                        <milliseconds>
+    //          mtime:                          <date>
+    //      }
+    //  }
+    // If more than one timestamp exists of a certain type, the millisecond version is used. Some
+    // values are set together by the OS, like uid & guid, or mtime & atime. Specifying just one of
+    // these will cause setInfo to use the same value for both.
+
+    files.setInfo = closure setInfo(path, info, callback,
+        local error, localpath, mtime, atime, uid, gid) {
+        if !callback
+            return (syncAdapter(setInfo, path, info))
+        if !dictionary(info) && !xobject(info)
+            error = Error("setInfo: invalid argument:", typeof(info))
+        else
+            `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        atime = info.nodejs_stat.atimeMs/1000.0 || info.nodejs_stat.atime
+        mtime = info.mtimeMs/1000.0 || info.mtime
+        if !mtime
+            mtime = info.nodejs_stat.mtimeMs/1000.0 || info.nodejs_stat.mtime
+        if atime || mtime {
+            atime = atime || mtime
+            mtime = mtime || atime
+            `(error) = setTimes(path, atime, mtime)
+        }
+        if !error && info.nodejs_stat.mode
+            `(error) = setMode(path, info.nodejs_stat.mode)
+        uid = info.nodejs_stat.uid
+        gid = info.nodejs_stat.gid
+        if !error && (uid || gid) {
+            uid = uid || gid
+            gid = gid || uid
+            `(error) = setOwnerGroup(path, uid, gid)
+        }
+        if error
+            callback(Error("setInfo failed:", localpath, error))
+        else
+            callback(false, { ok: true})
+    }
+
+    // setOwnerGroup
+    //
+    //     Set owner/group on a file or directory.
+    
+    files.setOwnerGroup = closure setOwnerGroup(path, uid, gid, callback, local error, localpath) {
+        if !callback
+            return (syncAdapter(setOwnerGroup, path, uid, gid))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        fs.chown(localpath, uid, gid, function(err, stat) {
+            if err
+                callback(Error("fs.chown failed:", localpath, err))
+            else
+                callback(false, { ok: true})
+        })
+    }
+
+    // setMode
+    //
+    //     Set mode bits on a file or directory.
+    
+    files.setMode = closure setMode(path, mode, callback, local error, localpath) {
+        if !callback
+            return (syncAdapter(setMode, path, mode))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        fs.chmod(localpath, mode, function(err, stat) {
+            if err
+                callback(Error("fs.chmod failed:", localpath, err))
+            else
+                callback(false, { ok: true})
+        })
+    }
+
     // setTimes
     //
-    //     Set timestamps on a file or directory.
+    //     Set timestamps on a file or directory. The timestamps can be dates or numeric seconds.
     
     files.setTimes = closure setTimes(path, atime, mtime, callback, local error, localpath) {
         if !callback
@@ -346,9 +483,6 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         `(error, localpath) = localPath(path)
         if error
             return (asyncResult(callback, error))
-        if !numeric(atime, mtime)
-            return (asyncResult(callback, Error("invalid arguments:", atime, mtime)))
-        localpath = JSpath.resolve(rootpath, localpath)
         fs.utimes(localpath, atime, mtime, function(err, stat) {
             if err
                 callback(Error("fs.utimes failed:", localpath, err))
@@ -375,7 +509,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
                     if name {                                               // this record is fetchable
                         ++pending.active
                         filepath = JSpath.join(parentpath, name)
-                        files.info(filepath, function(error, info) {
+                        files.info(filepath, false, function(error, info) {
                             if error
                                 input[kdex].error = error                   // this record failed
                             else
@@ -398,7 +532,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
 
     // dirList
     //
-    // Return array of files in a directory if it exists. If options.head is true then this reads 
+    // Return array of files in a directory if it exists. If options.stat is true then this reads 
     // info for each file as well.
 
     files.dirList = closure dirList(path, options, callback, local error, localpath, output, nodelist, file) {
@@ -426,7 +560,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
                 output.children.push({
                     name: file
                 })
-            if options.head
+            if options.stat
                 statfetch(output.children, localpath)                       // read all the info records
             callback(false, output)
         })
@@ -638,7 +772,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
             if dest.slice(-1) == JSpath.sep                                 // new location, else entirely new pathname
                 localdest = JSpath.join(localdest, JSpath.basename(srcpath))
         }
-        fs.lstat(localdest, closure(err, stat, local cmd, args) {
+        fs.stat(localdest, closure(err, stat, local cmd, args) {
             if !err && !options.overwrite
                 callback(Error("copy destination already exists",
                     {
@@ -649,6 +783,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
                         existing: localdest
                     }))
             else {
+                debuglog("==> Warning: files.copy needs to be rewritten with fs primitives")
                 if options.move {
                     cmd = "mv"
                     args = [localsrc, localdest] }
@@ -717,6 +852,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     files.minimize = closure minimize(input, callback, local child, stdinStream) {
         if !callback
             return (syncAdapter(minimize, input))
+        debuglog("==> Warning: files.minimize is deprecated")
         child = nodecp.execFile("uglifyjs",
             ["--compress", "drop_debugger=false", "--mangle", "eval"],      // ### uglifyjs options should be parameterized
             function(err, stdout, stderr) {
@@ -742,6 +878,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     files.unzip = closure unzip(inpath, outpath, callback) {
         if !callback
             return (syncAdapter(unzip, inpath, outpath))
+        debuglog("==> Warning: files.unzip is deprecated")
         nodecp.execFile("unzip",
             ["-qo", inpath, "-d", outpath],                                 // quiet; no queries
             { },                                                            // execution options
@@ -757,21 +894,27 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     //
     // touch
     //
-    // Execute the touch utility, returning the result as a standard tuple: `(error, result)
+    // Touch the specified file or directory, returning the result as a standard result tuple
+    // `(error, result). When only the path is specified this sets the last-access and last-modified
+    // times to the current Date(). Otherwise the dates are set to the specified value(s). Note that
+    // this sets the times of a symbolic link file itself, not the file the link points to.
     //
-    files.touch = closure touch(outpath, callback) {
+    files.touch = closure touch(path, atime, mtime, callback, local localpath) {
         if !callback
-            return (syncAdapter(touch, outpath))
-        nodecp.execFile("touch",
-            [outpath],
-            { },                                                            // execution options
-            function(err, stdout, stderr) {
-                if err
-                    callback(Error("touch failed", err, stderr))
-                else
-                    callback(false, { ok: true })
-            }
-        )
+            return (syncAdapter(touch, path, atime, mtime))
+        `(error, localpath) = localPath(path)
+        if error
+            return (asyncResult(callback, error))
+        if !atime && !mtime
+            atime = mtime = Date()
+        else if atime && !mtime
+            mtime = atime
+        fs.lutimes(localpath, atime, mtime, function(err) {
+            if err
+                callback(Error("touch failed", err))
+            else
+                callback(false, { ok: true })
+        })
     }
 
     //

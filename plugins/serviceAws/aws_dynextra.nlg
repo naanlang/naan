@@ -1,0 +1,294 @@
+/*
+ * aws_dynextra.nlg
+ * serviceAws
+ *
+ *     Extra DynamoDB services for AWS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * dynexBatchGetRecords
+ *
+ * Retrieve records from one or more tables using arrays of keys. The results are put back in a
+ * dictionary with the same shape as the source. The result is a standard `(error, data) tuple.
+ * The request/response layout is as follows:
+ *  [
+ *      {
+ *          table:  <DynaTable object>      // table to act upon
+ *          keys:   [<hash-range tuple>]    // records to get
+ *          data:   [<retrieved records>]   // received records in reply
+ *      },
+ *      { <next-table> }
+ *  ]
+ * The operations are processed in parallel batches, and the final result is a standard result
+ * tuple `(error, result). An error is only reported if we are unable to complete all operations.
+ *
+ */
+
+function dynexBatchGetRecords(dyna, request,
+    local index, titem, tname, error, batches, activity, params, batchsize, primary) {
+    if !dyna.aws
+        return (list(Error("DynaTable.batchGetRecords: not logged into AWS")))
+    request = new(request)                                                  // allow local modifications
+    index = { }
+    for titem in request {                                                  // preflight all tables
+        tname = titem.table.tablename
+        if index[tname]
+            return (Error("DynaTable.batchGetRecords: duplicate table in request:", tname))
+        `(error) = titem.table.info()
+        if error
+            return (Error("DynaTable.batchGetRecords: table", tname, ":", error))
+        titem.data = []
+        index[tname] = titem
+    }
+    batches = []
+    activity = true
+    while activity {                                                        // loop until requests empty
+        params = {
+            RequestItems: { }
+        }
+        batchsize = 0
+        while :fillbatch activity {                                         // loop until batch full
+            activity = false
+            for `(tname, titem) in index {
+                if titem.keys.length > 0 {
+                    primary = titem.table.makeDynKey(titem.keys.unshift())
+                    if params.RequestItems[tname].Keys
+                        params.RequestItems[tname].Keys.push(primary)
+                    else
+                        params.RequestItems[tname] = {
+                            Keys: [primary]
+                        }
+                    activity = true
+                    if ++batchsize >= 100
+                        break :fillbatch                                    // our batch is full
+                } else
+                    item.keys = undefined                                   // clear for return result
+            }
+        }
+        if batchsize > 0
+            batches.push(params)
+    }
+    asyncArray(batches, 10, closure bgr(params, local delayer, pending, err, response, table) {
+        delayer = dyna.conv.genBackoffDelayer()
+        loop {
+            pending = new(nonce)
+            dyna.aws.batchGetItem(params, function(err, data) {
+                if err
+                    debuglog("aws.batchGetItem failed", err)
+                pending.signal(err, data)
+            })
+            `(err, response) = pending.wait()
+            for `(tname, table) in response.Responses
+                for titem in table
+                    index[tname].data.push(dyna.conv.recordDynToNaan(titem))
+            if response.UnprocessedKeys
+                params.RequestItems = response.UnprocessedKeys              // still more to do
+            else
+                break                                                       // total success or failure
+            if delayer() > dyna.timeout {
+                if !error                                                   // too slow
+                    error = err
+                break
+            }
+        }
+    }).wait()
+    if error
+        list(error)
+    else
+        list(false, request)
+};
+
+
+/*
+ * dynexBatchWriteRecords
+ *
+ * Put arrays of records into one or more tables, replacing or deleting any existing records with
+ * the same keys. This returns arrays of results coresponding to the input records, where each
+ * is a standard `(error, data) tuple. The request layout is as follows:
+ *  [
+ *      {
+ *          table:  <DynaTable object>      // table to act upon
+ *          delete: [<key tuples/records>]  // records to delete (needing only keys)
+ *          put:    [<records>]             // records to put
+ *      },
+ *      { <next-table> }
+ *  ]
+ * The operations are processed in parallel batches, and the final result is a standard result
+ * tuple `(error, result). An error is only reported if we are unable to complete all operations.
+ *
+ */
+
+closure dynexBatchWriteRecords(dyna, request, local batches, error, activity) {
+    if !dyna.aws
+        return (list(Error("DynaTable.batchWriteRecords: not logged into AWS")))
+
+    //
+    // addOp
+    // Add a put or delete operation to the parameters
+    //
+    function addOp(params, table, del, record, local request) {
+        if del {                                                            // deleting a record
+            if tuple(record)
+                record = table.makeDynKey(record)                           // caller provided hash/range key pair
+            else
+                request = { DeleteRequest: { Key: dyna.conv.recordNaanToDyn(record) } }
+        }
+        else                                                                // putting a record
+            request = { PutRequest: { Item: dyna.conv.recordNaanToDyn(record) } }
+        if params.RequestItems[table.tablename]
+            params.RequestItems[table.tablename].push(request)
+        else
+            params.RequestItems[table.tablename] = [request]
+    }
+
+    // transform into batches
+    //
+    // This is tricky because it wants each batch to use multiple tables for maximum parallelism,
+    // just in case AWS isn't already optimizing this. It takes a request from each table and
+    // combines them into a single batch repeatedly, until the batch is full or the tables in the
+    // request have no more entries.
+    //
+    request = new(request)                                                  // allow local modifications
+    batches = []
+    activity = true
+    while activity
+        let (params, batchsize, table) {
+            params = {
+                RequestItems: { }
+            }
+            batchsize = 0
+            while :fillbatch activity {                                     // loop until no activity or batch full
+                activity = false
+                for table in request {
+                    if table.delete.length > 0
+                        addOp(params, table, true, table.delete.unshift())
+                    else if table.put.length > 0
+                        addOp(params, table, false, table.put.unshift())
+                    else
+                        continue
+                    activity = true
+                    if ++batchsize >= 25
+                        break :fillbatch                                    // our batch is full
+                }
+            }
+            if batchsize > 0
+                batches.push(params)
+        } ()
+    asyncArray(batches, 10, closure bwr(params, local delayer, pending, err, response) {
+        delayer = dyna.conv.genBackoffDelayer()
+        loop {
+            pending = new(nonce)
+            dyna.aws.batchWriteItem(params, function(err, data) {
+                if err
+                    debuglog("aws.batchWriteItem failed", err)
+                pending.signal(err, data)
+            })
+            `(err, response) = pending.wait()
+            if response.UnprocessedKeys
+                params.RequestItems = response.UnprocessedKeys              // still more to do
+            else
+                break                                                       // total success or failure
+            if delayer() > dyna.timeout {
+                if !error                                                   // too slow
+                    error = err
+                break
+            }
+        }
+    }).wait()
+    if error
+        list(error)
+    else
+        list(false, { ok: true })
+};
+
+
+
+/*
+ * dynexTransactGetRecords
+ *
+ * Retrieve records from one or more tables using arrays of keys as a single transaction. The
+ * results are put back in an array with the same shape as the source. The request/response
+ * layout is as follows:
+ *  [
+ *      {
+ *          table:  <DynaTable object>      // table to act upon
+ *          keys:   [<hash-range tuple>]    // records to get
+ *          data:   [<retrieved records>]   // received records in reply
+ *      },
+ *      { <next-table> }
+ *  ]
+ * This returns a standard result tuple `(error, result). An error is only reported if we are 
+ * unable to complete all operations.
+ *
+ */
+
+closure dynexTransactGetRecords(dyna, request,
+    local index, titem, tname, error, params, pending, response) {
+    if !dyna.aws
+        return (list(Error("DynaTable.transactGetRecords: not logged into AWS")))
+    request = new(request)                                                  // allow local modifications
+    index = { }
+    for titem in request {                                                  // preflight all tables
+        tname = titem.table.tablename
+        if index[tname]
+            return (Error("DynaTable.batchGetRecords: duplicate table in request:", tname))
+        `(error) = titem.table.info()
+        if error
+            return (Error("DynaTable.batchGetRecords: table", tname, ":", error))
+        titem.data = []
+        index[tname] = titem
+    }
+    params = {
+        TransactItems: []
+    }
+    for `(tname, titem) in index {
+        while titem.keys.length > 0 {
+            params.TransactItems.push({
+                Get: {
+                    TableName: tname
+                    Key: makeDynKey(titem.keys.unshift())
+                }
+            })
+        }
+        titem.keys = undefined
+    }
+    pending = new(nonce)
+    dyna.aws.transactGetItems(params, function(err, data) {
+        if err
+            debuglog("aws.transactGetItems failed", err)
+        pending.signal(err, data)
+    })
+    `(error, response) = pending.wait()
+    if error
+        list(error)
+    else {
+        for titem in response.Responses {
+            tname = titem.Item.*.0
+            index[tname].data.push(dyna.conv.recordDynToNaan(titem.Item[tname]))
+        }
+        list(false, request)
+    }
+};
+
+
+/*
+ * dynexInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function dynexInit(local manifest) {
+    manifest = `(dynexBatchGetRecords, dynexBatchWriteRecords, dynexTransactGetRecords, dynexInit)
+
+    Naan.module.build(module.id, "aws_dynextra", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("./serviceAws.nlg")
+    })
+} ();

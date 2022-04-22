@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2021 by Richard C. Zulch
+ * Copyright (c) 2019-2022 by Richard C. Zulch
  *
  */
 
@@ -75,7 +75,7 @@ closure MakePSMutil(fs, local util) {
         } (tree, inpath.split(tree.data.pathsep).reverse())
         if !treedir
             return (callback(Error("treeDirUpdate: can't find directory within tree", inpath)))
-        `(error, files) = fs.dirList(dirpath, { head: true })
+        `(error, files) = fs.dirList(dirpath, { stat: true })
         if error
             return (callback(error))
         //
@@ -238,46 +238,126 @@ closure MakePSMutil(fs, local util) {
     //
     // Perform a deep copy of an array of sources from the current filesystem and specified inpath to
     // the outfs filesystem and specified outpath. The input path is used to find the source files,
-    // however it is not added to the output. The result is a standard error tuple, where the errors
-    // are an array if  any occur.
+    // however it is not added to the output. If the source array is false then the file or directory
+    // at the input path is copied to the destination. The result is a standard error tuple, where 
+    // the errors are an array if any occur.
+    //
+    // Supported options are:
+    // {
+    //      overwrite:  <boolean>           -- overwrite existing files
+    //      erase:      <boolean>           -- remove extraneous files in destination folders
+    //      force:      <boolean>           -- copy files even if older (default is only copy if new/newer)
+    //      follow:     <boolean>           -- follow links instead of treating them as files
+    //      preserve:   <boolean>           -- preserve file info where possible
+    //                                         (e.g. mtime/atime/mode/uid/gid on NodeJS)
+    // }
+    //
+    // Limitations:
+    //  - this does not copy info about source folders to destination folders
+    //    (it would need to make destination folder writable, then update after files copied)
 
-    util.deepcopy = closure deepcopy(inpath, sources, outfs, outpath, options, callback, local errors, copies) {
+    util.deepcopy = closure deepcopy(inpath, sources, outfs, outpath, options, callback,
+        local errors, copies, fsopt, folders) {
         if !callback
             return (syncAdapter(deepcopy, inpath, sources, outfs, outpath, options))
-        if !array(sources) || !string(inpath) || !string(outpath)
+        if sources && !array(sources) || !string(inpath) || !string(outpath)
             return (callback(Error("deepcopy: invalid arguments")))
+        if options.follow
+            fsopt = { follow: true }
         errors = []
         copies = []
-        sources = new(sources)                                              // don't modify the original!
-        asyncArray(sources, 10, closure mklist(entry, index, elements, local srcpath, destpath, error, folder, node) {
+        folders = { }
+        if sources
+            sources = new(sources)                                          // don't modify the original!
+        else {
+            sources = [fs.path.basename(inpath)]                            // copy inpath itself
+            inpath = fs.path.dirname(inpath)
+        }
+        //
+        // Pass 1 - Get info on all source files, and make destination directories
+        //
+        asyncArray(sources, 10, closure mklist(entry, index, elements,
+            local srcpath, destpath, epath, error, stat, folder, node) {
             srcpath = fs.path.join(inpath, entry)
-            `(error, folder) = fs.dirList(srcpath)
-            if error && error.code != "ENOTDIR"
-                return (errors.push(error))
-            destpath = outfs.path.join(outpath, entry)                      // "." if both empty strings
-            if !error {
-                if destpath != "."
-                    `(error, node) = outfs.mkdir(destpath)                  // may already exist but we don't care
-                if error
-                    return (errors.push(error))                             // don't do children if we can't form destination
-                for node in folder.children
-                    sources.push(fs.path.join(entry, node.name))            // omit inpath from sources
-            }
-            else
-                copies.push({                                               // copy the file 
+            destpath = outfs.path.join(outpath, entry)
+            if destpath == "."
+                destpath = ""                                               // joined empty strings
+            `(error, stat) = fs.info(srcpath, fsopt)
+            if stat.type != "directory" && (!options.follow || stat.type != "symlink") {
+                copies.push({                                               // copy file or symlink 
                     source: srcpath
                     dest: destpath
                 })
+                return (list(false, { ok: true }))                          // generic success not used
+            }
+            `(error, folder) = fs.dirList(srcpath)
+            if error
+                return (errors.push(error))
+            if destpath == ""
+                epath = ""
+            else
+                epath = outfs.path.join(destpath, outfs.path.sep)           // canonical name
+            folders[epath] = folder                                         // sources for this folder
+            `(error, node) = outfs.mkdir(destpath)                          // may already exist but we don't care
+            if error
+                return (errors.push(error))                                 // don't do children if we can't form destination
+            for node in folder.children
+                sources.push(fs.path.join(entry, node.name))                // add more sources, without inpath
         }).wait()
+        //
+        // Pass 2 - erase extraneous files and folders from destination
+        //
+        if options.erase {
+            asyncArray(keys(folders).toarray, 10, closure eraser(destpath, index, elements
+                local error, outfolder, folder, namesin, removes, delopt) {
+                `(error, outfolder) = outfs.dirList(destpath)               // existing files in our destination
+                if error
+                    return
+                folder = folders[destpath]                                  // our source folders, if any
+                namesin = { }
+                for node in folder.children                                 // make list of top-level dest names
+                    namesin[node.name] = true
+                removes = []
+                for node in outfolder.children
+                    if !namesin[node.name] {
+                        if node.info.type == "directory"
+                            delopt = { recursive: true }                    // deleting a directory
+                        else
+                            delopt = false                                  // deleting a file
+                        removes.push(list(outfs.path.join(destpath, node.name), delopt))
+                    }
+                asyncArray(removes, 10, closure cleardest(delitem, local error, data) {
+                    `(error, data) = outfs.delete(delitem.0, delitem.1)
+                    if error
+                        errors.push(Error("deepcopy: can't remove", error))
+                }).wait()
+            }).wait()
+        }
+        //
+        // Pass 3 - copy files and links
+        //
         asyncArray(copies, 10, closure cpfiles(entry, index, elements, local error, data, instat, outstat) {
-            `(error, instat) = fs.info(entry.source)
+            `(error, instat) = fs.info(entry.source, fsopt)
             if !error {
                 `(error, outstat) = outfs.info(entry.dest)
-                if !error && (instat.md5 && instat.md5 == outstat.md5 || instat.mtimeMs <= outstat.mtimeMs)
-                    return                                                  // file unchanged
-                `(error, data) = fs.readFile(entry.source, { encoding: "binary"})
-                if !error
-                    `(error, data) = outfs.writeFile(entry.dest, data, { encoding: "binary"})
+                if !error &&
+                    (instat.md5 && instat.md5 == outstat.md5
+                    || !options.force && instat.mtimeMs <= outstat.mtimeMs)
+                    return                                                  // file "unchanged"
+                if !error && !options.overwrite
+                    error = Error("deepcopy: can't overwrite", entry.dest)
+                else if instat.type == "symlink" && !options.follow {
+                    `(error, data) = fs.readlink(entry.source)
+                    if !error
+                        `(error, data) = outfs.symlink(data, entry.dest)
+                }
+                else {
+                    `(error, data) = fs.readFile(entry.source, { encoding: "binary"})
+                    if !error
+                        `(error, data) = outfs.writeFile(entry.dest, data, { encoding: "binary"})
+                    if !error && options.preserve
+                        `(error) = outfs.setInfo(entry.dest, instat)
+                }
             }
             if error
                 errors.push(error)

@@ -11,7 +11,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2021 by Richard C. Zulch
+ * Copyright (c) 2019-2022 by Richard C. Zulch
  *
  */
 
@@ -38,6 +38,21 @@ closure rsrcVault(db, tablename, local vault) {
         vault.table.add(resID, data)
     }
     
+    // updateResource
+    //
+    // Update credentials for accessing a resource, returning the added credential record.
+    
+    vault.updateResource = function updateResource(resID, data, local error, existing) {
+        `(error, existing) = vault.table.get(resID)
+        if error
+            data = false
+        else {
+            existing.content = data
+            `(error, existing) = vault.table.update(existing)
+        }
+        list(error, data)
+    }
+
     // deleteResource
     //
     // Delete resource credentials.
@@ -111,8 +126,9 @@ closure rsrcVault(db, tablename, local vault) {
  *      conn.uifields()                         - entry fields for add this kind of resource in UI
  *      conn.findResource(resource)             - find a resource by content, returning resID or false
  *      conn.addResource(resource)              - add the resource dict and return `(error, resID)
- *      conn.info(resID)                        - return `(error, infoDictionary) tuple
+ *      conn.updateResource(resID, resource)    - update a resource
  *      conn.deleteResource(resID)              - delete the specified resource, returning a tuple
+ *      conn.info(resID)                        - return `(error, infoDictionary) tuple
  *      conn.connect(resID, serviceID, args)    - connect to resource and return object
  *
  */
@@ -309,6 +325,18 @@ closure ResourceTracker(reman, local retor, watch) {
             reman.conns[classID].addResource(resource)
     }
     
+    // updateResource
+    //
+    // Update credentials for accessing a resource, returning the added credential record.
+    
+    retor.updateResource = function updateResource(resID, resource, local error, classI) {
+        `(error, classID) = resourceClassID(resID)
+        if error
+            list(error)
+        else
+            reman.conns[classID].updateResource(resID, resource)
+    }
+
     // getResource
     //
     // Get a resource for the resID as a standard result tuple.

@@ -6,26 +6,164 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2022 by Richard C. Zulch
  *
  */
 
 
 /*
- * DynaTable
+ * TimeKeys
  *
- *     DynamoDB table.
+ *     TimeKeys implement a time-ordered key paradigm for DynamoDB and similar databases. Each item
+ * stored under a timeKey is assigned an ID comprising a timestamp and a random suffix derived from
+ * a version-4 UUID. The ID has a 26-character format: <13-digit timestamp>-<12-character-random>.
+ * A prefix option inserts a fixed-length string before the timestamp, enabling categorization when
+ * multiple datatypes inhabit the same keyspace. From the ID is derived a partition key in the form 
+ * YYYYDDD, where DDD is the day of the year from 1 to 365. TimeKeys have the following useful
+ * properties:
+ *     - IDs sort in date order
+ *     - IDs allow direct access
+ *     - Over time IDs become distributed over partitions
+ *     - Can iterate partitions to query longer timeframes
+ *
+ * The principal challenge is that IDs can cause a hot partition problem if you try to create them
+ * too quickly, because they all share the same day. Likewise if you access recently-created IDs
+ * frequently. In that case a separate table for today's items might be preferable.
+ *     A potential challenge is that rarely-created keys will be sparsely distributed among the
+ * potential partition keys. For data is not created every day, you may want to cache the available
+ * days, or choose a different key paradigm.
  *
  */
 
-closure DynaTable(dyna, tablename, local table) {
-    table = new(object, this)
-    table.name = tablename
+closure TimeKeys(prefix, baseMS, local timekeys, prelen) {
+    if !UUID.proc
+        throw("TimeKeys requires UUID()")
+    timekeys = new(object, this)
+    if !prefix
+        prefix = ""
+    prelen = prefix.length
+    if !baseMS
+        baseMS = 1640995200000                                              // 01/01/2022 UTC - earliest valid date
+
+    // utcYearStartMS
+    //
+    // Get the millisecond timestamp for the start of the given UTC year.
+    //
+    function utcYearStartMS(year) {
+        Date("01/01/".concat(year, "GMT")).getTime()
+    }
+
+    // makePartID
+    //
+    // Return the partition ID for a millisecond timestamp, in the form YYYYDDD where DDD is the day 
+    // of the year from 001 to 365. If the timestamp is invalid it returns false.
+    //
+    timekeys.makePartID = function makePartID(msec, local tsdate, yyyy, doy) {
+        if msec >= baseMS {
+            tsdate = Date(msec)
+            yyyy = tsdate.getUTCFullYear()
+            doy = Math.floor((msec - utcYearStartMS(yyyy))/(1000*3600*24))
+            prefix.concat(yyyy.tostring, "000".concat(doy+1).slice(-3))
+        }
+    }
+
+    // comparePartID
+    //
+    // Compare two partID values, returning -1, 0, 1 if the first is <, ==, or > to the second.
+    //
+    timekeys.comparePartID = function comparePartID(a, b) {
+        a = a.slice(prelen)
+        b = b.slice(prelen)
+        if (a < b)
+            -1
+        else if a > b
+            1
+        else
+            0
+    }
+
+    // adjustPartID
+    //
+    // Increment or decrement the partition key by the specified number of days returning the next
+    // partition key in the specified direction, or false if there are no more keys. Dates in the
+    // future are considered invalid and return false.
+    //
+    timekeys.adjustPartID = function adjustPartID(partID, adjust, local year, doy, dayms, msec) {
+        partID = partID.slice(prelen)
+        yyyy = toint(partID.substring(0,4))
+        doy = toint(partID.substring(4,7))
+        dayms = 1000*3600*24
+        msec = utcYearStartMS(yyyy) + (doy-1) * dayms
+        msec += adjust * dayms
+        if msec < Date.now()
+            makePartID(msec)
+    }
+
+    // partIDfromTimeID
+    //
+    // Return the partID for a timeID.
+    //
+    timekeys.partIDfromTimeID = function partIDfromTimeID(timeID) {
+        makePartID(timeIDtimestamp(timeID))
+    }
+
+    // newTimeID
+    //
+    // Return a new, unique timeID for the present moment.
+    //
+    timekeys.newTimeID = function newTimeID(now) {
+        if !now
+            now = Date.now()
+        prefix.concat(now.tostring, UUID().slice(-13))
+    }
+
+    // isTimeID
+    //
+    // Return true iff this looks like our timeID with the right prefix, as opposed to a timestamp.
+    //
+    timekeys.isTimeID = function isTimeID(tstid) {
+        string(tstid) && tstid.startsWith(prefix) && tstid.length-prelen == 26
+    }
+
+    // timeIDtimestamp
+    //
+    // Return the numeric millisecond timestamp for a timeID.
+    //
+    timekeys.timeIDtimestamp = function timeIDtimestamp(timeID) {
+        toint(timeID.slice(prelen, prelen+13))
+    }
+
+    // makeTimeKey
+    //
+    // Make a range key from a timestamp, creating the earliest possible range key, which will sort
+    // earlier than all possible timeIDs for that timestamp.
+    //
+    timekeys.makeTimeKey = function makeTimeKey(timestamp) {
+        if !integer(timestamp) || timestamp < baseMS
+            timestamp = baseMS
+        prefix.concat(timestamp.tostring, "-", space.repeat(12))
+    }
+
+    // finis
+    
+    timekeys
+};
+
+
+/*
+ * DynaConverter
+ *
+ *     Translate between Naan and DynamoDB.
+ *
+ */
+
+closure DynaConverter(local conv) {
+    conv = new(object, this)
     
     // fieldTypeDynToNaan
     // Convert field type from DynamoDB to Naan
     //
-    function fieldTypeDynToNaan(dtype) {
+    conv.fieldTypeDynToNaan = function fieldTypeDynToNaan(dtype) {
         if dtype == "S",
             "utf8"
         else if dtype == "N",
@@ -39,7 +177,7 @@ closure DynaTable(dyna, tablename, local table) {
     // fieldTypeNaanToDyn
     // Convert field type from Naan to DynamoDB
     //
-    function fieldTypeNaanToDyn(ntype) {
+    conv.fieldTypeNaanToDyn = function fieldTypeNaanToDyn(ntype) {
         if ntype == "utf8",
             "S"
         else if ntype == "numeric",
@@ -53,7 +191,7 @@ closure DynaTable(dyna, tablename, local table) {
     // datumNaanToDyn
     // Convert a Naan datum to DynamoDB format.
     //
-    function datumNaanToDyn(datum, local output, ntype, dtype) {
+    conv.datumNaanToDyn = function datumNaanToDyn(datum, local ntype, dtype) {
         output = { }
         if tuple(datum)
             datum = datum.toarray
@@ -84,11 +222,12 @@ closure DynaTable(dyna, tablename, local table) {
                 else if datum === true || datum === false
                     dtype = "BOOL"
                 else if datum === undefined
-                    datum = undefined
+                    return (undefined)                                      // Zen!
                 else
-                    dtype = "S"                                             // some other symbol is string
+                    return (datum.tostring)
+                    
             } else
-                debuglog("DynaTable.datumNaanToDyn: invalid type", ntype)
+                debuglog("DynaConverter.datumNaanToDyn: invalid type", ntype)
         }
         output[dtype] = datum
         output
@@ -97,7 +236,7 @@ closure DynaTable(dyna, tablename, local table) {
     // recordNaanToDyn
     // Convert a Naan dictionary to DynamoDB format.
     //
-    function recordNaanToDyn(nitem, local output, key, data) {
+    conv.recordNaanToDyn = function recordNaanToDyn(nitem, local output, key, data) {
         output = { }
         for `(key, data) in nitem
             output[key] = datumNaanToDyn(data)
@@ -107,7 +246,7 @@ closure DynaTable(dyna, tablename, local table) {
     // datumDynToNaan
     // Convert a DynamoDB typed attribute to Naan format.
     //
-    function datumDynToNaan(dtype, dvalue, local output) {
+    conv.datumDynToNaan = function datumDynToNaan(dtype, dvalue, local output) {
         if dtype == "BS" || dtype == "SS"
             dvalue
         else if dtype == "NS"
@@ -136,45 +275,219 @@ closure DynaTable(dyna, tablename, local table) {
         else if dtype == "B" || dtype == "S"
             dvalue
         else {
-            debuglog("DynaTable.datumDynToNaan: unknown type", dtype, typeof(dvalue), dvalue)
+            debuglog("DynaConverter.datumDynToNaan: unknown type", dtype, typeof(dvalue), dvalue)
             false }
     }
 
     // recordDynToNaan
     // Convert a DynamoDB typed item dictionary to Naan format.
     //
-    function recordDynToNaan(ditem, local output, key, data, dtype, dvalue) {
-        output = { }
-        for `(key, data) in ditem {
-            dtype = data.*.0
-            dvalue = data[dtype]
-            output[key] = datumDynToNaan(dtype, dvalue)
+    conv.recordDynToNaan = function recordDynToNaan(ditem, local output, key, data, dtype, dvalue) {
+        if ditem.constructor === Array.prototype.constructor || array(ditem) {        // process an array
+            output = []
+            for data in ditem
+                output.push(recordDynToNaan(data))
+        }
+        else {                                                              // process a single expression
+            output = { }
+            for `(key, data) in ditem {
+                dtype = data.*.0
+                dvalue = data[dtype]
+                output[key] = datumDynToNaan(dtype, dvalue)
+            }
         }
         output
     }
-    
+
+    // genAttributeAdder
     //
-    // dynQueryPager
+    //     Return a function that, when called repeatedly, will add attribute definitions to the
+    // specified parameter block. Symbols are interpreted as literal names, e.g. attribute names, and
+    // are not defined as values here.
     //
-    // Perform a dynamo paged query. This implements paging conventions specific to CWL. The callback
-    // should return the number of items found in the data, or false to stop looping.
-    //
-    closure dynQueryPager(procname, params, remaining, doneCB) {
-        params.Limit = remaining
-        QueryPager(cwlogs.aws, procname, params, function(data, local processed) {
-            processed = doneCB(data)
-            if processed
-                remaining -= processed
-            if processed && (!remaining || remaining > 0)
-                && data.LastEvaluatedKey && data.LastEvaluatedKey != params.ExclusiveStartKey {
-                params.Limit = remaining                                // set up for next iteration
-                params.ExclusiveStartKey = data.LastEvaluatedKey
-                true                                                    // continue looping
-            }
-        })
+    closure genAttributeAdder(params, local adex) {
+        function attrib(expr, local adef, atype, key, data) {
+            if symbol(expr) && !member(expr, `(true, false, null))
+                return (expr.tostring)                                      // literal attribute name
+            if !params.ExpressionAttributeValues
+                params.ExpressionAttributeValues = { }
+            if !adex
+                adex = (keys(params.ExpressionAttributeValues).length || 0) + 1
+            adef = datumNaanToDyn(expr)
+            atype = keys(adef).0
+            for `(key, data) in params.ExpressionAttributeValues
+                if data[atype] == adef[atype]
+                    return (key)                                            // found matching attribute
+            key = ":v".concat(adex++)
+            params.ExpressionAttributeValues[key] = adef
+            key
+        }
     }
 
     //
+    // createKeyExpression
+    //
+    // Update the specified parameter block with one or more condition expressions, preserving any
+    // that are already present. Specify each condition with a dictionary as follows:
+    //  {
+    //      [KeyConditionExpression: <condition-dictionary>]
+    //      [FilterExpression: <condition-dictionary]
+    //      [etc.]
+    //  }
+    // If successful the parameter block is updated, otherwise it may be partly updated. The return
+    // value is a standard (error, data) tuple where the data is just { ok: true } if no error.
+    //     This will parse only one expression per dictionary, but as many such conditions as you
+    // you wish to use by specifying an array. This does not check for semantics enforced by the
+    // API. E.g. Key conditions can only have one condition expression for the sort key, and only
+    // equality is allowed for the partition key. Only filter expressions can use the <> operator.
+    //
+    // condition dictionary:
+    //  {
+    //      key:        <keyname, e.g. partition key name>                  // required
+    //      "=":        <expression>                                        // exclusive of other comparisons
+    //      ">":        <expression>                                        // exclusive of other comparisons
+    //      "<":        <expression>                                        // exclusive of other comparisons
+    //      "<>":       <expression>                                        // exclusive of other comparisons
+    //      beginsWith: <string-expression>                                 // exclusive of other comparisons
+    //      ">=":       <expression>                                        // with <= or alone
+    //      "<=":       <expression>                                        // with >= or alone
+    //  }
+    //
+
+    conv.createKeyExpression = function createKeyExpression(params, conds
+        local error, attrib, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
+
+        // dupeop
+        //
+        // Return a duplicate operation error.
+        function dupeop() {
+            list(Error("key expression cannot combine", op, "with", rangex.0))
+        }
+
+        //
+        // build the expression
+        //
+        attrib = genAttributeAdder(params)
+        for `(rangename, ranges) in conds {
+            if !array(ranges)
+                ranges = [ranges]
+            for range in ranges {
+                rangex = false
+                keyname = tostring(range.key)
+                if !keyname
+                    return (list(Error("key expression requires key name")))
+                for `(op, expr) in range {
+                    if op == "key"
+                        continue
+                    expr = attrib(expr)
+                    if op == ">=" {
+                        if rangex.0 == "<="
+                            rangex = list("between", expr, rangex.1)
+                        else if rangex.0
+                            return (dupeop())
+                        else
+                            rangex = list(op, expr) }
+                    else if op == "<=" {
+                        if rangex.0 == ">="
+                            rangex = list("between", rangex.1, expr)
+                        else if rangex.0
+                            return (dupeop())
+                        else
+                            rangex = list(op, expr) }
+                    else if rangex.0
+                        return (dupeop())
+                    else
+                        rangex = list(op, expr)
+                }
+                if rangex {
+                    arg1 = rangex.1
+                    if rangex.0 == "between" {
+                        arg2 = rangex.2
+                        expr = keyname.concat(" between ", arg1, " and ", arg2)
+                    }
+                    else if rangex.0 == "beginsWith"
+                        expr = "begins_with(".concat(keyname, ", ", arg1, ")")
+                    else
+                        expr = keyname.concat(space, rangex.0, space, arg1)
+                    if params[rangename]
+                        params[rangename] = params[rangename].concat(" and ", expr)
+                    else
+                        params[rangename] = expr
+                }
+            }
+        }
+        list(false, { ok: true })
+    }
+    
+    // createUpdateExpression
+    //
+    // Update the specified parameter block with one or more update expressions, preserving any that
+    // are already present. Specify the updates with a dictionary as follows:
+    //  {
+    //      set:        [`(attribute, value)]   // set attributes to values
+    //      sum:        [`(attribute, value)]   // attributes += values
+    //      diff:       [`(attribute, value)]   // attributes -= values
+    //      remove:     [attribute]             // remove attributes from the record
+    //  }
+    // If successful the parameter block is updated, otherwise it may be partly updated. The return
+    // value is a standard (error, data) tuple where the data is just { ok: true } if no error.
+    //
+    conv.createUpdateExpression = function createUpdateExpression(params, updates,
+        local attrib, output, item) {
+
+        if params.UpdateExpression
+            return (list(Error("conv.createUpdateExpression: UpdateExpression already exists")))
+        attrib = genAttributeAdder(params)
+        output = {
+            SET: []
+            REMOVE: []
+        }
+        for item in updates.set
+            output.SET.push(strcat(item.0, "=", attrib(item.1)))
+        for item in updates.sum
+            output.SET.push(strcat(item.0, "=", item.0, "+", attrib(item.1)))
+        for item in updates.diff
+            output.SET.push(strcat(item.0, "=", item.0, "-", attrib(item.1)))
+        for item in updates.remove
+            output.REMOVE.push(tostring(item))
+        params.UpdateExpression = ""
+        for `(key, value) in output
+            params.UpdateExpression = params.UpdateExpression.concat(key, space, value.join(", "))
+        list(false, { ok: true })
+    }
+
+    // genBackoffDelayer
+    //
+    //     Return a function that, when called repeatedly, will sleep for an exponentially increasing
+    // maximum time interval starting with 50 msec and doubling each time. The actual delay varies by
+    // a random jitter of up to 100% of the delay. The function returns the maximum milliseconds of 
+    // the next delay, so the caller can give up if this becomes too large.
+    //
+    conv.genBackoffDelayer = closure genBackoffDelayer(local delay) {
+        delay = 50
+        function delayer() {
+            sleep(delay * Math.random())                                    // jitter up to 100%
+            delay *= 2
+        }
+    }
+
+    // finis
+    
+    conv
+};
+
+
+/*
+ * DynaTable
+ *
+ *     DynamoDB table.
+ *
+ */
+
+closure DynaTable(dyna, tablename, local table) {
+    table = new(object, this)
+    table.name = tablename
+
     // info
     //
     //     Return info about the table, or an error, in standard (error, dictionary) tuple format.
@@ -203,6 +516,7 @@ closure DynaTable(dyna, tablename, local table) {
             if error {
                 dynaTableError = error
                 debuglog("aws.describeTable failed", tablename, error)
+                error = Error("table.info(".concat(tablename, ") failed"), error)
             } else {
                 data = data.Table
                 output = {
@@ -219,18 +533,17 @@ closure DynaTable(dyna, tablename, local table) {
                         output.range = key.AttributeName
                 for key in data.AttributeDefinitions
                     if key.AttributeName == output.hash
-                        output.hashType = fieldTypeDynToNaan(key.AttributeType)
+                        output.hashType = dyna.conv.fieldTypeDynToNaan(key.AttributeType)
                     else if key.AttributeName == output.range
-                        output.rangeType = fieldTypeDynToNaan(key.AttributeType)
-                table.hashKey = output.hash                                 // hash attribute name
-                table.rangeKey = output.range                               // range attribute name or false
+                        output.rangeType = dyna.conv.fieldTypeDynToNaan(key.AttributeType)
+                table.hashKey = compress(output.hash)                       // hash attribute name
+                table.rangeKey = compress(output.range)                     // range attribute name or false
             }
             pending.signal(list(error, output))
         })
         pending.wait()
     }
 
-    //
     // create
     //
     //     Create the table with specified parameters, blocking until the table is ready for use.
@@ -242,11 +555,11 @@ closure DynaTable(dyna, tablename, local table) {
     //      range:      <name>                  // primary range key attribute name (optional)
     //      rangeType:  <name>                  // string | numeric (if range specified)
     //  }
-    
+    //
     table.create = closure create(parameters, local hashType, rangeType, params, pending, error, data, start) {
         if !dyna.aws
             return (list(Error("DynaTable.create: not logged into AWS")))
-        hashType = fieldTypeNaanToDyn(parameters.hashType)
+        hashType = dyna.conv.fieldTypeNaanToDyn(parameters.hashType)
         if !parameters.hash || !hashType
             return (list(Error("DynoTable.create: primary key hash/hashType required")))
         params = {
@@ -265,7 +578,7 @@ closure DynaTable(dyna, tablename, local table) {
             ]
         }
         if parameters.range {
-            rangeType = fieldTypeNaanToDyn(parameters.rangeType)
+            rangeType = dyna.conv.fieldTypeNaanToDyn(parameters.rangeType)
             if !rangeType
                 return (list(Error("DynoTable.create: range requires rangeType")))
             params.AttributeDefinitions.push({
@@ -282,6 +595,7 @@ closure DynaTable(dyna, tablename, local table) {
             if error {
                 dynaTableError = error
                 debuglog("aws.createTable failed", tablename, error)
+                error = Error("table.create(".concat(tablename, ") failed"), error)
             }
             pending.signal(list(error, data))
         })
@@ -293,7 +607,7 @@ closure DynaTable(dyna, tablename, local table) {
             `(error, data) = info()
             if data.status == "ACTIVE"
                 break
-            if milliseconds() - start > 20000 {                             // 20 seconds
+            if milliseconds() - start > dyna.timeout {                      // 20 seconds
                 if !error
                     error = data.status
                 return(list(Error("DynoTable.create: timeout waiting for new table to become active", error)))
@@ -302,27 +616,81 @@ closure DynaTable(dyna, tablename, local table) {
         }
         list(false, data)
     }
+    
+    // preflightError
+    //
+    // Ensure that the table is ready before executing an operation. This returns an error tuple or
+    // false to proceed.
+    //
+    function preflightError(op) {
+        if !dyna.aws
+            return (list(Error("DynaTable.".concat(op, ": not logged into AWS"))))
+        if !table.hashKey {
+            result = info()
+            if result.0
+                return(result)
+        }
+    }
+    
+    // makeDynKey
+    //
+    // Make a dynamoDB key dictionary for the table using the specified primary key, which can be a
+    // tuple of hash/range or just a hash if only a hash is needed for this table.
+    //
+    conv.makeDynKey = function makeDynKey(primaryKey, local hashValue, rangeValue, key) {
+        if tuple(primaryKey)
+            `(hashValue, rangeValue) = primaryKey
+        else
+            hashValue = primaryKey
+        key = { }
+        key[table.hashKey] = dyna.conv.datumNaanToDyn(hashValue)
+        if table.rangeKey
+            key[table.rangeKey] = dyna.conv.datumNaanToDyn(rangeValue)
+        key
+    }
 
+    // getRecord
+    //
+    // Get a record from the table with the specified hash value, and optional range value.
+    //
+    table.getRecord = closure getRecord(hashValue, rangeValue, local result, params, pending) {
+        if preflightError(this)
+            return
+        params = {
+            TableName: tablename
+        }
+        params.Key = makeDynKey(list(hashValue, rangeValue))
+        pending = new(nonce)
+        dyna.aws.getItem(params, function(error, data, local output) {
+            if error {
+                dynaTableError = error
+                debuglog("aws.getItem failed", tablename, error)
+                error = Error("table.getRecord(".concat(tablename, ") failed"), error)
+            } else
+                data = dyna.conv.recordDynToNaan(data.Item)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+    
     //
     // putRecord
     //
     //     Put an record in the table, replacing any existing record with the same key.
         
     table.putRecord = closure putRecord(record, local result, params, pending) {
-        if !table.hashKey {
-            result = info()
-            if result.0
-                return(result)
-        }
+        if preflightError(this)
+            return
         params = {
             TableName: tablename
-            Item: recordNaanToDyn(record)
+            Item: dyna.conv.recordNaanToDyn(record)
         }
         pending = new(nonce)
         dyna.aws.putItem(params, function(error, data, local output) {
             if error {
                 dynaTableError = error
                 debuglog("aws.putItem failed", tablename, error)
+                error = Error("table.putRecord(".concat(tablename, ") failed"), error)
             }
             pending.signal(list(error, data))
         })
@@ -330,33 +698,84 @@ closure DynaTable(dyna, tablename, local table) {
     }
 
     //
-    // getRecord
+    // updateRecord
     //
-    //     Get a record from the table with the specified hash value, and optional range value.
+    // Update a record in the table. This will update the existing record if it exists, or add a new
+    // one. Options include conditional updates, and adding or removing attributes as follows:
+    //  {
+    //      condition:  <range-expression>      // conditional expression as in createKeyExpression()
+    //      set:        [`(attribute, value)]   // set attributes to values
+    //      sum:        [`(attribute, value)]   // attributes += values
+    //      diff:       [`(attribute, value)]   // attributes -= values
+    //      remove:     [attribute]             // remove attributes from the record
+    //      return:     "all_old" | "all_new" | "updated_old" | "updated_new"
+    //                                          // return the record as chosen, otherwise { }
+    //  }
+    // The result is a standard result tuple `(error, record).
         
-    table.getRecord = closure getRecord(hashValue, rangeValue, local result, params, pending) {
-        if !table.hashKey {
-            result = info()
-            if result.0
-                return(result)
-        }
+    table.updateRecord = closure updateRecord(hashValue, rangeValue, options, local error, result, params, actions, pending) {
+        if preflightError(this)
+            return
         params = {
             TableName: tablename
-            Key: { }
+            Item: dyna.conv.recordNaanToDyn(record)
         }
-        params.Key[table.hashKey] = datumNaanToDyn(hashValue)
-        if table.rangeKey
-            params.Key[table.rangeKey] = datumNaanToDyn(rangeValue)
+        params.Key = makeDynKey(list(hashValue, rangeValue))
+        if options.condition {
+            `(error) = dyna.conv.createKeyExpression(params, {
+                KeyConditionExpression: {
+                    key: table.hashKey
+                    "=": hashValue
+                }
+            })
+            if error
+                return (list(Error("table.updateRecord:", error)))
+        }
+        dyna.conv.createUpdateExpression(params, `SET, options)
+        if options.return {
+            params.ReturnValues = {
+                all_old:        "ALL_OLD"
+                all_new:        "ALL_NEW"
+                updated_old:    "UPDATED_OLD"
+                updated_new:    "UPDATED_NEW"
+            }
+            if !params.ReturnValues
+                params.ReturnValues = "NONE"
+        }
         pending = new(nonce)
-        dyna.aws.getItem(params, function(error, data, local output) {
+        dyna.aws.putItem(params, function(error, data) {
             if error {
                 dynaTableError = error
-                debuglog("aws.getItem failed", tablename, error)
-            } else
-                data = recordDynToNaan(data.Item)
+                debuglog("aws.putItem failed", tablename, error)
+                error = Error("table.updateRecord(".concat(tablename, ") failed"), error)
+            }
+            else
+                data = dyna.conv.recordDynToNaan(data.Attributes)
             pending.signal(list(error, data))
         })
         pending.wait()
+    }
+
+    //
+    // dynQueryPager
+    //
+    // Perform a paged query. This implements paging conventions specific to DynamoDB. The callback
+    // should return the number of items found in the data, or false to stop looping.
+    //
+    closure dynQueryPager(procname, params, remaining, doneCB) {
+        if !remaining
+            remaining = 10                                              // default retrieve limit
+        params.Limit = remaining
+        QueryPager(dyna.aws, procname, params, function(data, local processed) {
+            processed = doneCB(data)
+            if processed
+                remaining -= processed
+            if processed && remaining > 0 && data.LastEvaluatedKey {
+                params.limit = remaining                                // set up for next iteration
+                params.ExclusiveStartKey = data.LastEvaluatedKey
+                true                                                    // continue looping
+            }
+        })
     }
 
     //
@@ -365,78 +784,111 @@ closure DynaTable(dyna, tablename, local table) {
     // Options:
     //  {
     //      index:      <string>                                            // index name in table
-    //      range:      <expression-dictionary>                             // range of keys to retrieve
+    //      range:      <key-expression>                                    // range of keys to retrieve
+    //      filter:     <key-expression>                                    // conditions for items to return
+    //      attmap:     <dictionary>                                        // map attribute names to #shortcuts
     //      reverse:    <boolean>                                           // reverse order
+    //      project:    <array>                                             // project only specified attributes
+    //      exstart:    <exclusive start key>                               // for paging
     //      limit:      <number>                                            // maximum count of results
-    //  }
-    //
-    // range dictionary:
-    //  {
-    //      "=":        <expression>                                        // exclusive of other comparisons
-    //      ">":        <expression>                                        // exclusive of other comparisons
-    //      "<":        <expression>                                        // exclusive of other comparisons
-    //      beginsWith: <string-expression>                                 // exclusive of other comparisons
-    //      ">=":       <expression>                                        // with <= or alone
-    //      "<=":       <expression>                                        // with >= or alone
     //  }
     //
 
     table.queryRecords = closure queryRecords(hashValue, options
-        local result, params, op, expr, rangex, output, error)
+        local error, result, params, op, expr, output, error)
     {
-        if !table.hashKey {
-            result = info()
-            if result.0
-                return(result)
-        }
+        if preflightError(this)
+            return
         params = {
             TableName: tablename
-            ExpressionAttributeValues: {
-                ":v1": datumNaanToDyn(hashValue)
-            }
-            KeyConditionExpression: strcat(table.hashKey, " = :v1")
         }
+        dyna.conv.createKeyExpression(params, {
+            KeyConditionExpression: {
+                key: table.hashKey
+                "=": hashValue
+            }
+        })
+        if options.index
+            params.IndexName = options.index
         if options.range {
-            for `(op, expr) in options.range {
-                function dupeop() { list(Error("DynaTable.queryRecords: cannot combine", op, "with", rangex.0)) }
-                if op == ">=" {
-                    if rangex.0 == "<="
-                        rangex = list("between", expr, rangex.1)
-                    else if rangex.0
-                        return (dupeop())
-                    else
-                        rangex = list(op, expr) }
-                else if op == "<=" {
-                    if rangex.0 == ">="
-                        rangex = list("between", rangex.1, expr)
-                    else if rangex.0
-                        return (dupeop())
-                    else
-                        rangex = list(op, expr) }
-                else if rangex.0
-                    return (dupeop())
-                else
-                    rangex = list(op, expr)
-            }
-            if rangex {
-                params.ExpressionAttributeValues[":v2"] = datumNaanToDyn(rangex.1)
-                if rangex.0 == "between" {
-                    params.ExpressionAttributeValues[":v3"] = datumNaanToDyn(rangex.2)
-                    expr = strcat(" between :v2 and :v3")
-                }
-                else
-                    expr = strcat(space, rangex.0, " :v2")
-                params.KeyConditionExpression = params.KeyConditionExpression.concat(" and ", table.rangeKey, expr)
-            }
+            `(error) = dyna.conv.createKeyExpression(params, {
+                KeyConditionExpression: options.range
+            })
+            if error
+                return (list(Error("table.queryRecords range:", error)))
         }
+        if options.filter {
+            `(error) = dyna.conv.createKeyExpression(params, {
+                FilterExpression: options.filter
+            })
+            if error
+                return (list(Error("table.queryRecords filter:", error)))
+        }
+        if options.attmap
+            params.ExpressionAttributeNames = attmap
+        if options.reverse
+            params.ScanIndexForward = false
+        if options.project
+            params.ProjectionExpression = options.project.join(", ")
+        if options.exstart
+            params.ExclusiveStartKey = options.exstart
         output = []
-        `(error) = cwlQueryPager(`query, params, options.limit, function(data) {
-            if data.Count >= 0
-                output = output.concat(recordDynToNaan(data.Items))
+        `(error) = dynQueryPager(`query, params, options.limit, function(data) {
+            if data.Count > 0
+                output = output.concat(dyna.conv.recordDynToNaan(data.Items))
             data.Count
         })
-        if error
+        if error {
+            error = Error("table.queryRecords(".concat(tablename, ") failed"), error)
             output = false
+        }
+        list(error, output)
+    }
+
+    //
+    // scanRecords
+    //
+    // Options:
+    //  {
+    //      index:      <string>                                            // index name in table
+    //      filter:     <key-expression>                                    // conditions for items to return
+    //      attmap:     <dictionary>                                        // map attribute names to #shortcuts
+    //      project:    <array>                                             // project only specified attributes
+    //      exstart:    <exclusive start key>                               // for paging
+    //      limit:      <number>                                            // maximum count of results
+    //  }
+    //
+
+    table.scanRecords = closure scanRecords(options
+        local result, params, op, expr, output, error)
+    {
+        if preflightError(this)
+            return
+        params = {
+            TableName: tablename
+        }
+        if options.index
+            params.IndexName = options.index
+        if options.filter
+            dyna.conv.createKeyExpression(params, {
+                FilterExpression: options.filter
+            })
+        if options.attmap
+            params.ExpressionAttributeNames = attmap
+        if options.project
+            params.ProjectionExpression = options.project.join(", ")
+        if options.exstart
+            params.ExclusiveStartKey = options.exstart
+        output = []
+        `(error) = dynQueryPager(`scan, params, options.limit, function(data) {
+            if data.Count >= 0
+                output = output.concat(dyna.conv.recordDynToNaan(data.Items))
+            data.Count
+        })
+        if error {
+            error = Error("table.scanRecords(".concat(tablename, ") failed"), error)
+            output = false
+        }
         list(error, output)
     }
 
@@ -455,34 +907,66 @@ closure DynaTable(dyna, tablename, local table) {
 
 closure DynamoDB(local dyna) {
     dyna = new(object, this)
+    dyna.timeout = 20000                                                    // default 20-second timeout
+    dyna.conv = DynaConverter()
+    dyna.multi = DynaMultiTable(dyna)
 
-    //
     // login
     //
-    dyna.login = closure login(creds) {
+    dyna.login = function login(creds) {
         dyna.aws = xnew(awsSDK.DynamoDB, {
             apiVersion:         "2012-08-10",
             accessKeyId:        creds.keyID,
             secretAccessKey:    creds.keySecret,
             region:             creds.region })
+        list(false, { ok: true })
     }
     
-    //
     // table
     //
     //     Return a new table access object for the table of the specified name. The table may not 
     // yet exist; see DynaTable for methods.
     //
-    // parameters:
-    //  {
-    //      hash:       <name>                  // primary hash key attribute name (required)
-    //      hashType:   <type>                  // string | numeric (required)
-    //      range:      <name>                  // primary range key attribute name (optional)
-    //      rangeType:  <name>                  // string | numeric (required if range specified)
-    //  }
-    //
-    dyna.table = closure table(name) {
+    dyna.table = function table(name) {
         DynaTable(dyna, name)
+    }
+    
+    // timekeys
+    //
+    //     Return a TimeKeys object with a default no prefix, and baseMS of 1/1/2022.
+    //
+    dyna.timekeys = function timekeys(prefix, baseMS) {
+        TimeKeys(prefix, baseMS)
+    }
+    
+    // batchGetRecords
+    //
+    dyna.batchGetRecords = function loadBatchGetRecords(request, options) {
+        require("./aws_dynextra.nlg")
+        dyna.batchGetRecords = function bgr(request, options) {
+            dynexBatchGetRecords(dyna, request, options)
+        }
+        dynexBatchGetRecords(dyna, request, options)
+    }
+    
+    // dynexBatchWriteRecords
+    //
+    dyna.batchWriteRecords = function batchWriteRecords(request, options) {
+        require("./aws_dynextra.nlg")
+        dyna.batchWriteRecords = function bwr(request, options) {
+            dynexBatchWriteRecords(dyna, request, options)
+        }
+        dynexBatchWriteRecords(dyna, request, options)
+    }
+    
+    // dynexTransactGetRecords
+    //
+    dyna.transactGetRecords = function loadTransactGetRecords(request, options) {
+        require("./aws_dynextra.nlg")
+        dyna.transactGetRecords = function tgr(request, options) {
+            dynexTransactGetRecords(dyna, request, options)
+        }
+        dynexTransactGetRecords(dyna, request, options)
     }
 
     // finis
@@ -491,19 +975,19 @@ closure DynamoDB(local dyna) {
 
 
 /*
- * dynadaInit
+ * dynaInit
  *
- *     Initialize the DynamoDB module.
+ *     Initialize the DynamoDB component.
  *
  */
 
-function dynadaInit(local manifest) {
-    manifest = `(DynaTable, DynamoDB, dynadaInit)
+function dynaInit(local manifest) {
+    manifest = `(TimeKeys, DynaConverter, DynaTable, DynamoDB, dynaInit)
 
     Naan.module.build(module.id, "aws_dynamo", function(modobj, compobj) {
-        require("./serviceAws.nlg")
         compobj.manifest = manifest
+        modobj.exports.TimeKeys = TimeKeys
         modobj.exports.DynamoDB = DynamoDB
+        require("./serviceAws.nlg")
     })
-
 } ();

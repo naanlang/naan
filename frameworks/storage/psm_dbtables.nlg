@@ -287,7 +287,7 @@ closure FSview(table, rootpath, local view, error) {
                             })))
                     if buildpath.slice(-1) != "/"
                         buildpath = buildpath.concat("/")
-                    `(error, data) = view.table.get(buildpath)              // get desired directory
+                    `(error, data) = view.table.head(buildpath)             // get desired directory
                     if error.status == 404
                         `(error, data) = dbWriteRecord(buildpath)           // create desired directory
                     if error
@@ -684,8 +684,12 @@ closure FSview(table, rootpath, local view, error) {
                     if !finfo
                         finfo = { }
                     name = item.key.slice(offset)
-                    if name.slice(-1) == "/"
+                    if name.slice(-1) == "/" {
                         name = name.slice(0,-1)                             // remove trailing "/" from directory
+                        if !finfo.type
+                            finfo.type = "directory"
+                    } else if !finfo.type
+                        finfo.type = "file"                                 // everything is a file in UNIX
                     if item.doc._md5
                         finfo.md5 = item.doc._md5
                     if item.doc._length
@@ -703,7 +707,7 @@ closure FSview(table, rootpath, local view, error) {
     // Read a directory at the specified path
     
     view.readir = closure readir(path, callback, local name, dirdict) {
-        dirList(path, { head: true }, callback)
+        dirList(path, { stat: true }, callback)
     }
 
     // tree

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2021 by Richard C. Zulch
+ * Copyright (c) 2017-2022 by Richard C. Zulch
  *
  */
 
@@ -20,9 +20,10 @@
  *
  */
 
-closure MakeNideAPIclient(url, local client) {
+closure MakeNideAPIclient(url, guid, local client) {
     client = new(object, this)
     client.url = url
+    client.guid = guid
     client.notifyAfter = 0
 
     // clientRequest() - general request routine
@@ -51,6 +52,8 @@ closure MakeNideAPIclient(url, local client) {
             request.responseType = options.responseType
         if options.contentType
             request.setRequestHeader("Content-Type", options.contentType)
+        if guid
+            request.setRequestHeader("x-naanlang-api-guid", guid)
         request.send(options.putdata)
     }
 
@@ -117,7 +120,7 @@ closure MakeNideAPIclient(url, local client) {
     // Otherwise if communication failed then the result is:
     //      callback(<error>).
 
-    client.psmRemote = closure psmRemote(options, data, callback, local query, method, reqOptions) {
+    client.psmRemote = closure psmRemote(options, data, callback, local query, method, reqOptions, error) {
         query = EncodeQuery("/psm/?", options)
         if data
             method = "PUT"
@@ -131,6 +134,16 @@ closure MakeNideAPIclient(url, local client) {
                 reqOptions.contentType = "application/octet-stream"         // we are sending binary data
             else
                 reqOptions.responseType = "arraybuffer"                     // we are requesting binary data
+        } else if options.encoding == "json" {
+            if data {
+                reqOptions.contentType = "application/json;charset=UTF-8"   // we are sending JSON
+                `(error, data) = JsonStringify(data)
+                if error
+                    return (callback(Error("psmRemote failed:", error)))
+                reqOptions.putdata = data
+            }
+            else
+                reqOptions.responseType = "application/json"                // we are requesting JSON
         }
         clientRequest(method, url.concat(query), reqOptions, function (error, req, event, local data) {
             if !error && req.status != 200
@@ -172,7 +185,7 @@ closure MakeNideAPIclient(url, local client) {
 
 function apicInit(local manifest) {
 
-    manifest = `(apic, apicInit)
+    manifest = `(MakeNideAPIclient, apicInit)
 
     Naan.module.build(module.id, "apiclient", function(modobj, compobj) {
         Naan.module.require("./client.nlg")

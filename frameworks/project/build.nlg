@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2021 by Richard C. Zulch
+ * Copyright (c) 2019-2022 by Richard C. Zulch
  *
  */
 
@@ -267,15 +267,20 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //
     // applySubstitutions
     //
-    // Apply substitutions from readSubstitutionFile to string, returning a new string.
+    // Apply substitutions from readSubstitutionFile to string, returning a tuple of the resulting
+    // text and the number of substitution patterns actually used from the supplied dictionary.
     //
-    function applySubstitutions(text, subs) {
-        text.replace(RegExp("[$][-A-Za-z0-9_./()\\\\]+[$]", "g"), function(match) {
-            if subs[match.slice(1,-1)]
-                { }
+    function applySubstitutions(text, subs, local subbed) {
+        subbed = { }
+        list(text.replace(RegExp("[$][-A-Za-z0-9_./()\\\\]+[$]", "g"), function(match, local subst) {
+            subst = subs[match.slice(1,-1)]
+            if subst {
+                subbed[match] = true
+                subst
+            }
             else
                 match
-        })
+        }), length(subbed))
     }
     
     //
@@ -573,7 +578,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //
     // Handling the catenates is a bit tricky. One set of buildrules can have multiple catentates,
     // distinguished by having a unique writepath derived from the destfile parameter. All groups
-    // having the same writepath contribute to a single catenate, with the sources ordere first by
+    // having the same writepath contribute to a single catenate, with the sources ordered first by
     // group number (low to high) and then order in the source list, first to last. If any component
     // contributing to a catenate is out-of-date with respect to it then they are all built and
     // combined into the single output file. This computes a set of ordering integers for the parts
@@ -649,13 +654,13 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                             outfile = JSpath.join(outdirpath, group.destfile)
                         else
                             outfile = JSpath.join(outdirpath, source)
-                        fs.info(infile, function(error, instat, local listing, addgroup, file) {
+                        fs.info(infile, false, function(error, instat, local listing, addgroup, file) {
                             if error
                                 build.errorlist.push(error)
                             else if instat.type != "directory"
                                 addEntry(infile, outfile, instat, sdex)     // add execution entry if needed
                             else {                                          // add a new group for directory source
-                                `(error, listing) = fs.dirList(infile, { head: true })
+                                `(error, listing) = fs.dirList(infile, { stat: true })
                                 if error
                                     build.errorlist.push(error)
                                 else {
@@ -754,19 +759,20 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                     entry.zip = true
                     if !entry.writepath.toLowerCase().endsWith(".zip")
                         entry.writepath = entry.writepath.concat(".zip")    // always ends with .zip
+                    outfile = entry.writepath
                 }
                 if entry.catenate || entry.zip {
                     entry.catorder = group.groupno * sourcemax + sdex       // order of groups then sources
                     if build.testats[outfile] && instat.mtimeMs < build.testats[outfile].mtimeMs
                         instat = build.testats[outfile]                     // make source at least as recent as template
-                } else
+                } else if !entry.unzip
                     entry.writepath = outfile
                 ++pending.active
                 if destcheck {                                              // destcheck is special target for determining if task needed
                     entry.destcheck = JSpath.join(outdirpath, destcheck.pop())
-                    fs.info(entry.destcheck, addIfOutOfDate)
+                    fs.info(entry.destcheck, false, addIfOutOfDate)
                 } else
-                    fs.info(outfile, addIfOutOfDate)
+                    fs.info(outfile, false, addIfOutOfDate)
                     
                 function addIfOutOfDate(error, outstat, local entryop) {
                     if error || toint(instat.mtimeMs) > toint(outstat.mtimeMs) {
@@ -861,9 +867,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                     if error
                         build.errorlist.push(error)
                     else if content.startsWith("$$")                        // prefix to cause version substitution
-                        build.templates[writepath] = applySubstitutions(content.slice(2), verFileDefs)
-                    else
-                        build.templates[writepath] = content
+                        `(content) = applySubstitutions(content.slice(2), verFileDefs)
+                    build.templates[writepath] = content
                 }
             } ()
         }
@@ -890,13 +895,21 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                     `(error, result) = fs.unzip(entry.readpath, entry.writepath)   // unzip source into destination
                     if !error && entry.destcheck
                         fs.touch(entry.destcheck)                           // show we completed
-                } else if entry.copy
-                    `(error, result) = fs.copy(entry.readpath, entry.writepath, { overwrite: true })     // copy file from source into destination
+                } else if entry.copy {
+                    `(error, result) = fs.util.deepcopy(entry.readpath, false, fs, dirpath, {
+                        erase: true                                         // not really needed
+                        overwrite: true                                     // overwrite files
+                        force: true                                         // ignore modify date
+                        preserve: true                                      // preserve attributes
+                    })
+                    if error                                                // deepcopy returns a list of errors
+                        error = error.0                                     // but we're only doing one item
+                }
                 else if ((`(error, content) = fs.readFile(entry.readpath)) && !error) {
                     if entry.license
-                        content = applySubstitutions(content, licFileDefs)
+                        `(content) = applySubstitutions(content, licFileDefs)
                     if entry.version
-                        content = applySubstitutions(content, verFileDefs)
+                        `(content) = applySubstitutions(content, verFileDefs)
                     if entry.naanpack
                         `(error, content) = parseAndPack(content, entry.readpath, { naanpack: true })
                     else if entry.jspack
@@ -962,11 +975,15 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                         docat = true
                 }
                 if docat {                                                  // catenate the files
-                    if template
-                        content = applySubstitutions(template, catsub)
+                    if template {
+                        `(content, result) = applySubstitutions(template, catsub)
+                        if length(catsub) != result
+                            build.errorlist.push(Error("Matched ", result, " of ", length(catsub),
+                                "substitutions in template:", build.tepaths[writepath]))
+                    }
                     else
                         content = catenates[writepath].map(function(entry){entry.content}).join("\n")
-                    if zip {
+                    if dozip {
                         zipmap = { }
                         zipmap[JSpath.basename(writepath)] = content
                         `(error, content) = zip(zipmap)                     // compress the catenated file
