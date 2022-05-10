@@ -77,7 +77,7 @@ closure TermHost(track, api, name, workerID, options,
                     if !target.written
                         target.term.WriteLn("(reconnected)")
                 }, 1000).run()
-            else
+            else if message.respOp
                 debuglog("unknown host response message:", message.respOp)
         }
         

@@ -293,7 +293,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.3-1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.4-1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -457,7 +457,9 @@ closure projConfig(projman, where, local procon, fs, configpath) {
                 error = Error("project configuration not a directory", where.path)
             else
                 `(error, data) = readConfig() }
-        if error
+        if error.code == "ENOENT"
+            return (list(Error("Project <b>".concat(where.name, "</b>:<br>not found at ", where.path))))
+        else if error
             return (list(Error("Project.load failed", error)))
         procon.loaded = true
         list(false, procon.configDict)

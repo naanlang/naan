@@ -55,8 +55,13 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
                 version: msg.version
             })
         } else if msg.id == "upgrade" {
-            if msg.version != msg.previous                                  // same version: new install
-                debuglog("service worker version upgrade to:", msg.version, "from", msg.previous)
+            if serv.upgrade != msg.version {
+                serv.upgrade = msg.version                                  // only report once
+                callback(false, {
+                    message: "upgrade"
+                    version: msg.version
+                })
+            }
         }
         else if msg.id == "text"
             debuglog("sw[".concat(serv.scope, "]: "), msg.text)             // handy remote debug capability
@@ -182,7 +187,7 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
  *
  */
 
-closure ScopedServiceWorker(pubID, pubVersion, local scoper, result) {
+closure ScopedServiceWorker(pubID, pubVersion, callback, local scoper, result) {
     scoper = new(object, ScopedServiceWorker)
     scoper.scopes = {}
     scoper.serv = ServiceWorker(pubID, pubVersion)
@@ -232,7 +237,8 @@ closure ScopedServiceWorker(pubID, pubVersion, local scoper, result) {
             response.body = data
             scoper.serv.msgport.postMessage(response)
             return
-        }
+        } else if data.message == "upgrade"
+            callback(data.version)
     })
     if result.0 {
         ErrorDebuglog("ScopedServiceWorker failed", result)
@@ -365,8 +371,8 @@ closure TrackedScope(track, scope, fs, rootpath, local trope, result) {
  *
  */
 
-closure TrackServiceWorkers(track, pubID, pubVersion, local error) {
-    `(error, serviceWorker) = ScopedServiceWorker(pubID, pubVersion)
+closure TrackServiceWorkers(track, pubID, pubVersion, callback, local error) {
+    `(error, serviceWorker) = ScopedServiceWorker(pubID, pubVersion, callback)
     if error
         ErrorDebugLog("TrackServiceWorkers: cannot load service worker", error)
     track.register(TrackedScope, "V-Site")

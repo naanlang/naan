@@ -23,6 +23,28 @@ closure Gitter(fs, local gitt) {
     gitt = new(object, this)
     gitt.roots = {}
     
+    // gitPath
+    //
+    // Convert a Windows path to a posix (git) path if needed.
+    //
+    function gitPath(fspath) {
+        if fs.path.sep == "/"
+            fspath
+        else
+            fspath.split(fs.path.sep).join("/")
+    }
+        
+    // fsPath
+    //
+    // Convert a posix (git) path to a filesystem path if needed.
+    //
+    function fsPath(gitpath) {
+        if fs.path.sep == "/"
+            gitpath
+        else
+            gitpath.split("/").join(fs.path.sep)
+    }
+
     // repoRoot
     //
     // Compute the path from the fs root to the repo root.
@@ -54,11 +76,10 @@ closure Gitter(fs, local gitt) {
     // Compute the bridge path to an absolute repopath (which can point inside a repo) from the
     // phyiscal repo root. If these are the same, or an error occurs, then the result is "".
     //
-    
     function bridgePath(repopath, local top) {
         top = repoRoot(repopath).1
         if top && repopath.startsWith(top) && repopath.length > top.length
-           top = repopath.slice(top.length+1).concat("/")                   // move leading "/" of bridge path to trailing
+           top = repopath.slice(top.length+1).concat(fs.path.sep)           // move leading "/" of bridge path to trailing
         else
             ""                                                              // we are looking at the root, or an error
     }
@@ -151,12 +172,12 @@ closure Gitter(fs, local gitt) {
             outLE: "\x00"                                                   // lines delimited by nulls
         }
         if options.pathspec
-            execOptions.cmdargs = execOptions.cmdargs.concat("--", options.pathspec)
+            execOptions.cmdargs = execOptions.cmdargs.concat("--", gitPath(options.pathspec))
         result = []
         execOptions.outproc = function(output, liner, kill, local line, path) {
             while (line = liner.read())
                 if line != "" {
-                    path = line.substring(3)
+                    path = fsPath(line.substring(3))
                     if path.startsWith(bridge) {                            // must start with bridge to be within repopath
                         path = path.slice(bridge.length)
                         result.push({
@@ -183,7 +204,7 @@ closure Gitter(fs, local gitt) {
     // Retrieve the content of a specific file and revision. The file pathspec must be the path of
     // the file within the repo.
     
-    gitt.showfile = closure showfile(repopath, options, callback, local execOptions, result) {
+    gitt.showfile = closure showfile(repopath, options, callback, local execOptions) {
         if !callback
             return (syncAdapter(showfile, repopath, options))
         if !string(repopath)
@@ -192,7 +213,7 @@ closure Gitter(fs, local gitt) {
             return (asyncResult(callback, Error("both pathspec and hash required:", options.pathspec, options.hash)))
         repopath = fs.path.resolve(fs.rootpath, repopath)
         execOptions = {
-            cmdargs: ["show", options.hash.concat(":", bridgePath(repopath), options.pathspec)]
+            cmdargs: ["show", options.hash.concat(":", bridgePath(repopath), gitPath(options.pathspec))]
             execops: {
                 cwd: repopath
             }

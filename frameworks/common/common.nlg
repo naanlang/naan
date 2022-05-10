@@ -66,7 +66,7 @@ function JsonParse(data) {
         list(false, data)
     } catch {
         if true
-             list(exception)
+            list(exception)
     }
 };
 
@@ -84,7 +84,7 @@ function JsonStringify(data) {
         list(false, data)
     } catch {
         if true
-             list(exception)
+            list(exception)
     }
 };
 

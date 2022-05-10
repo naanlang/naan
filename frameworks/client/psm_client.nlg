@@ -22,6 +22,44 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     view = new(object, this)
     view.api = api
     view.rootpath = rootpath
+    
+    // data
+    //
+    // Return the filesystem data, i.e. the tree data field. The minimum information is:
+    //      platform    -- e.g. "darwin" or "win32"
+    //      semantics   -- e.g. "win32" or "posix"
+    //      pathsep     -- e.g. / or \
+
+    view.data = closure data(callback) {
+        if !callback
+            return (syncAdapter(data))
+        params = {
+            path: ""
+            op: "tree"
+            depthlimit: 0
+        }
+        api.psmRemote(params, false, function(error, tree) {
+            view.fsdata = tree.data
+            callback(error, tree.data)
+        })
+    }
+    
+    // pathInit
+    //
+    // Initialize our path module for the applicable path type.
+    
+    closure pathInit(local result) {
+        result = view.data()
+        if result.0
+            pathmod = false
+        else {
+            if view.fsdata.pathsep == "\\"
+                pathmod = JSpath.win32
+            else
+                pathmod = JSpath.posix
+            false
+        }
+    }
 
     // psmRemote
     //
@@ -30,10 +68,14 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     closure psmRemote(path, op, options, putdata, callback, local params, item) {
         if !callback
             return (syncAdapter(psmRemote, path, op, options, putdata))
+        if !pathmod && pathInit()
+            return                                                          // failed to initialize path module
         if !string(path)
             return (asyncResult(callback, Error("invalid path:", typeof(path))))
+        if rootpath != ""
+            path = pathmod.resolve(rootpath, path)
         params = {
-            path: JSpath.resolve(rootpath, path)
+            path: path
             op: op
         }
         for item in options
@@ -59,38 +101,30 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
 
     // path
     //
-    // The path sub-object remotes calls to the NodeJS path module.
+    // Redirect path calls to module chosen for filesystem semantics. It is possible for this to fail
+    // on first connection to the filesystem, in which case we return false for the path result.
+    // Throwing an error would complicate our callers and testing. This way there's a small chance
+    // that a transient error will give a bad path, but that will be detected downstream.
 
     view.path = new(object, this)
-    view.path[".undefined"] = closure path args {
-        closure (selector, arglist, local error, info) {
-            if !pathmod {
-                `(error, data) = view.data()
-                if error
-                    return (list(error))
-                if info.pathsep == "\\"
-                    pathmod = JSpath.win32
-                else
-                    pathmod = JSpath.posix
-            }
-            xapply(pathmod, selector, arglist)
-        } (args.0, args.-1)
+    view.path[".undefined"] = function path args {
+        if !pathmod
+            pathInit()
+        xapply(pathmod, args.0, args.-1)
     }
     
-    // data
+    // folderPath
     //
-    // Return the filesystem data, i.e. the tree data field. The minimum information is:
-    //      platform    -- e.g. "darwin" or "win32"
-    //      semantics   -- e.g. "win32" or "posix"
-    //      pathsep     -- e.g. / or \
-
-    view.data = closure data(callback) {
-        if !callback
-            return (syncAdapter(data))
-        psmRemote("", "tree", { depthlimit: 0 }, false, function(error, tree) {
-            view.fsdata = tree.data
-            callback(error, tree.data)
-        })
+    // Return the path of the specified special folder:
+    //      "HomeDir"
+    //      "TempDir"
+    //      "PackageDir"
+    // The returned path is relative to our root if within it, or absolute otherwise.
+    
+    view.folderPath = function folderPath(folderID, callback) {
+        psmRemote("", "folderPath", {
+            folderid: folderID
+        }, false, callback)
     }
                
     // readLines

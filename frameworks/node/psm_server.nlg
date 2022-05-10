@@ -27,6 +27,7 @@ closure psmsFsView(rootpath, local view, gitter) {
     view = view.1
     
     // inherited
+    //  --  view.folderPath(folderid, callback)
     //  --  view.winDrives(callback)
     //  --  view.testHidden(path, callback)
     //  --  view.readLines(path, options, callback)
@@ -86,16 +87,27 @@ closure psmsFsView(rootpath, local view, gitter) {
             }
             res.send(new(array, result))
         }
-                 
+                                 
+        // op: folderPath
+        function folderPathApi() {
+            res.send(new(array, view.folderPath(req.query.folderid)))
+        }
+ 
         // op: readLines
         function readLinesApi() {
             res.send(new(array, view.readLines(path, req.query)))
         }
 
         // op: readFile
-        function readFileApi(local options) {
+        function readFileApi(local error, localpath, options) {
+            `(error, localpath) = view.localPath(path)
+            if error {
+                res.send(new(array, list(error)))
+                return
+            }
             options = {
-                dotfiles: "allow" }
+                dotfiles: "allow"
+            }
             if req.query.encoding == "binary"
                 options.headers = {
                     "Content-Type": "application/octet-stream"
@@ -104,7 +116,7 @@ closure psmsFsView(rootpath, local view, gitter) {
                 options.headers = {                                         // ### is this always the right default?
                     "Content-Type": "text/html; charset=UTF-8"
                 }
-            res.sendFile(path, options, function (err, local status) {
+            res.sendFile(localpath, options, function (err, local status) {
                 if err {
                     if err.code == "ENOENT"
                         status = 404
@@ -187,7 +199,7 @@ closure psmsFsView(rootpath, local view, gitter) {
         
         // op: tree
         function treeApi() {
-            res.send(new(array, view.tree(path, req.query.depthlimit)))
+            res.send(new(array, view.tree(path, toint(req.query.depthlimit))))
         }
                 
         // op: dirSearch
@@ -250,6 +262,7 @@ closure psmsFsView(rootpath, local view, gitter) {
 
         proc = {
             pathOp:         pathOpApi
+            folderPath:     folderPathApi
             readFile:       readFileApi
             readLines:      readLinesApi
             writeFile:      writeFileApi

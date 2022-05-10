@@ -23,7 +23,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     if !rootpath
         return (list(Error("mandatory rootpath missing")))
     else if rootpath == ""
-        rootpath = js.g.process.cwd()                                       // NodeJS uses CWD for empty rootpath
+        rootpath = JSpath.sep
     files = new(object, this)
     files.rootpath = rootpath
     files.path = JSpath
@@ -54,24 +54,31 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     // Convert a path argument to a local path, returning a standard result tuple. If the path is
     // invalid this will report why. Otherwise this returns the correct localpath, which is the path
     // we use with the underlying API.
+    //     Win32 driver letters are annoying here. If the rootpath specifies a drive letter then the
+    // paths must match it. If the rootpath doesn't specify a drive letter then path can have any
+    // drive letter, or none.
     
     badCreatePathRegEx = RegExp("[:]|[/\\\\][/\\\\]|[/\\\\]$|(^|[/\\\\])[.][.]?$")
 
-    closure localPath(path, create, local pattern, testpath) {
+    files.localPath = closure localPath(path, create, local pattern, testpath, locroot) {
         if !path
             return (list(Error("filesystem path false")))
         else if !string(path)
             return (list(Error("filesystem path invalid:", typeof(path))))
+        if JSpath === JSpath.win32 {
+            locroot = JSpath.resolve(path, rootpath)                        // use path's drive letter if we don't have one
+            pattern = "\\:\\"                                               // unchanged and unique on win32
+        }
+        else {
+            locroot = rootpath
+            pattern = "/:/"                                                 // unchanged and unique on posix
+        }
         if JSpath.isAbsolute(path)
-            path = JSpath.resolve(path)                                     // puts C: in front of \abs\win\path
+            path = JSpath.resolve(locroot, path)                            // add drive letter to absolute path
         else
             path = JSpath.normalize(path)                                   // normalize for current platform
-        if JSpath === JSpath.win32
-            pattern = "\\:\\"                                               // unchanged and unique on win32
-        else
-            pattern = "/:/"                                                 // unchanged and unique on posix
-        if ((testpath = commonParents(path, rootpath)) != "")
-            list(false, JSpath.resolve(rootpath, path))                     // ### shouldn't be so lax on this test
+        if (commonParents(path, locroot) != "")
+            list(false, JSpath.resolve(locroot, path))
         else if ((testpath = JSpath.resolve(pattern, path)).indexOf(pattern.slice(0,-1)) < 0)
             list(Error("filesystem path reaches above root:", path))
         else if create && testpath.indexOf(pattern) < 0
@@ -79,7 +86,31 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         else if create && badCreatePathRegEx.test(path)
             list(Error("filesystem create path invalid", path))
         else
-            list(false, JSpath.resolve(rootpath, path))
+            list(false, JSpath.resolve(locroot, path))
+    }
+    
+    // folderPath
+    //
+    // Return a folder path for the specified folderID, relative to our root. If the folder path is
+    // not within our root then it is returned as an absolute path.
+    
+    files.folderPath = function folderPath(folderID, callback, local envID, path) {
+        if !callback
+            return (syncAdapter(folderPath, folderID))
+        envID = {
+            "HomeDir":      "HOME",
+            "TempDir":      "TMPDIR",
+            "PackageDir":   "npm_config_prefix"
+        }[folderID]
+        if envID {
+            path = js.g.process.env[envID]
+            if path.startsWith(rootpath)
+                path = path.slice(rootpath.length)                          // remove rootpath from beginning
+        }
+        if path
+            callback(false, path)
+        else
+            callback(Error("unknown folderID:", folderID))
     }
 
     // winDrives
@@ -639,8 +670,10 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         // Recursively build the tree
 
         closure recurTree(localpath, depth, parent) {
-            if depthlimit && depth >= depthlimit
+            if depthlimit && depth >= depthlimit {
+                recurNext()
                 return
+            }
             ++pending.active
             fs.readdir(localpath, { }, function(err, nodes, local child, node, stat) {
                 if err.code == "ENOTDIR"
@@ -670,12 +703,20 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
                             parent: child
                         }) } }
                 --pending.active
-                while queue.length > 0 && pending.active < 20 {
-                    node = queue.pop()
-                    recurTree(node.path, node.depth, node.parent) }
-                if pending.active == 0 && queue.length == 0
-                    pending.signal(list(false, root))
+                recurNext()
             })
+        }
+        
+        // recurNext
+        //
+        // Pull more queued items and signal when done.
+        
+        function recurNext(local node) {
+            while queue.length > 0 && pending.active < 20 {
+                node = queue.pop()
+                recurTree(node.path, node.depth, node.parent) }
+            if pending.active == 0 && queue.length == 0
+                pending.signal(list(false, root))
         }
 
         `(error, localpath) = localPath(path)

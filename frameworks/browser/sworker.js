@@ -27,10 +27,8 @@
  * knowledge of which ones are responding. If a request takes longer than a second to respond then
  * this executes a validate operation, which eliminates any clients that have gone away and rejects
  * their pending operations.
- *     One potential problem is stale caches, where a new publisher (e.g. NaanIDE) or new version
- * arises but this worker is still serving old data. The solution is that every publisher provides 
- * its ID and version along with the mesage port. If that is different from the previous version then
- * the old caches are cleared and data re-fetched.
+ *     One potential problem is stale caches. When an older version is discovered then we notify the
+ * client and invalidate the old cache.
  *
  * column positioning:                          //                          //                      !
  *
@@ -38,7 +36,7 @@
  *
  */
 
-var CurrentCacheName = "Naanlang 1.0.3-1";
+var CurrentCacheName = "Naanlang-1.0.4-2";
 
 
 //
@@ -91,18 +89,13 @@ var waitingForInit = [];                        // initialization functions, or 
         var pubVersion = event.data.hereIsMyVersion;
         var sourceId = event.source.id;                                     // client id of sender of message
         msgPorts[sourceId] = msgport;
-        var newCacheName = "Naanlang".concat("-", pubID, "-", pubVersion);
-        console.log("[1.0.3-1] received new msgport for", sourceId, pubID, "-", pubVersion);
-        if (CurrentCacheName != newCacheName) {
-            for (var srcid in msgPorts)
-                msgPorts[srcid].postMessage({
-                    id: "upgrade",
-                    previous: "1.0.3-1",
-                    version: pubVersion
-                });
-        }
-        ClearCaches(newCacheName)
-            .then(Reaper);                                                  // clean up obsolete info
+        console.log("[1.0.4-2] received new msgport for", sourceId, pubID, "-", pubVersion);
+        if (pubVersion != "1.0.4-2")
+            msgport.postMessage({                                           // notify new version available
+                id: "upgrade",
+                version: "1.0.4-2"
+            });
+        Reaper();                                                           // clean up obsolete info
         
         // msgport.onmessage events
         //
@@ -114,7 +107,7 @@ var waitingForInit = [];                        // initialization functions, or 
             if (msg.id == "response")
                 processResponse(msg);
             else if (msg.id == "text")
-                console.log("[1.0.3-1] msg received:", msg.text);
+                console.log("[1.0.4-2] msg received:", msg.text);
         };
         
         // send text to IDE log
@@ -125,7 +118,7 @@ var waitingForInit = [];                        // initialization functions, or 
             // don't clutter the log
             msgport.postMessage({
                 id: "text",
-                text: "port received by 1.0.3-1",
+                text: "port received by 1.0.4-2",
             });
             */
         if (--pending === 0)
@@ -142,7 +135,7 @@ var waitingForInit = [];                        // initialization functions, or 
         includeUncontrolled: true
     }).then(function(clientList) {
         clientList.every(function(client) {
-            console.log("[1.0.3-1] requesting new msgport for", client.id);
+            console.log("[1.0.4-2] requesting new msgport for", client.id);
             ++pending;
             client.postMessage({                                            // tell client(s) we need this fetch source
                 msg: "Naan_need_fetch_port",
@@ -188,12 +181,12 @@ function Reaper() {
             clients[clientList[clidex].id] = clientList[clidex];
         for (var sourceId in msgPorts)
             if (!clients[sourceId]) {
-                console.log("[1.0.3-1] source gone:", sourceId);
+                console.log("[1.0.4-2] source gone:", sourceId);
                 delete msgPorts[sourceId];                                  // no longer a source
             }
         for (var clientId in fetchPorts)
             if (!clients[clientId]) {
-                console.log("[1.0.3-1] client gone:", clientId);
+                console.log("[1.0.4-2] client gone:", clientId);
                 delete fetchPorts[clientId];                                // no longer a client
             }
         for (var fqdex = 0; fqdex < fetchQueue.length; ++fqdex) {
@@ -218,25 +211,22 @@ function Reaper() {
 /*
  * ClearCaches
  *
- * Clear obsolete caches in favor of the new name, returning a promise.
+ * Clear obsolete caches, returning a promise.
  *
  */
 
-function ClearCaches(newCacheName) {
-    if (CurrentCacheName == newCacheName)
-        return (Promise.resolve());                                         // no change
-    CurrentCacheName = newCacheName;
+function ClearCaches() {
     var promise = caches.keys().then(function(cacheNames) {                 // delete old cache entries
             return (Promise.all(
                 cacheNames.map(function(cacheName) {
-                    if (cacheName !== CurrentCacheName) {
-                        console.log('[1.0.3-1] deleting old cache:', cacheName);
+                    if (cacheName != CurrentCacheName) {
+                        console.log('[1.0.4-2] deleting old cache:', cacheName);
                         return (caches.delete(cacheName));
                     }
                 })
             ));
         }).then(function() {                                                // claim all clients
-            console.log('[1.0.3-1] claiming clients for version', CurrentCacheName);
+            console.log('[1.0.4-2] claiming clients');
             return (self.clients.claim());
         });
     return (promise);
@@ -279,7 +269,7 @@ function GetClientResponse(event, urlpath) {
             msgport.postMessage({
                 id: "fetch",
                 seq: seqno,
-                version: "1.0.3-1",
+                version: "1.0.4-2",
                 request: {
                     method: event.request.method,
                     url: event.request.url
@@ -327,7 +317,7 @@ function GetClientResponse(event, urlpath) {
  */
 
 self.addEventListener('install', function(event) {
-    console.log("[1.0.3-1] install");
+    console.log("[1.0.4-2] install");
     self.skipWaiting();
 });
 
@@ -366,7 +356,7 @@ self.addEventListener('fetch', function(event) {
             }
             else
                 promise = fetch(event.request).catch(function (e) {
-                    console.log("[1.0.3-1] fetch failed", e);
+                    console.log("[1.0.4-2] fetch failed", e);
                     return (new Response(undefined, {
                         status: 404,
                         statusText: "Fetch Failed"
@@ -395,16 +385,16 @@ self.addEventListener('fetch', function(event) {
  */
 
 self.addEventListener('activate', function(event) {
-    console.log("[1.0.3-1] activate");
+    console.log("[1.0.4-2] activate");
     self.clients.matchAll({                                                 // for debugging, list controlled clients           
         includeUncontrolled: true
     }).then(function(clientList) {
         var urls = clientList.map(function(client) {
             return (client.url);
         });
-        console.log('[1.0.3-1] matching clients:', urls.join(', '));
+        console.log('[1.0.4-2] matching clients:', urls.join(', '));
     });
-    var promise = ClearCaches(CurrentCacheName);
+    var promise = ClearCaches();
     if (event.waitUntil)
         event.waitUntil(promise);
 });

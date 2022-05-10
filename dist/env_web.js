@@ -82,6 +82,7 @@ exports.NaanControllerWeb = function() {
     var naanstate;                                                          // desired state for the interpreter
     var replqueue;                                                          // text destined for terminal when opened
     var termlist = [];                                                      // list of terminals currently attached
+    contSelf.termlist = termlist;
     var prefs = { };
     var vsiteName;
 
