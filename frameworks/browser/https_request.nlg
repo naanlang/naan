@@ -1,0 +1,120 @@
+/*
+ * https_browser.nlg
+ *
+ *     Https operations for the browser.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * HttpsApiRequest
+ *
+ * Perform an API request from the browser. This operates the same as HttpsApiRequest for NodeJS.
+ *
+ * Options:
+ *  {
+ *      method:         <string>                // HTTP method (defaults to GET/PUT)
+ *      query:          <dictionary>            // query variables added to the URL
+ *      putdata:        <data>                  // data to put
+ *      contentType:    <string>                // sets Content-Type header, otherwise auto-determined
+ *      encoding:       <string>                // "binary" to receive binary data as arrayBuffer
+ *      range:          <string>                // sets range header
+ *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
+ *  }
+ *
+ */
+
+closure HttpsApiRequest(url, options,
+    local urlq, fetchOptions, putdata, error, response, contentType, content) {
+    if !options
+        options = { }
+    if options.query
+        urlq = url.concat(EncodeQuery("?", options.query))
+    else
+        urlq = url
+    putdata = options.putdata
+    fetchOptions = {
+        mode: 'cors'
+        cache: 'no-cache'
+        credentials: 'same-origin'
+        headers: { }
+        redirect: 'follow'
+        referrerPolicy: 'no-referrer'
+    }
+    if options.method
+        fetchOptions.method = options.method
+    else if putdata
+        fetchOptions.method = "POST"
+    else
+        fetchOptions.method = "GET"
+    if putdata {
+        if options.contentType
+            fetchOptions.headers['Content-Type'] = options.contentType
+        else if jsTypedArray(options.putdata)
+            fetchOptions.headers['Content-Type'] = "application/octet-stream"
+        else if member(typeof(options.putdata), `(dictionary, array, xobject)) {
+            fetchOptions.headers['Content-Type'] = "application/json"
+            `(error, putdata) = JsonStringify(options.putdata)
+            if error
+                return (list(Error("HttpsApiRequest encode:", url)))
+        }
+        fetchOptions.body = putdata
+    }
+    if options.range
+        fetchOptions.headers.Range = options.range
+    if array(options.headers)
+        for item in options.headers
+            fetchOptions.headers[item.0] = item.1
+    //
+    // perform the fetch and return when complete
+    //
+    `(error, response) = await(js.w.fetch(urlq, fetchOptions))
+    if error
+        return (list(Error("HttpsApiRequest fetch failed:", error, url)))
+    contentType = response.headers.get("content-type")
+    if response.status < 200 || response.status >= 300
+        return (list(Error("HttpsApiRequest status:", url, response.status, {
+            status: response.status
+        })))
+    if contentType.startsWith("application/json") {
+        `(error, content) = await(response.text())
+        if !error
+            `(error, content) = JsonParse(content)
+            if error
+                error = Error("HttpsApiRequest decode:", url, error)
+            else
+                content = new(content)
+            if array(content) {                                             // deencapsulate to get API result
+                content = totuple(content)
+                error = content.0
+                content = content.1
+            }
+    }
+    else if options.encoding == "binary"
+        `(error, content) = await(response.arrayBuffer())
+    else
+        `(error, content) = await(response.text())
+    list(error, content)
+};
+
+
+/*
+ * https_browserInit
+ *
+ * Initialize HTTPS request operations for browsers.
+ *
+ */
+
+function https_browserInit(local manifest) {
+    manifest = `(HttpsApiRequest, https_browserInit)
+
+    Naan.module.build(module.id, "https_request", function(modobj, compobj) {
+        require("./browser.nlg")
+        compobj.manifest = manifest
+        modobj.exports.HttpsApiRequest = HttpsApiRequest
+    })
+}();

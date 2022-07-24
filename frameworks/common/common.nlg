@@ -31,6 +31,49 @@ function EncodeQuery(prefix, items, local result, item) {
 
 
 /*
+ * ContentTypeFromFileExt
+ *
+ *     Given a filename with extension, return a tuple of the recommended contentType and encoding
+ * for that type of data: `(contentType, encoding). Currently the encoding is false for text and
+ * "binary" for everything else.
+ *
+ */
+
+function ContentTypeFromFileExt(filepath, local mimeType, encoding) {
+    mimeType = {
+        "css":  "text/css",
+        "csv":  "text/csv",
+        "gif":  "image/gif",
+        "htm":  "text/html",
+        "html": "text/html",
+        "ico":  "image/x-icon",
+        "ics":  "application/octet-stream",
+        "jpeg": "image/jpeg",
+        "jpg":  "image/jpeg",
+        "js":   "text/javascript",
+        "json": "application/json",
+        "mov":  "video/mp4",
+        "mp3":  "audio/mpeg",
+        "mp4":  "video/mp4",
+        "nlg":  "text/plain",
+        "npk":  "application/json",
+        "ogg":  "video/ogg",
+        "svg":  "image/svg+xml",
+        "text": "text/plain",
+        "txt":  "text/plain",
+        "zip":  "application/octet-stream"
+    }[JSpath.extname(filepath).substring(1)]
+    if !mimeType
+        mimeType = "application/octet-stream"
+    if mimeType.startsWith("text/")
+        mimeType = mimeType.concat("; charset=UTF-8")
+    else
+        encoding = "binary"
+    list(mimeType, encoding)
+};
+
+
+/*
  * UUID
  *
  *     Return a new v4 variant 1 UUID, which is the random variety. It will be a 36-character string.
@@ -125,11 +168,8 @@ function JsLoadScript(libpath, globalID, local scriptTag, fpath) {
         }
         js.w.document.body.appendChild(scriptTag)
         pending.wait()
-    } else if js.g {
-        if !libpath.startsWith("/")
-            fpath = "./".concat(libpath)
-        jsScripts[libpath] = js.r(fpath)                                    // load in NodeJS context
-    }
+    } else if js.g
+        jsScripts[libpath] = js.r(libpath)                                  // load in NodeJS context
     jsScripts[libpath]
 };
 
@@ -260,13 +300,15 @@ EncodeBase64 = false;
 DecodeBase64 = false;
 JSONstringify = false;
 JSONparse = false;
+Uint8ArrayFromString = false;
 
 function comrInit(local manifest) {
-    manifest = `(EncodeQuery, UUID, JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
+    manifest = `(EncodeQuery, ContentTypeFromFileExt, UUID, JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
 
-    Naan.module.build(module.id, "nideCommon", closure(modobj, compobj) {
+    Naan.module.build(module.id, "common", closure(modobj, compobj) {
         compobj.manifest = manifest
         modobj.exports.EncodeQuery = EncodeQuery
+        modobj.exports.ContentTypeFromFileExt = ContentTypeFromFileExt
         modobj.exports.UUID = UUID
         modobj.exports.JsLoadScript = JsLoadScript
         modobj.exports.LoadComponentOnDemand = LoadComponentOnDemand
@@ -291,13 +333,17 @@ function comrInit(local manifest) {
             EncodeURIComponent = wsg.encodeURIComponent
             DecodeURIComponent = wsg.decodeURIComponent
             //
-            // everywhere: Base65
-            EncodeBase64 = wsg.btoa
-            DecodeBase64 = wsg.atob
-            //
             // everywhere: JSON
             JSONstringify = wsg.JSON.stringify
             JSONparse = wsg.JSON.parse
+            //
+            // everywhere: Uint8ArrayFromString
+            //
+            Uint8ArrayFromString = function uint8ArrayFromString(data) {
+                wsg.Uint8Array.from(Array.from(data).map(function(letter) {
+                    letter.charCodeAt(0)
+                }))
+            }
             //
             // binaryFrom - convert arbitrary item to binary buffer or text.
             //
@@ -327,18 +373,6 @@ function comrInit(local manifest) {
                     result
             }
             //
-            // base64Format - create base 64 string from binary array
-            //
-            function base64Format(data, local blob, reader, pending, result) {
-                blob = xnew(wsg.Blob, [data])
-                reader = xnew(wsg.FileReader)
-                pending = new(nonce)
-                reader.onload = function(event) { pending.signal(event.target.result) }
-                reader.readAsDataURL(blob)
-                result = pending.wait()
-                result.slice(37)
-            }
-            //
             // DecodeBase64url - decode base64url to original string
             // See https://en.wikipedia.org/wiki/Base64 for details on variants
             //
@@ -350,6 +384,31 @@ function comrInit(local manifest) {
             // For browser windows and web workers
             //
             if js.w || js.s {
+                //
+                // base64Format - create base 64 string from binary array
+                //
+                function browserBase64Format(data, local blob, reader, pending, result) {
+                    blob = xnew(wsg.Blob, [data])
+                    reader = xnew(wsg.FileReader)
+                    pending = new(nonce)
+                    reader.onload = function(event) { pending.signal(event.target.result) }
+                    reader.readAsDataURL(blob)
+                    result = pending.wait()
+                    result.slice(37)
+                }
+                //
+                // binary to Base64
+                EncodeBase64 = function browserEncodeBase64(data) {
+                    if xobject(data)
+                        browserBase64Format(data)
+                    else
+                        wsg.btoa(data)
+                }
+                //
+                // Base64 to binary
+                DecodeBase64 = function browserDecodeBase64(data) {
+                    wsg.atob(data)
+                }
                 //
                 // MD5 functions
                 JsLoadScript("frameworks/browser/spark-md5/spark-md5.min.js", "SparkMD5")
@@ -373,7 +432,7 @@ function comrInit(local manifest) {
                         throw(Error("crypto functions unavailable"))
                     data = binaryFrom(data)
                     if string(data)
-                        data = xnew(TextEncoder).encode(data)
+                        data = Uint8ArrayFromString(data)
                     `(error, result) = await(wsg.crypto.subtle.digest(algo, data))
                     if error
                         throw(Error("crypto digest failed", error))
@@ -392,7 +451,7 @@ function comrInit(local manifest) {
                 //
                 // HashSHA-256 in base64
                 HashSHA256_base64 = function browserSHA256_base64(data) {
-                    base64Format(browserDigest(data, "SHA-256"))
+                    browserBase64Format(browserDigest(data, "SHA-256"))
                 }
                //
                 // random bytes as UInt8Array - use toint() for integer
@@ -405,6 +464,16 @@ function comrInit(local manifest) {
             // For NodeJS
             //
             if js.g {
+                //
+                // binary to Base64
+                EncodeBase64 = function nodejsEncodeBase64(data) {
+                    wsg.Buffer.from(data, "binary").toString("base64")
+                }
+                //
+                // Base64 to binary
+                DecodeBase64 = function nodejsDecodeBase64(data) {
+                    wsg.Buffer.from(data, "base64").toString("binary")
+                }
                 if !crypto
                     crypto = js.r("crypto")
                 if crypto {
@@ -456,6 +525,7 @@ function comrInit(local manifest) {
             modobj.exports.JSONparse = JSONparse
             modobj.exports.JsonStringify = JsonStringify
             modobj.exports.JsonParse = JsonParse
+            modobj.exports.Uint8ArrayFromString = Uint8ArrayFromString
             modobj.exports.DecodeBase64url = DecodeBase64url
             modobj.exports.HashMD5 = HashMD5
             modobj.exports.HashMD5_base64 = HashMD5_base64

@@ -12,18 +12,6 @@
 
 
 /*
- * dawsValidateName
- *
- *     True iff the specified name is valid here.
- *
- */
-
-function dawsValidateName(key, path) {
-    
-};
-
-
-/*
  * dawsBucket
  *
  *     Create an S3 access object for a bucket, with as few added semantics as possible. Callbacks
@@ -33,12 +21,12 @@ function dawsValidateName(key, path) {
  *
  */
 
-closure dawsBucket(s3, local bucket) {
+closure dawsBucket(s3b, local bucket, s3) {
     bucket = new(object, this)
-    bucket.s3 = s3
-    bucket.name = s3.config.params.Bucket
-    bucket.region = s3.config.region
-    if not s3 || !string(bucket.region) || bucket.region.length == 0 || !string(bucket.name) || bucket.bucket.length == 0
+    s3 = s3b.s3
+    bucket.name = s3b.bucketName
+    bucket.region = s3b.region
+    if !s3 || !string(bucket.region) || bucket.region.length == 0 || !string(bucket.name) || bucket.bucket.length == 0
         return (list(Error("invalid S3 parameter")))
 
     // asyncResult
@@ -56,7 +44,7 @@ closure dawsBucket(s3, local bucket) {
     // that the bucket is still open before beginning (or continuing) any operations.
     
     bucket.close = function close() {
-        bucket.s3 = false                                                   // just remove access
+        bucket.s3 = s3 = false                                              // just remove access
         list(false, { })
     }
 
@@ -70,6 +58,7 @@ closure dawsBucket(s3, local bucket) {
         if !s3
             return (asyncResult(callback, Error("database closed")))
         params = {
+            Bucket: bucket.name
             Key: key
         }
 
@@ -100,6 +89,7 @@ closure dawsBucket(s3, local bucket) {
         if !s3
             return (asyncResult(callback, Error("database closed")))
         params = {
+            Bucket: bucket.name
             Key: key
         }
         if data {
@@ -110,6 +100,7 @@ closure dawsBucket(s3, local bucket) {
                 mimeType = {
                     "css":  "text/css",
                     "csv":  "text/csv",
+                    "gif":  "image/gif",
                     "htm":  "text/html",
                     "html": "text/html",
                     "ico":  "image/x-icon",
@@ -170,6 +161,7 @@ closure dawsBucket(s3, local bucket) {
         if !s3
             return (asyncResult(callback, Error("database closed")))
         params = {
+            Bucket: bucket.name
             Key:    key
         }
         s3.deleteObject(params, function(error, resp) {
@@ -251,7 +243,9 @@ closure dawsBucket(s3, local bucket) {
 
         if !s3
             return (asyncResult(callback, Error("database closed")))
-        params = { }
+        params = {
+            Bucket: bucket.name
+        }
         if string(prefix)
             params.Prefix = prefix
         if onelevel
@@ -402,7 +396,7 @@ closure dawsTable(database, path, local table) {
         metadata = metadata2s3(metadata)                                    // filter out any invalid metadata
         database.bucket.put(id, content, metadata, function(error, resp) {
             if error
-                error = Error("add failed", error, id, { status: error.statusCode })
+                error = Error("add failed", error, id, { status: error.$metadata.httpStatusCode })
             else {
                 doc.md5 = resp.md5                                          // update the original doc
                 doc.length = resp.length }
@@ -422,7 +416,7 @@ closure dawsTable(database, path, local table) {
         metadata = metadata2s3(doc)
         database.bucket.put(doc._id, doc.content, metadata, function(error, resp) {
             if error
-                error = Error("update failed", error, doc._id, { status: error.statusCode })
+                error = Error("update failed", error, doc._id, { status: error.$metadata.httpStatusCode })
             else {
                 doc.md5 = resp.md5                                          // update the original doc
                 doc.modified = undefined                                    // we don't know exact modify date
@@ -443,7 +437,7 @@ closure dawsTable(database, path, local table) {
             return (asyncResult(callback, Error("invalid argument")))
         database.bucket.delete(doc._id, function(error, resp) {
             if error
-                error = Error("delete failed", error, doc._id, { status: error.statusCode })
+                error = Error("delete failed", error, doc._id, { status: error.$metadata.httpStatusCode })
             callback(error, resp)
         })
     }
@@ -460,7 +454,7 @@ closure dawsTable(database, path, local table) {
             return (asyncResult(callback, id))                              // error from makeID
         database.bucket.get(id, false, function(error, resp) {
             if error
-                error = Error("get failed", error, id, { status: error.statusCode })
+                error = Error("get failed", error, id, { status: error.$metadata.httpStatusCode })
             else {
                 resp.key = key
                 resp = s3resp2doc(resp)
@@ -493,7 +487,7 @@ closure dawsTable(database, path, local table) {
             return (asyncResult(callback, id))                                 // error from makeID
         database.bucket.get(id, true, function(error, resp) {
             if error
-                error = Error("md5 failed", error, id, { status: error.statusCode })
+                error = Error("md5 failed", error, id, { status: error.$metadata.httpStatusCode })
             else if resp._md5
                 resp = resp._md5
             else
@@ -518,7 +512,7 @@ closure dawsTable(database, path, local table) {
         if id.slice(-1) == "/"
             database.bucket.list(id.slice(0,-1), true, function blcb(error, resp) {
                 if error
-                    error = Error("head failed", error, id, { status: error.statusCode })
+                    error = Error("head failed", error, id, { status: error.$metadata.httpStatusCode })
                 else if id != resp.CommonPrefixes.0.Prefix {
                     error = Error("head not found", id, resp.CommonPrefixes.0.Prefix, { status: 404 })
                     resp = false
@@ -532,7 +526,7 @@ closure dawsTable(database, path, local table) {
         else
             database.bucket.get(id, true, function bgcb(error, resp) {
                 if error
-                    error = Error("head failed", error, id, { status: error.statusCode })
+                    error = Error("head failed", error, id, { status: error.$metadata.httpStatusCode })
                 else {
                     resp.key = key
                     resp = s3resp2doc(resp)
@@ -559,7 +553,7 @@ closure dawsTable(database, path, local table) {
                 error = Error("copy failed", {
                     source: srckey
                     destination: destkey
-                    status: error.statusCode
+                    status: error.$metadata.httpStatusCode
                 }, error)
             callback(error, resp)
         })
@@ -651,7 +645,7 @@ closure dawsTable(database, path, local table) {
             s3prefix = table.s3prefix
         database.bucket.list(s3prefix, !options.deep, function(error, objects, local obj, key) {
             if error
-                error = Error("records list failed", error, options.prefix, { status: error.statusCode })
+                error = Error("records list failed", error, options.prefix, { status: error.$metadata.httpStatusCode })
             else {
                 for obj in objects.Contents {
                     if obj.Key.startsWith(table.s3prefix)
@@ -694,13 +688,13 @@ closure dawsTable(database, path, local table) {
  *
  */
 
-closure S3DB(s3, local database, result) {
+closure S3DB(s3b, local database, result) {
     database = new(object, this)
-    result = dawsBucket(s3)
+    result = dawsBucket(s3b)
     if result.0
         return (result)                                                     // can't access bucket
     database.bucket = result.1
-    database.s3 = s3
+    database.s3b = s3b
     database.type = "Amazon S3"
 
     // isopen
@@ -720,7 +714,6 @@ closure S3DB(s3, local database, result) {
             return (list(Error("database closed")))
         database.bucket.close()
         database.bucket = false
-        database.s3 = false
         list(false, { ok: true })
     }
 
@@ -732,10 +725,10 @@ closure S3DB(s3, local database, result) {
         if !database.bucket
             return (list(Error("database closed")))
         result = {
-            type: database.type
+            type:           database.type
             info: {
-                region: s3.config.region
-                bucket: s3.config.params.Bucket
+                region:     s3b.region
+                bucket:     s3b.bucketName
             }
         }
         list(false, result)
@@ -778,7 +771,7 @@ closure S3DB(s3, local database, result) {
 
 function dawsInit(local manifest) {
 
-    manifest = `(dawsValidateName, dawsBucket, dawsTable, S3DB, dawsInit)
+    manifest = `(dawsBucket, dawsTable, S3DB, dawsInit)
 
     Naan.module.build(module.id, "dbt_aws", function(modobj, compobj) {
         require("./serviceAws.nlg")

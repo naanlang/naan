@@ -27,7 +27,7 @@ closure proj_consoleInstance(projman, where, projID, local project) {
     project.name = where.name
     project.where = where
     project.projID = projID
-    project.config = projConfig(projman, where)
+    project.config = projConfig(projman, where, projID)
     project.runPageDebug = true                                             // switch to Debug page on run
 
     // create
@@ -60,9 +60,18 @@ closure proj_consoleInstance(projman, where, projID, local project) {
 
     // run
     //
-    // Run the project by building and then launching.
-    project.run = closure run(buildonly) {
-        project.config.run(buildonly)
+    //     Run the project by building and then launching.
+    //
+    project.run = closure run(stage, buildonly) {
+        project.config.run(stage, buildonly)
+    }
+
+    // publish
+    //
+    //     Publish the project according to the stage.
+    //
+    project.publish = closure publish(stage) {
+        project.config.publish(stage)
     }
 
     // close

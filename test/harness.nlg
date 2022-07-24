@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2022 by Richard C. Zulch
  *
  */
 
@@ -224,6 +224,8 @@ function RunTests(local totalTestCount, totalPassCount, totalTimeMS) {
                 result = parsenv.parse(cmd.concat("\n"))
             else
                 return ("invalid cmd at test ".concat(testCounter, ": ", typeof(cmd), "\n"))
+            if symbol(expect)
+                expect = tostring(expect)
             if string(expect) {
                 if result.errors.length > 0
                     return (strcat("test(\"", cmd, "\") failed:\n    ", result.errors.join("|"), "\n"))

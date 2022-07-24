@@ -26,10 +26,13 @@ closure CloudWatchLogs(local cwlogs) {
     //
     cwlogs.login = closure login(creds) {
         cwlogs.aws = xnew(awsSDK.CloudWatchLogs, {
-            apiVersion:         "2014-03-28",
-            accessKeyId:        creds.keyID,
-            secretAccessKey:    creds.keySecret,
-            region:             creds.region })
+            region:                 creds.region
+            credentials: {
+                accessKeyId:        creds.keyID
+                secretAccessKey:    creds.keySecret
+            }
+        })
+        list(false, { ok: true })
     }
     
     //
@@ -67,7 +70,6 @@ closure CloudWatchLogs(local cwlogs) {
         }
         output = []
         `(error) = cwlQueryPager(`describeLogStreams, params, options.limit, function(data) {
-            debuglog("describeLogStreams:", params.limit, data.logStreams.length, output.length)
             if data.logStreams.length > 0
                 output = output.concat(new(data.logStreams))
             data.logStreams.length
@@ -89,7 +91,6 @@ closure CloudWatchLogs(local cwlogs) {
         }
         output = []
         `(error) = cwlQueryPager(`getLogEvents, params, options.limit, function(data) {
-            debuglog("getLogEvents:", params.limit, data.events.length, output.length)
             if data.events.length > 0
                 output = output.concat(new(data.events))
             data.events.length

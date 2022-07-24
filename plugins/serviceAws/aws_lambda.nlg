@@ -26,10 +26,13 @@ closure Lambda(local lamb) {
     //
     lamb.login = closure login(creds) {
         lamb.aws = xnew(awsSDK.Lambda, {
-            apiVersion:         "2015-03-31",
-            accessKeyId:        creds.keyID,
-            secretAccessKey:    creds.keySecret,
-            region:             creds.region })
+            region:                 creds.region
+            credentials: {
+                accessKeyId:        creds.keyID
+                secretAccessKey:    creds.keySecret
+            }
+        })
+        list(false, { ok: true })
     }
     
     //
@@ -55,8 +58,12 @@ closure Lambda(local lamb) {
     //
     // updateFunctionCode
     //
+    // Note that as of 2022-05-17 AWS SDK v3 requires that the zipfile be a Uint8Array, not an
+    // ArrayBuffer or anything simple like that. What a #$*#(! waste of time.
+    //
     lamb.updateFunctionCode = closure updateFunctionCode(name, zipfile, local params, pending) {
         params = {
+            Architectures: [ "x86_64" ]
             FunctionName: name
             ZipFile: zipfile
         }

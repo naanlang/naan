@@ -191,7 +191,7 @@ closure DynaConverter(local conv) {
     // datumNaanToDyn
     // Convert a Naan datum to DynamoDB format.
     //
-    conv.datumNaanToDyn = function datumNaanToDyn(datum, local ntype, dtype) {
+    conv.datumNaanToDyn = function datumNaanToDyn(datum, local output, ntype, dtype) {
         output = { }
         if tuple(datum)
             datum = datum.toarray
@@ -299,13 +299,35 @@ closure DynaConverter(local conv) {
         output
     }
 
-    // genAttributeAdder
+    // genAttributeNameAdder
     //
-    //     Return a function that, when called repeatedly, will add attribute definitions to the
+    //     Return a function that, when called repeatedly, adds attribute name definitions to the
+    // specified parameter block.
+    //
+    closure genAttributeNameAdder(params, local adex) {
+        function attrib(name, local adef, atype, key, data) {
+            if !string(name)
+                name = tostring(name)                                       // try to make it a string
+            if !params.ExpressionAttributeNames
+                params.ExpressionAttributeNames = { }
+            if !adex
+                adex = (keys(params.ExpressionAttributeNames).length || 0) + 1
+            for `(key, data) in params.ExpressionAttributeNames
+                if data == name
+                    return (key)                                            // found matching name
+            key = "#n".concat(adex++)
+            params.ExpressionAttributeNames[key] = name
+            key
+        }
+    }
+
+    // genAttributeValueAdder
+    //
+    //     Return a function that, when called repeatedly, adds attribute value definitions to the
     // specified parameter block. Symbols are interpreted as literal names, e.g. attribute names, and
     // are not defined as values here.
     //
-    closure genAttributeAdder(params, local adex) {
+    closure genAttributeValueAdder(params, local adex) {
         function attrib(expr, local adef, atype, key, data) {
             if symbol(expr) && !member(expr, `(true, false, null))
                 return (expr.tostring)                                      // literal attribute name
@@ -355,7 +377,7 @@ closure DynaConverter(local conv) {
     //
 
     conv.createKeyExpression = function createKeyExpression(params, conds
-        local error, attrib, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
+        local error, attval, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
 
         // dupeop
         //
@@ -367,7 +389,7 @@ closure DynaConverter(local conv) {
         //
         // build the expression
         //
-        attrib = genAttributeAdder(params)
+        attval = genAttributeValueAdder(params)
         for `(rangename, ranges) in conds {
             if !array(ranges)
                 ranges = [ranges]
@@ -379,7 +401,7 @@ closure DynaConverter(local conv) {
                 for `(op, expr) in range {
                     if op == "key"
                         continue
-                    expr = attrib(expr)
+                    expr = attval(expr)
                     if op == ">=" {
                         if rangex.0 == "<="
                             rangex = list("between", expr, rangex.1)
@@ -427,32 +449,38 @@ closure DynaConverter(local conv) {
     //      set:        [`(attribute, value)]   // set attributes to values
     //      sum:        [`(attribute, value)]   // attributes += values
     //      diff:       [`(attribute, value)]   // attributes -= values
+    //      add:        [`(attribute, value)]   // ADD(attributes, values) -- attrib need not exist
     //      remove:     [attribute]             // remove attributes from the record
     //  }
     // If successful the parameter block is updated, otherwise it may be partly updated. The return
     // value is a standard (error, data) tuple where the data is just { ok: true } if no error.
     //
     conv.createUpdateExpression = function createUpdateExpression(params, updates,
-        local attrib, output, item) {
+        local attval, attname, output, item) {
 
         if params.UpdateExpression
             return (list(Error("conv.createUpdateExpression: UpdateExpression already exists")))
-        attrib = genAttributeAdder(params)
+        attval = genAttributeValueAdder(params)
+        attname = genAttributeNameAdder(params)
         output = {
             SET: []
+            ADD: []
             REMOVE: []
         }
         for item in updates.set
-            output.SET.push(strcat(item.0, "=", attrib(item.1)))
+            output.SET.push(strcat(attname(item.0), "=", attval(item.1)))
         for item in updates.sum
-            output.SET.push(strcat(item.0, "=", item.0, "+", attrib(item.1)))
+            output.SET.push(strcat(attname(item.0), "=", attname(item.0), "+", attval(item.1)))
         for item in updates.diff
-            output.SET.push(strcat(item.0, "=", item.0, "-", attrib(item.1)))
+            output.SET.push(strcat(attname(item.0), "=", attname(item.0), "-", attval(item.1)))
+        for item in updates.add
+            output.ADD.push(strcat(attname(item.0), space, attval(item.1)))
         for item in updates.remove
-            output.REMOVE.push(tostring(item))
+            output.REMOVE.push(attname(item))
         params.UpdateExpression = ""
         for `(key, value) in output
-            params.UpdateExpression = params.UpdateExpression.concat(key, space, value.join(", "))
+            if value.length > 0
+                params.UpdateExpression = params.UpdateExpression.concat(key, space, value.join(", "), space)
         list(false, { ok: true })
     }
 
@@ -515,7 +543,7 @@ closure DynaTable(dyna, tablename, local table) {
         dyna.aws.describeTable(params, function(error, data, local output, key) {
             if error {
                 dynaTableError = error
-                debuglog("aws.describeTable failed", tablename, error)
+                debuglog("aws.describeTable failed", tablename, ErrorString(error))
                 error = Error("table.info(".concat(tablename, ") failed"), error)
             } else {
                 data = data.Table
@@ -594,7 +622,7 @@ closure DynaTable(dyna, tablename, local table) {
         dyna.aws.createTable(params, function(error, data) {
             if error {
                 dynaTableError = error
-                debuglog("aws.createTable failed", tablename, error)
+                debuglog("aws.createTable failed", tablename, ErrorString(error))
                 error = Error("table.create(".concat(tablename, ") failed"), error)
             }
             pending.signal(list(error, data))
@@ -664,7 +692,7 @@ closure DynaTable(dyna, tablename, local table) {
         dyna.aws.getItem(params, function(error, data, local output) {
             if error {
                 dynaTableError = error
-                debuglog("aws.getItem failed", tablename, error)
+                debuglog("aws.getItem failed", tablename, ErrorString(error))
                 error = Error("table.getRecord(".concat(tablename, ") failed"), error)
             } else
                 data = dyna.conv.recordDynToNaan(data.Item)
@@ -676,7 +704,7 @@ closure DynaTable(dyna, tablename, local table) {
     //
     // putRecord
     //
-    //     Put an record in the table, replacing any existing record with the same key.
+    //     Put a record in the table, replacing any existing record with the same key.
         
     table.putRecord = closure putRecord(record, local result, params, pending) {
         if preflightError(this)
@@ -689,7 +717,7 @@ closure DynaTable(dyna, tablename, local table) {
         dyna.aws.putItem(params, function(error, data, local output) {
             if error {
                 dynaTableError = error
-                debuglog("aws.putItem failed", tablename, error)
+                debuglog("aws.putItem failed", tablename, ErrorString(error))
                 error = Error("table.putRecord(".concat(tablename, ") failed"), error)
             }
             pending.signal(list(error, data))
@@ -718,7 +746,6 @@ closure DynaTable(dyna, tablename, local table) {
             return
         params = {
             TableName: tablename
-            Item: dyna.conv.recordNaanToDyn(record)
         }
         params.Key = makeDynKey(list(hashValue, rangeValue))
         if options.condition {
@@ -731,26 +758,72 @@ closure DynaTable(dyna, tablename, local table) {
             if error
                 return (list(Error("table.updateRecord:", error)))
         }
-        dyna.conv.createUpdateExpression(params, `SET, options)
+        dyna.conv.createUpdateExpression(params, options)
         if options.return {
             params.ReturnValues = {
                 all_old:        "ALL_OLD"
                 all_new:        "ALL_NEW"
                 updated_old:    "UPDATED_OLD"
                 updated_new:    "UPDATED_NEW"
-            }
+            }[options.return]
             if !params.ReturnValues
                 params.ReturnValues = "NONE"
         }
         pending = new(nonce)
-        dyna.aws.putItem(params, function(error, data) {
+        dyna.aws.updateItem(params, function(error, data) {
             if error {
                 dynaTableError = error
-                debuglog("aws.putItem failed", tablename, error)
+                debuglog("aws.updateItem failed", tablename, ErrorString(error), Dialect.print(params))
                 error = Error("table.updateRecord(".concat(tablename, ") failed"), error)
             }
             else
                 data = dyna.conv.recordDynToNaan(data.Attributes)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+    
+    //
+    // deleteRecord
+    //
+    //     Delete a record in the table.  Options include conditional updates as follows: 
+    //  {
+    //      condition:  <range-expression>      // conditional expression as in createKeyExpression()
+    //      return:     "all_old"               // return previous attribute values, otherwise { }
+    //  }
+ 
+        
+    table.deleteRecord = closure deleteRecord(hashValue, rangeValue, options, local result, params, pending) {
+        if preflightError(this)
+            return
+        params = {
+            TableName: tablename
+        }
+        params.Key = makeDynKey(list(hashValue, rangeValue))
+        if options.condition {
+            `(error) = dyna.conv.createKeyExpression(params, {
+                KeyConditionExpression: {
+                    key: table.hashKey
+                    "=": hashValue
+                }
+            })
+            if error
+                return (list(Error("table.deleteRecord:", error)))
+        }
+        if options.return {
+            params.ReturnValues = {
+                all_old:        "ALL_OLD"
+            }[options.return]
+            if !params.ReturnValues
+                params.ReturnValues = "NONE"
+        }
+        pending = new(nonce)
+        dyna.aws.deleteItem(params, function(error, data, local output) {
+            if error {
+                dynaTableError = error
+                debuglog("aws.deleteItem failed", tablename, ErrorString(error))
+                error = Error("table.deleteRecord(".concat(tablename, ") failed"), error)
+            }
             pending.signal(list(error, data))
         })
         pending.wait()
@@ -783,33 +856,38 @@ closure DynaTable(dyna, tablename, local table) {
     //
     // Options:
     //  {
-    //      index:      <string>                                            // index name in table
-    //      range:      <key-expression>                                    // range of keys to retrieve
-    //      filter:     <key-expression>                                    // conditions for items to return
-    //      attmap:     <dictionary>                                        // map attribute names to #shortcuts
-    //      reverse:    <boolean>                                           // reverse order
-    //      project:    <array>                                             // project only specified attributes
-    //      exstart:    <exclusive start key>                               // for paging
-    //      limit:      <number>                                            // maximum count of results
+    //      indexName:      <string>                                        // index name in table
+    //      indexHashKey:   <string>                                        // name of index hashKey
+    //      range:          <key-expression>                                // range of keys to retrieve
+    //      filter:         <key-expression>                                // conditions for items to return
+    //      attmap:         <dictionary>                                    // map attribute names to #shortcuts
+    //      reverse:        <boolean>                                       // reverse order
+    //      project:        <array>                                         // project only specified attributes
+    //      exstart:        <exclusive start key>                           // for paging
+    //      limit:          <number>                                        // maximum count of results
     //  }
     //
 
     table.queryRecords = closure queryRecords(hashValue, options
-        local error, result, params, op, expr, output, error)
+        local error, result, params, hashKey, op, expr, output, error)
     {
         if preflightError(this)
             return
         params = {
             TableName: tablename
         }
+        hashKey = table.hashKey
+        if options.indexName {
+            params.IndexName = options.indexName
+            if options.indexHashKey
+                hashKey = options.indexHashKey
+        }
         dyna.conv.createKeyExpression(params, {
             KeyConditionExpression: {
-                key: table.hashKey
+                key: hashKey
                 "=": hashValue
             }
         })
-        if options.index
-            params.IndexName = options.index
         if options.range {
             `(error) = dyna.conv.createKeyExpression(params, {
                 KeyConditionExpression: options.range
@@ -825,7 +903,7 @@ closure DynaTable(dyna, tablename, local table) {
                 return (list(Error("table.queryRecords filter:", error)))
         }
         if options.attmap
-            params.ExpressionAttributeNames = attmap
+            params.ExpressionAttributeNames = options.attmap
         if options.reverse
             params.ScanIndexForward = false
         if options.project
@@ -869,10 +947,13 @@ closure DynaTable(dyna, tablename, local table) {
         }
         if options.index
             params.IndexName = options.index
-        if options.filter
-            dyna.conv.createKeyExpression(params, {
+        if options.filter {
+            `(error) = dyna.conv.createKeyExpression(params, {
                 FilterExpression: options.filter
             })
+            if error
+                return (list(Error("table.scanRecords filter:", error)))
+        }
         if options.attmap
             params.ExpressionAttributeNames = attmap
         if options.project
@@ -915,10 +996,12 @@ closure DynamoDB(local dyna) {
     //
     dyna.login = function login(creds) {
         dyna.aws = xnew(awsSDK.DynamoDB, {
-            apiVersion:         "2012-08-10",
-            accessKeyId:        creds.keyID,
-            secretAccessKey:    creds.keySecret,
-            region:             creds.region })
+            region:                 creds.region
+            credentials: {
+                accessKeyId:        creds.keyID
+                secretAccessKey:    creds.keySecret
+            }
+        })
         list(false, { ok: true })
     }
     
@@ -985,9 +1068,9 @@ function dynaInit(local manifest) {
     manifest = `(TimeKeys, DynaConverter, DynaTable, DynamoDB, dynaInit)
 
     Naan.module.build(module.id, "aws_dynamo", function(modobj, compobj) {
+        require("./serviceAws.nlg")
         compobj.manifest = manifest
         modobj.exports.TimeKeys = TimeKeys
         modobj.exports.DynamoDB = DynamoDB
-        require("./serviceAws.nlg")
     })
 } ();

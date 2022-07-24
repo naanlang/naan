@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2021 by Richard C. Zulch
+ * Copyright (c) 2017-2022 by Richard C. Zulch
  *
  */
 
@@ -223,8 +223,8 @@ RegisterTestCategory("core", [
     [ "unicode(\"Z\");", "0x5a" ],
     [ "unicode(0x2609);", "\"☉\"" ],
     [ "unicode(\"☉\");", "0x2609" ],
-    [ "unicode(0x9962);", "\"饢\"" ],                                   // "persian flatbread", i.e. naan
-    [ "unicode(\"饢\");", "0x9962" ],
+    [ "unicode(0x1fad3);", "\"🫓\"" ],                                  // "flatbread", i.e. naan
+    [ "unicode(\"🫓\");", "0x1fad3" ],
     [ "unicode(0x1f35e);", "\"🍞\"" ],
     [ "unicode(\"🍞\");", "0x1f35e" ],
     [ "unicode(0x1f95c);", "\"🥜\"" ],                                  // peanut, UNICODE 9.0 2016
@@ -707,7 +707,7 @@ RegisterTestCategory("core", [
     [ "cons(`a);>", "(a)" ],
     [ "cons(`a,`b);>", "(a . b)" ],
     [ "cons(`a,`b,`c);>", "(a b . c)" ],
-    [ "length(stacktrace());", "54" ],
+    [ "length(stacktrace());", "55" ],
     
     //
     // lower builtin
@@ -764,5 +764,5 @@ RegisterTestCategory("core", [
     // mangled
     //
 
-    [ "mangled();", "true" ],
+    [ "mangled();", equal(    "prod", "prod") ],
 ]);

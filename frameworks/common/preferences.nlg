@@ -125,6 +125,7 @@ function prefsInit(local manifest) {
     Naan.module.build(module.id, "preferences", function(modobj, compobj) {
         require("../common/common.nlg")
         compobj.manifest = manifest
+        updateExports()
     })
 
     module.exports.Preferences = Preferences

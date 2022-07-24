@@ -75,6 +75,7 @@ function nodrInit(local manifest) {
             fs = js.r("fs")
             os = js.r("os")
             stream = js.r("stream")
+            nodeHttps = js.r("https")
         }()
         module.reload = nodrReload
     })

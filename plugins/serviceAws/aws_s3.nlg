@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2022 by Richard C. Zulch
  *
  */
 
@@ -81,15 +81,17 @@ closure S3(local s3) {
     s3.login = closure login(creds, local params) {
         if !awsSDK
             return (list(Error("S3.login: no AWS SDK available")))
-        params = {
-            apiVersion: "2012-08-10"
-        }
+        params = { }
         if creds {
-            params.accessKeyId = creds.keyID,
-            params.secretAccessKey = creds.keySecret,
             params.region = creds.region
+            params.credentials = {
+                accessKeyId:        creds.keyID
+                secretAccessKey:    creds.keySecret
+            }
         }
         s3.aws = xnew(awsSDK.S3, params)
+        if awsSDK.S3Client
+            s3.client = xnew(awsSDK.S3Client, params)
         `(false, { ok: true })
     }
     
@@ -99,16 +101,44 @@ closure S3(local s3) {
     //     Return a new bucket access object for the table of the specified name. The bucket may not 
     // yet exist; see S3bucket for methods.
     //
-    // parameters:
-    //  {
-    //      hash:       <name>                  // primary hash key attribute name (required)
-    //      hashType:   <type>                  // string | numeric (required)
-    //      range:      <name>                  // primary range key attribute name (optional)
-    //      rangeType:  <name>                  // string | numeric (required if range specified)
-    //  }
-    //
     s3.bucket = closure bucket(name) {
         S3bucket(s3, name)
+    }
+    
+    //
+    // getSignedURL
+    //
+    // This obtains a pre-signed URL for the specified command and its parameters. Options control
+    // how the URL is generated.
+    //
+    // Options:
+    //  {
+    //      expiresIn:        <seconds>         // default expiration is 900 (15 minutes)
+    //  }
+    //
+    s3.getSignedURL = closure getSignedURL(cmdname, cmdparams, local command, options, pending) {
+        if s3.client {
+            if cmdname == "putObject"
+                cmdname = "PutObjectCommand"
+            else if cmdname == "getObject"
+                cmdname = "GetObjectCommand"
+            else
+                return (list(Error("S3bucket.getSignedURL: command not present:", cmdname)))
+            if cmdparams.Expires {
+                cmdparams = new(cmdparams)
+                options.expiresIn = cmdparams.Expires
+                cmdparams.Expires = undefined
+            } else
+                options = { }
+            command = xnew(awsSDK.s3Commands[cmdname], cmdparams)
+            await(awsSDK.getSignedUrl(s3.client, command, options))
+        } else {
+            pending = new(nonce)
+            s3.aws.getSignedUrl(cmdname, cmdparams, function(error, data) {
+                pending.signal(list(error, data))
+            })
+            pending.wait()
+        }
     }
 
     // finis
@@ -126,7 +156,7 @@ closure S3(local s3) {
 function s3Init(local manifest) {
     manifest = `(S3bucket, S3, s3Init)
 
-    Naan.module.build(module.id, "S3", function(modobj, compobj) {
+    Naan.module.build(module.id, "aws_s3", function(modobj, compobj) {
         require("./serviceAws.nlg")
         compobj.manifest = manifest
         modobj.exports.S3 = S3

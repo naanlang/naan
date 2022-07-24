@@ -93,5 +93,6 @@ function wachInit(local manifest) {
         require("./common.nlg")
         compobj.manifest = manifest
         module.exports.Watchable = Watchable
+        updateExports()
     })
 } ();

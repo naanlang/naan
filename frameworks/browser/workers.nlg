@@ -314,6 +314,7 @@ closure TrackedScope(track, scope, fs, rootpath, local trope, result) {
         mimeType = {
             "css":  "text/css",
             "csv":  "text/csv",
+            "gif":  "image/gif",
             "htm":  "text/html",
             "html": "text/html",
             "ico":  "image/x-icon",

@@ -39,7 +39,13 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
             depthlimit: 0
         }
         api.psmRemote(params, false, function(error, tree) {
-            view.fsdata = tree.data
+            if error
+                debuglog("psmcFsView.data: can't get initial filesystem data:", ErrorString(error))
+            else {
+                view.fsdata = tree.data
+                if rootpath == ""
+                    rootpath = tree.data.pathsep
+            }
             callback(error, tree.data)
         })
     }

@@ -602,14 +602,17 @@ closure findIDEtarget(track, name, workerID, naancont, local target) {
  *
  */
 
-closure termIDE(track, name, workerID, naancont, local target, connected) {
+closure termIDE(track, name, workerID, naancont, title, local target, connected) {
     target = findIDEtarget(track, name, workerID, naancont)
     if target {                                                             // new naancont on existing target
         target.updateController(naancont)
+        target.title = title
+        track.update(target)
         return (target)
     }
     target = runningExecutors.ExecutorBase(track, "Local", name)
     target.name = name
+    target.title = title
     target.workerID = workerID
     target.naancont = naancont
     connected = []
@@ -756,7 +759,6 @@ closure termIDE(track, name, workerID, naancont, local target, connected) {
 /*
  * termInstallVirtualWatcher
  *
- * column positioning:                          //                          //                      !
  *     Install a persistent watcher to note when virtual terminals come and go, and manage their
  * execution target lifetimes.
  *
@@ -766,7 +768,7 @@ closure termInstallVirtualWatcher(track, naancont) {
 
     function watchVsites(msg, local error, target) {
         if msg.op == "VsiteOpen" {
-            `(error, target) = termIDE(track, msg.name, "NaanVsite", msg.naancont)
+            `(error, target) = termIDE(track, msg.name, "NaanVsite", msg.naancont, msg.title)
             target.attention()
         }
         else if msg.op == "VsiteClose" {

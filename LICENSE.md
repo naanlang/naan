@@ -1,4 +1,4 @@
-Naan for NPM version 1.0.4-2 is released under the MIT License:
+Naan for NPM version 1.0.5-2 is released under the MIT License:
 
 Copyright (c) 2017-2022 Zulch Laboratories, Inc.
 

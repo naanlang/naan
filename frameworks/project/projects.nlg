@@ -23,6 +23,7 @@ closure ProjectManager(locate, track, dbname, local error, proj) {
     `(error, proj) = storageResources.ResourceManager(dbname, "Projects/")
     if error
         return(list(error))
+    proj.configLocal = proj.vault("configlocal")                            // local config storage
     proj.locate = locate                                                    // storage locations
     proj.track = track                                                      // execution tracking
     proj.types = []
@@ -226,7 +227,9 @@ closure projConnector(projman, projtype, local connector, watch) {
     // deleteResource
     //
     // Delete information for a project. The return value is (error, result) tuple.
-    connector.deleteResource = function deleteResource(resID) {
+    connector.deleteResource = function deleteResource(resID, local localID) {
+        localID = resID.concat("-data")
+        projman.configLocal.deleteResource(localID)                         // remove local storage if there is any
         connector.vault.deleteResource(resID)
         watch.notify(projtype.classID, { deleted: [resID] })
         list(false, { ok: true})
@@ -293,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.4-1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.5-1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -306,6 +309,10 @@ closure projConnector(projman, projtype, local connector, watch) {
  *      build:      <build instructions dictionary>
  *  }
  *
+ *     A project configuration also stores local data that is not in any file, which is useful for
+ * items like accounts & locations, or credentials that should not be "on disk". Project data from
+ * the .cfg file is available in config.configDict, while local data is in config.localDict.
+ *
  *     Given a new projConfig instance, you can either load (which fails of the project is not valid)
  * or create (which fails if the project already exists.) The load operation will update the where
  * argument with the actual name and type found. Unless other noted the methods all return standard
@@ -316,9 +323,11 @@ closure projConnector(projman, projtype, local connector, watch) {
 proj_configDataFolder = "Nide.proj/";
 proj_cliserConfigFile = "nide_cliser.cfg";
 
-closure projConfig(projman, where, local procon, fs, configpath) {
+closure projConfig(projman, where, projID, local procon, fs, configpath) {
     procon = new(object, this)
     procon.name = where.name
+    if projID
+        procon.localID = projID.concat("-data")
     
     // validate
     //
@@ -376,6 +385,15 @@ closure projConfig(projman, where, local procon, fs, configpath) {
                 return (list(Error("can't parse project configuration", where.path, exception))) }
         procon.where_name = where.name                                      // copy name to config
         procon.where_typeID = where.typeID                                  // copy typeID to config
+        if procon.localID {
+            `(error, data) = projman.configLocal.accessResource(procon.localID)
+            if data
+                procon.localDict = data
+            else {
+                procon.localDict = { }
+                projman.configLocal.addResource(procon.localID, procon.localDict)
+            }
+        }
         list(false, procon.configDict)
     }
     
@@ -384,6 +402,11 @@ closure projConfig(projman, where, local procon, fs, configpath) {
     // Write procon.configDict to our configuration file, returning a result tuple.
     //
     closure writeConfig(local error, info, data) {
+        if procon.localID {
+            `(error, data) = projman.configLocal.updateResource(procon.localID, procon.localDict)
+            if error
+                debuglog("projConfig.writeConfig cannot write local storage:", ErrorString(error))
+        }
         `(error, data) = fs.writeFile(configpath, JSONstringify(procon.configDict))
         if !error {
             procon.configMD5 = data
@@ -401,6 +424,8 @@ closure projConfig(projman, where, local procon, fs, configpath) {
     // Create the project with the specified name, and leave it loaded if no error. The project must
     // not already be loaded. The provided name overrides any name in the where argument above, but
     // path and locationID must be specified. Returns a standard result tuple.
+    //
+    // ### we need to update this for optional multiple-configuraiton builds
     //
     procon.create = closure create(name, local error, data, configpath) {
         if procon.loaded
@@ -498,15 +523,52 @@ closure projConfig(projman, where, local procon, fs, configpath) {
             procon.configDict = newconfig 
         `(error, data) = writeConfig()
     }
-    
+        
+    // stages
+    //
+    //     Return a tuple of stages in the project configuration.
+    //
+    procon.stages = function stages() {
+        procon.configDict."build-rules".*
+    }
+
+    // currentStage
+    //
+    //     Validate and return the current stage of the project, or the first one if there isn't a
+    // previous selection, or false if no valid stages exist.
+    //
+    procon.currentStage = function currentStage(local stage, stagelist) {
+        stage = procon.localDict.currentStage
+        stagelist = stages()
+        if stage && !member(stage, stagelist)
+            stage = false
+        if stagelist && !stage
+            stage = stagelist.0
+        stage
+    }
+
     // buildrules
     //
-    //     Get the current build rules.
+    //     Get the build rules for the named stage.
     //
-    function buildrules(local rules) {
-        rules = procon.configDict."build-rules".default                     // "default" will be switchable later
+    function buildrules(stage, local rules, common, rule, key) {
+        rules = procon.configDict."build-rules"[stage]
         if !rules
             rules = procon.configDict.build                                 // fallback to old config structure
+        rules = new(rules)
+        common = procon.configDict."build-common"
+        if common {
+            for rule in common
+                if !rules[rule]
+                    rules[rule] = common[rule]                              // common rule was not overridden
+                else if array(common[rule], rules[rule])
+                    rules[rule] = common[rule].concat(rules[rule])          // merge common array with rule
+                else if dictionary(common[rule], rules[rule]) {
+                    for key in common[rule]                                 // merge common dictionary with rule
+                        if !rules[rule][key]
+                            rules[rule][key] = common[rule][key]
+                }
+        }
         rules
     }
 
@@ -514,16 +576,18 @@ closure projConfig(projman, where, local procon, fs, configpath) {
     //
     //     Run the project by building and then launching.
     //
-    procon.run = closure run(buildonly, local rules, builder, buildpath, error, buildnum) {
+    procon.run = closure run(stage, buildonly, local rules, builder, buildpath, error, buildnum) {
         if !procon.loaded
             return (list(Error("project not loaded")))
-        rules = buildrules()
+        rules = buildrules(stage)
         if !rules || !rules.products
             return (list(Error("build rules missing or incomplete")))
         buildpath = fs.path.join(proj_configDataFolder, rules.products)
         rules.name = procon.where_name
         rules.typeID = procon.where_typeID
-        `(error, builder) = Builder(rules, "debug", fs, "", buildpath)
+        if !rules.operation
+            rules.operation = "debug"
+        `(error, builder) = Builder(rules, rules.operation, fs, "", buildpath)
         if error
             return (list(error))
         `(error, buildnum) = builder.increment()
@@ -549,12 +613,13 @@ closure projConfig(projman, where, local procon, fs, configpath) {
     //
     //     Publish the project to its configured location.
     //
-    procon.publish = closure publish(local rules, publish, error, outfs, inpath) {
-        rules = buildrules()
-        publish = procon.configDict.publish
-        if !rules || !publish.where
+    procon.publish = closure publish(stage, local rules, where, publish, error, outfs, inpath) {
+        rules = buildrules(stage)
+        publish = rules.publish
+        where = procon.localDict.publish[stage].where
+        if !rules || !where
             return (list(Error("no project publish location configured")))
-        `(error, outfs) = projman.locate.connect(publish.where.locationID, "NideFS", publish.where.path)
+        `(error, outfs) = projman.locate.connect(where.locationID, "NideFS", where.path)
         if error
             return (list(Error("can't access publishing filesystem", error)))
         inpath = fs.path.join(proj_configDataFolder, rules.products, publish.input)

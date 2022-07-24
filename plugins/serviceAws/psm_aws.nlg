@@ -54,12 +54,12 @@ closure psmaConnector(psm, local connClassID, connector, watch) {
     // findResource
     //
     // Find a resource with the specified contents, returning the resID or false.
-    connector.findResource = function findResource(resource, local resID, creds) {
+    connector.findResource = function findResource(resource, local resID, error, creds) {
         for resID in listResources().1 {
-            creds = access(resID).1
-            if ((!resource.region || resource.region == creds.region)
+            `(error, creds) = connector.vault.accessResource(resID)
+            if creds && (!resource.region || resource.region == creds.region)
                 && (!resource.bucketName || resource.bucketName == creds.bucketName)
-                && (!resource.label || resource.label == creds.name))
+                && (!resource.label || resource.label == creds.label)
                 return (resID)
         }
         false
@@ -209,28 +209,33 @@ closure psmaConnector(psm, local connClassID, connector, watch) {
     //
     // Return an S3 access object, which is the credentials to access an AWS S3 bucket.
 
-    connector.access = function access(resID, local error, creds, s3) {
+    connector.access = function access(resID, local error, creds, s3b) {
         `(error, creds) = connector.vault.accessResource(resID)
         if error
             return (list(error))                                            // can't access that resource
-        s3 = xnew(awsSDK.S3, {
-            apiVersion:         "2006-03-01",
-            accessKeyId:        creds.keyID,
-            secretAccessKey:    creds.keySecret,
-            region:             creds.region
-            params: {
-                Bucket:         creds.bucketName }})
-        list(false, s3)
+        if !awsSDK.S3
+            return (list(Error("S3 connector: no AWS SDK available")))
+        s3b = {
+            s3: xnew(awsSDK.S3, {
+                region:                 creds.region
+                credentials: {
+                    accessKeyId:        creds.keyID
+                    secretAccessKey:    creds.keySecret
+                }})
+            bucketName:                 creds.bucketName
+            region:                     creds.region
+        }
+        list(false, s3b)
     }
 
     // connect
     //
     // Connect to an AWS bucket filesystem, returning a view.
     
-    connector.connect = function connect(resID, service, args, local error,  s3, db, table) {
-        `(error, s3) = connector.access(resID)
+    connector.connect = function connect(resID, service, args, local error,  s3b, db, table) {
+        `(error, s3b) = connector.access(resID)
         if !error
-            `(error, db) = S3DB(s3)                                         // get S3 as a database
+            `(error, db) = S3DB(s3b)                                        // get S3 bucket as a database
         if error
             list(error)
         else if service == "NideDB"

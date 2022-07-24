@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2021 by Richard C. Zulch
+ * Copyright (c) 2017-2022 by Richard C. Zulch
  *
  */
 
@@ -206,10 +206,10 @@ RegisterTestCategory("context", [
     [ "test2(6);", { errors: "exception: recursed 102" } ],
 
     [ "function test1(x) { if x > 10000 printline(x) else 0+test2(x+1) };", "==> redefined: test1|test1" ],
-    [ "test2(7);", { errors: "exception: recursed 151" } ],
+    [ "test2(7);", { errors: "exception: recursed 149" } ],
 
     [ "function test2(x) { testRecurCheck(x), if true test1(x+1) else print(x) };", "==> redefined: test2|test2" ],
-    [ "test2(8);", { errors: "exception: recursed 152" } ],
+    [ "test2(8);", { errors: "exception: recursed 150" } ],
 
     [ "function test1(x) { if x > 10000 printline(x) else loop test2(x+1, 4, 5) };", "==> redefined: test1|test1" ],
     [ "function test2(x,y,z) { testRecurCheck(x), loop if true { test1(x+1),break } else print(x) };", "==> redefined: test2|test2" ],
@@ -222,7 +222,7 @@ RegisterTestCategory("context", [
     [ "oo=new(object);", "Object{0}"],
     [ "oo.test1 = function test1(x) { if x > 10000 printline(x) else test2(x+1) };", "==> redefined: test1|test1"],
     [ "oo.test2 = function test2 xt { testRecurCheck(car(xt)), oo.test1(car(xt)+1) };", "==> redefined: test2|test2"],
-    [ "oo.test1(11);", { errors: "exception: recursed 156" } ],
+    [ "oo.test1(11);", { errors: "exception: recursed 154" } ],
 
     [ "function test1 xt { testRecurCheck(car(xt)), if car(xt) > 10000 printline(xt) else test1(car(xt)+1) };",
         "==> redefined: test1|test1" ],

@@ -19,17 +19,19 @@
  */
 
 function sawsInit(local manifest) {
-    manifest = `(sawsInit)
+    manifest = `(awsSDK, sawsLoadList, sawsSetPostLoadCall, sawsCallPostload, sawsInit)
 
     Naan.module.build(module.id, "serviceAws", function(modobj, compobj) {
         compobj.manifest = manifest
         require("frameworks/common").LiveImport()
         require("./aws_utils.nlg")
         function sawsPostload() {
-            if js.g
-                awsSDK = js.r("aws-sdk")
+            if js.lambda
+                awsSDK = js.r("/opt/aws-sdk-node.min.js")                   // SDK is a layer
+            else if js.g
+                awsSDK = js.r("aws-sdk-node.min")                           // SDK must be in search path
             else
-                awsSDK = JsLoadScript(JSpath.join(module.locpath, "./aws/aws-sdk.min.js"), "AWS")
+                awsSDK = JsLoadScript(JSpath.join(module.locpath, "./aws/aws-sdk.min.js"), "awsSdk")
             module.exports.awsSDK = awsSDK
             if App.psm
                 require("./psm_aws.nlg").AwsConnector(App.psm)

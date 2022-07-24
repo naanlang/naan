@@ -4,7 +4,7 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     Naan for NPM version 1.0.4-2
+     Naan for NPM version 1.0.5-2
      Copyright (c) 2017-2022 Zulch Laboratories, Inc.
 
 #### Features
@@ -23,7 +23,7 @@ Naan is an async-first software platform for rapid development.
 
 #### Installation
 
-Please ensure you have a recent version of [node.js](http://nodejs.org/)
+Please ensure you have a recent version of [node.js](http://nodejs.org/). The minimum is `v14.14.0`
 
 For use everywhere as a command line app:
 
@@ -42,11 +42,11 @@ It can also evaluate an expression or execute a source file.
 
 ##### Command line usage
 
-    -h, --help                  print usage information
     -e <expression>             evaluate an expression
     -i, --interactive           use REPL with -e or [source file]
-    -v, --version               print Naan version
-    -vv                         print Naan version with build number
+    --version                   print Naan version
+    --buildno                   print Naan version with build number
+    -h, --help                  print usage information
 
 Naan prints the results of evaluating each expression with the REPL, but not
 by default with an expression or source file. The interactive flag overrides
@@ -64,10 +64,12 @@ Now make it executable with chmod:
 
     chmod a+x helloworld
 
+#### For More Information
 
+[NaanIDE](https://www.npmjs.com/package/@naanlang/naanide) -- the Naan IDE -- includes more detailed documentation on Naan.
 
 #### Dependencies:
-     We gratefully acknowledge these software packages used with Naan:
+We gratefully acknowledge these software packages used with Naan:
 - [jszip.js](http://stuartk.com/jszip) - read and write zip files
 - [NodeJS-path](https://nodejs.org/) - NodeJS path utilities
 - [PouchDB](https://pouchdb.com/) - synchronizing database

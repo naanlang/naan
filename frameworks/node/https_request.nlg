@@ -1,0 +1,119 @@
+/*
+ * https_node.nlg
+ *
+ *     Https operations for NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2021-2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * HttpsApiRequest
+ *
+ * Perform an API request from in NodeJS. This operates the same as HttpsApiRequest for browsers.
+ *
+ * Options:
+ *  {
+ *      method:         <string>                // HTTP method (defaults to GET/PUT)
+ *      query:          <dictionary>            // query variables added to the URL
+ *      putdata:        <data>                  // data to put
+ *      contentType:    <string>                // sets Content-Type header, otherwise auto-determined
+ *      range:          <string>                // sets range header
+ *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
+ *  }
+ *
+ */
+
+closure HttpsApiRequest(url, options, local urlq, reqOptions, putdata, item, pending, chunks, request) {
+    if options.query
+        urlq = url.concat(EncodeQuery("?", options.query))
+    else
+        urlq = url
+    putdata = options.putdata
+    reqOptions = { }
+    if options.method
+        reqOptions.method = options.method
+    else if putdata
+        reqOptions.method = "POST"
+    else
+        reqOptions.method = "GET"
+    reqOptions.headers = { }
+    if putdata {
+        if options.contentType
+            reqOptions.headers['Content-Type'] = options.contentType
+        else if jsTypedArray(options.putdata)
+            reqOptions.headers['Content-Type'] = "application/octet-stream"
+        else if member(typeof(options.putdata), `(dictionary, array, xobject)) {
+            reqOptions.headers['Content-Type'] = "application/json"
+            `(error, putdata) = JsonStringify(options.putdata)
+            if error
+                return (list(Error("HttpsApiRequest encode:", url)))
+        }
+        fetchOptions.body = putdata
+    }
+    if array(options.headers)
+        for item in options.headers
+            reqOptions.headers[item.0] = item.1
+    pending = new(nonce)
+    chunks = []
+    request = nodeHttps.request(url, reqOptions, function (response) {
+        if response.statusCode < 200 || response.statusCode >= 300 {
+            pending.signal(list(Error("HttpsApiRequest statusCode:", url, response.statusCode, {
+                status: response.statusCode
+            })))
+            return
+        }
+        response.on("data", function (chunk) {
+            chunks.push(chunk)
+        })
+        response.on("end", function (local content, error) {
+            content = Buffer.concat(chunks)
+            if response.complete {
+                if response.headers["content-type"].startsWith("application/json") {
+                    `(error, content) = JsonParse(content.toString())
+                    if error
+                        error = Error("HttpsApiRequest decode:", url, error)
+                    else
+                        content = new(content)
+                    if array(content) {                                     // deencapsulate to get API result
+                        content = totuple(content)
+                        error = content.0
+                        content = content.1
+                    }
+                }
+            }
+            else
+                error = Error("HttpsApiRequest terminated prematurely:", url)
+            pending.signal(list(error, content))
+        })
+    })
+    request.on("error", function(error) {
+        error = Error("HttpsApiRequest failed:", url, error)
+        pending.signal(list(error))
+    })
+    if data
+        request.write(data)
+    request.end()
+    pending.wait()
+};
+
+
+/*
+ * https_nodeInit
+ *
+ * Initialize HTTPS request operations for NodeJS.
+ *
+ */
+
+function https_nodeInit(local manifest) {
+    manifest = `(HttpsGetJson, HttpsPutJson, https_nodeInit)
+
+    Naan.module.build(module.id, "https_request", function(modobj, compobj) {
+        require("./node.nlg")
+        compobj.manifest = manifest
+        modobj.exports.HttpsApiRequest = HttpsApiRequest
+    })
+}();

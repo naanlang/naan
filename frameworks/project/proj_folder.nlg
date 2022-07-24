@@ -61,8 +61,17 @@ closure proj_folderInstance(projman, where, projID, local project) {
     // run
     //
     // Run the project by building and then launching.
-    project.run = closure run(buildonly) {
+    project.run = closure run(stage, buildonly) {
         debuglog("folder run project stub")
+        list(false, { ok: true })
+    }
+
+    // publish
+    //
+    //     Publish the project according to the stage.
+    //
+    project.publish = closure publish(stage) {
+        debuglog("folder publish project stub")
         list(false, { ok: true })
     }
 
