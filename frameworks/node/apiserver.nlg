@@ -171,8 +171,8 @@ closure MakeAPI(port, options, callback, local chroot, server) {
             res.status(403).send("unauthorized")
         timeoutms = toint(req.query.timeout)
         after = toint(req.query.after)
-        if not integer(timeoutms) or timeoutms > 10000
-            res.status(400).send("timeout is integer milliseconds no greater than 10000")
+        if not integer(timeoutms) or timeoutms > 7200000
+            res.status(400).send("timeout is integer milliseconds no greater than 7200000")
         else if not integer(after)
             res.status(400).send("after must be an integer")
         else {

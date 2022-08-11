@@ -136,10 +136,10 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // readLines
     //
     // Read a lines of a file at the specified path with options:
-    //      matchRE:        -- JavaScript regex
-    //      ignoreCase:     -- ignore case during match
-    //      invert:         -- return lines that DO NOT match the regex
-    //      returnText:     -- return text of matched lines
+    //      matchRE:                            -- JavaScript regex
+    //      ignoreCase:                         -- ignore case during match
+    //      invert:                             -- return lines that DO NOT match the regex
+    //      returnText:                         -- return text of matched lines
     // When using a matchRE, the return value is an array of [ lineNumber, text ] pairs if
     // returnText is specified, or just an array of one-based line numbers otherwise.
     //
@@ -288,6 +288,10 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // Search the specified file or recursive directory.
     
     view.dirSearch = function dirSearch(path, options, callback) {
+        if options.excludeDirs {
+            options = new(options)
+            options.excludeDirs = JSONstringify(options.excludeDirs)
+        }
         psmRemote(path, "dirSearch", options, false, callback)
     }
 
@@ -357,6 +361,10 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // Grep the specified file or recursive directory.
     
     view.grepLines = function grepLines(path, options, callback) {
+        if options.excludeDirs {
+            options = new(options)
+            options.excludeDirs = JSONstringify(options.excludeDirs)
+        }
         psmRemote(path, "grepLines", options, false, callback)
     }
 

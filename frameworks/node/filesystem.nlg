@@ -181,11 +181,11 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     // readLines
     //
     // Read the contents of a file into an array of lines with the following options:
-    //      pattern:        -- only return lines matching pattern
-    //      fixed           -- pattern is a fixed string, not a regular expression
-    //      ignoreCase:     -- ignore case during match
-    //      invert:         -- return lines that DO NOT match the regex
-    //      returnText:     -- return text of matched lines
+    //      pattern:                            -- only return lines matching pattern
+    //      fixed                               -- pattern is a fixed string, not a regular expression
+    //      ignoreCase:                         -- ignore case during match
+    //      invert:                             -- return lines that DO NOT match the regex
+    //      returnText:                         -- return text of matched lines
     //
 
     files.readLines = closure readLines(path, options, callback,
@@ -748,21 +748,31 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     // dirSearch
     //
     // Search the files in a directory for a pattern.
-    
+    //
+    // Most options are handled by readLines, but the following is done here:
+    //      excludeDirs: [dirnames]             -- exclude the specified directory names
+
     files.dirSearch = closure dirSearch(path, options, callback,
-        local error, localpaths, output) {
+        local error, localpaths, dexmatch, item, output) {
         if !callback
             return (syncAdapter(dirSearch, path, options))
         `(error, localpath) = localPath(path)
         if error
             return (asyncResult(callback, error))
+        if options.excludeDirs.0 {                                          // match all provided paths
+            dexmatch = []
+            for item in options.excludeDirs                                 // escape all special characters
+                dexmatch.push(item.replace(RegExp("[^A-Za-z0-9-_\n]","g"), "\\$&"))
+            dexmatch = RegExp(dexmatch.join("|"))
+        }
         output = []
         debuglog("dirSearch begins", localpath)
         asyncArray(localpaths, 10, closure(localpath, index, elements, local error, direnum, node, lines, line) {
             `(error, direnum) = dirList(localpath, { })
             if direnum.children
                 for node in direnum.children
-                    localpaths.push(JSpath.join(localpath, node.name))    // more files or directories to examine
+                    if !dexmatch || !node.name.match(dexmatch)
+                        localpaths.push(JSpath.join(localpath, node.name))  // more files or directories to examine
             else {
                `(error, lines) = readLines(localpath, options)
                if error && localpaths.length == 1 {
@@ -986,22 +996,29 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     //
     // Return an array of text matches in a file or recursive directory of files with the following
     // options:
-    //      pattern:        -- pattern to find
-    //      ignoreCase:     -- ignore case during match
-    //      invert:         -- return lines that DO NOT match the regex
-    //      returnText:     -- return text of matched lines
-    //      maxCount:       -- integer maximum number of results (default 10,000)
+    //      pattern:                            -- pattern to find
+    //      ignoreCase:                         -- ignore case during match
+    //      invert:                             -- return lines that DO NOT match the regex
+    //      returnText:                         -- return text of matched lines
+    //      excludeDirs: [dirnames]             -- exclude the specified directory names
+    //      maxCount:                           -- integer maximum number of results (default 10,000)
     // grep-specific options:
-    //      ignoreBinary:   -- ignore binary files
+    //      ignoreBinary:                       -- ignore binary files
     //
     files.grepLines = closure grepLines(path, options, callback,
-        local error, localpath, cmdargs, execOptions, grep, result, lineRE, maxcount) {
+        local error, localpath, cmdargs, item, execOptions, grep, result, lineRE, maxcount) {
         if !callback
             return (syncAdapter(grepLines, path, options))
         `(error, localpath) = localPath(path)
         if error
             return (asyncResult(callback, error))
         cmdargs = ["-rn"]                                                   // recursively search directories for files; report line numbers
+        if options.excludeDirs.0 {                                          // exclude a directory
+            for item in options.excludeDirs {
+                cmdargs.push("--exclude-dir")
+                cmdargs.push(item)
+            }
+        }
         if options.ignoreCase
             cmdargs.push("-i")
         if options.invert

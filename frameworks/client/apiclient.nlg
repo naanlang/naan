@@ -37,7 +37,7 @@ closure MakeNideAPIclient(url, guid, local client) {
         request.addEventListener("error", function reqFailed(event, local errtext) {
             if request.status == 0
                 errtext = "connectivity"
-            ellse
+            else
                 errtext = "request failed"
             error = Error(errtext, {
                 status: request.status

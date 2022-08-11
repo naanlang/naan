@@ -438,7 +438,6 @@ closure ExecutorTracker(local xtrak) {
     // Notify watchers of an update on an execution instance.
 
     xtrak.update = closure update(executor) {
-        debuglog("xtrack.update", executor.title)
         notify({ updated: [executor] })
     }
     

@@ -1024,13 +1024,14 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //      } ... ]
     //  }
     //
-    build.make = closure make(debugMake, local sink, xchan, entry, outext, error) {
+    build.make = closure make(options, local sink, xchan, entry, outext, error) {
         sink = new(textstream, "", `string)                                 // log all output
         xchan = textstreams(list(sink, sink))
         try {
             resetlist()
-            analyze(debugMake)
-            if debugMake {
+            analyze(options.debugMake)
+            if options.debugMake {
+                printline("Debugging make for ", options.buildnum, "-", options.stage)
                 if build.errorlist.length == 0 {
                     printline("build operations (", build.filelist.length, ") for ", operation)
                     for entry in build.filelist
@@ -1052,6 +1053,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
             "\ndate: ", Date(),
             "\nfrom: ", JSpath.join(fs.rootpath, build.srcpath),
             "\n  to: ", build.destpath,
+            "\ntype: ", options.stage,
+            "\nvers: ", options.buildnum,
             "\n", sink.taketext())
         `(error) = fs.writeFile(JSpath.join(build.destpath, "build_log.txt"), outext)
         if error
@@ -1153,14 +1156,17 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //
     // build.refresh
     //
-    // Refresh after updating the v-site. This should probably update all types of executions. ###
+    // Refresh after updating the v-site, returning true iff an existing vsite was found.
     //
-    build.refresh = function refresh(track local main, url_origin) {
+    build.refresh = function refresh(track local main, url_origin, found) {
         if build.runway."v-site" {
             url_origin = js.w.location.origin.concat("/run", build.runway."v-site")
-            for target in track.enumlist()
-                target.vsiteRefresh(url_origin)
+            for target in track.enumlist() {
+                if target.vsiteRefresh(url_origin)
+                    found = true
+            }
         }
+        found
     }
 
     //

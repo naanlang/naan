@@ -204,6 +204,7 @@ closure psmsFsView(rootpath, local view, gitter) {
                 
         // op: dirSearch
         function dirSearchApi() {
+            req.query.excludeDirs = JSONparse(req.query.excludeDirs)
             res.send(new(array, view.dirSearch(path, req.query)))
         }
 
@@ -239,6 +240,7 @@ closure psmsFsView(rootpath, local view, gitter) {
         
         // op: grepLines
         function grepLinesApi() {
+            req.query.excludeDirs = JSONparse(req.query.excludeDirs)
             res.send(new(array, view.grepLines(path, req.query)))
         }
         
@@ -289,8 +291,15 @@ closure psmsFsView(rootpath, local view, gitter) {
             gitLog:         gitLogApi
             gitShowFile:    gitShowFileApi
         }[req.query.op]
-        if proc
-            proc()
+        if proc {
+            try {
+                proc()
+            } catch {
+                if true {
+                    res.status(400).send("psm op failed: ".concat(req.query.op, ": ", exception))
+                }
+            }
+        }
         else
             res.status(400).send("invalid psm op: ".concat(req.query.op))
     }

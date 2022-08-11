@@ -309,8 +309,11 @@ exports.NaanControllerWeb = function() {
     //
     
     this.VsiteRefresh = function VsiteRefresh(url_origin) {
-        if (window.location.href.startsWith(url_origin))
+        if (window.location.href.startsWith(url_origin)) {
             window.location.reload();                                       // we have changed underneath
+            return (true);
+        }
+        return (false);
     };
 
 

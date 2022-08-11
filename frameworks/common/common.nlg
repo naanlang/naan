@@ -373,10 +373,17 @@ function comrInit(local manifest) {
                     result
             }
             //
-            // DecodeBase64url - decode base64url to original string
+            // EncodeBase64url - decode base64url to original string
             // See https://en.wikipedia.org/wiki/Base64 for details on variants
             //
-            DecodeBase64url = function decodeBase64url(base64url, local padding) {
+            EncodeBase64url = function encodeBase64url(data) {
+                data = EncodeBase64(data)
+                data.replace(RegExp("[+]", "g"), '-').replace(RegExp("/", "g"), '_')
+            }
+            //
+            // DecodeBase64url - decode base64url to original string
+            //
+            DecodeBase64url = function decodeBase64url(base64url) {
                 base64url = base64url.replace(RegExp("-", "g"), '+').replace(RegExp("_", "g"), '/')
                 DecodeBase64(base64url)
             }
@@ -526,6 +533,7 @@ function comrInit(local manifest) {
             modobj.exports.JsonStringify = JsonStringify
             modobj.exports.JsonParse = JsonParse
             modobj.exports.Uint8ArrayFromString = Uint8ArrayFromString
+            modobj.exports.EncodeBase64url = EncodeBase64url
             modobj.exports.DecodeBase64url = DecodeBase64url
             modobj.exports.HashMD5 = HashMD5
             modobj.exports.HashMD5_base64 = HashMD5_base64

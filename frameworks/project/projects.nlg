@@ -296,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.5-1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.6-1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -326,6 +326,7 @@ proj_cliserConfigFile = "nide_cliser.cfg";
 closure projConfig(projman, where, projID, local procon, fs, configpath) {
     procon = new(object, this)
     procon.name = where.name
+    procon.dirName = proj_configDataFolder.slice(0,-1)                      // remove terminal "/"
     if projID
         procon.localID = projID.concat("-data")
     
@@ -547,6 +548,17 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
         stage
     }
 
+    // setCurrentStage
+    //
+    //     Set the current stage.
+    //
+    procon.setCurrentStage = function setCurrentStage(stage) {
+        if member(stage, stages()) {
+            procon.localDict.currentStage = stage
+            update()                                                        // ### errors here are never reported
+        }
+    }
+
     // buildrules
     //
     //     Get the build rules for the named stage.
@@ -595,11 +607,14 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
             ErrorDebuglog("build number increment failed", error)
             return (list(error))
         }
-        `(error) = builder.make()
+        `(error) = builder.make({
+            stage: stage
+            buildnum: buildnum
+        })
         if !error {
-            if buildonly
-                builder.refresh(projman.track)
-            else
+            if builder.refresh(projman.track)
+                buildonly = !buildonly                                      // reverse if refresh
+            if !buildonly
                 `(error) = builder.run(projman.track)
         }
         builder.destroy()

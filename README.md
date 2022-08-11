@@ -4,7 +4,7 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     Naan for NPM version 1.0.5-2
+     Naan for NPM version 1.0.6-2
      Copyright (c) 2017-2022 Zulch Laboratories, Inc.
 
 #### Features
