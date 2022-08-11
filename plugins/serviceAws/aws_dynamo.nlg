@@ -338,7 +338,7 @@ closure DynaConverter(local conv) {
             adef = datumNaanToDyn(expr)
             atype = keys(adef).0
             for `(key, data) in params.ExpressionAttributeValues
-                if data[atype] == adef[atype]
+                if defined(data, atype) && data[atype] == adef[atype]
                     return (key)                                            // found matching attribute
             key = ":v".concat(adex++)
             params.ExpressionAttributeValues[key] = adef
