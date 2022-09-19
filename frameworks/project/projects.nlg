@@ -296,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.6-1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.7+1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -408,7 +408,11 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
             if error
                 debuglog("projConfig.writeConfig cannot write local storage:", ErrorString(error))
         }
-        `(error, data) = fs.writeFile(configpath, JSONstringify(procon.configDict))
+        if procon.configMD5 {                                               // don't overwrite existing file
+            data = HashMD5(JSONstringify(procon.configDict))                // ### it messes up the formatting and
+            error = false                                                   // is manually maintained anyway
+        } else
+            `(error, data) = fs.writeFile(configpath, JSONstringify(procon.configDict))
         if !error {
             procon.configMD5 = data
             `(error, info) = fs.info(configpath)
@@ -561,37 +565,44 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
 
     // buildrules
     //
-    //     Get the build rules for the named stage.
+    //     Get the build rules for the named stage, reloading the project configuration if changed.
     //
-    function buildrules(stage, local rules, common, rule, key) {
+    function buildrules(stage, local error, data, rules, common, rule, key) {
+        if !procon.loaded
+            return (list(Error("project not loaded")))
+        `(error, data) = procon.changed()
+        if error
+            return (list(error))
         rules = procon.configDict."build-rules"[stage]
         if !rules
             rules = procon.configDict.build                                 // fallback to old config structure
         rules = new(rules)
-        common = procon.configDict."build-common"
+        if !rules["no-common"]
+            common = procon.configDict."build-common"
         if common {
             for rule in common
                 if !rules[rule]
                     rules[rule] = common[rule]                              // common rule was not overridden
-                else if array(common[rule], rules[rule])
+                else if array(common[rule], rules[rule])                    // ### array only tests first argument 20220909 Rcz
                     rules[rule] = common[rule].concat(rules[rule])          // merge common array with rule
-                else if dictionary(common[rule], rules[rule]) {
+                else if dictionary(common[rule], rules[rule]) {             // ### dictionary only tests first argument 20220909 Rcz
                     for key in common[rule]                                 // merge common dictionary with rule
                         if !rules[rule][key]
                             rules[rule][key] = common[rule][key]
                 }
         }
-        rules
+        list(false, rules)
     }
 
     // run
     //
     //     Run the project by building and then launching.
     //
-    procon.run = closure run(stage, buildonly, local rules, builder, buildpath, error, buildnum) {
-        if !procon.loaded
-            return (list(Error("project not loaded")))
-        rules = buildrules(stage)
+    procon.run = closure run(stage, buildonly, 
+        local error, rules, builder, buildpath, error, buildnum) {
+        `(error, rules) = buildrules(stage)
+        if error
+            return (list(error))
         if !rules || !rules.products
             return (list(Error("build rules missing or incomplete")))
         buildpath = fs.path.join(proj_configDataFolder, rules.products)
@@ -628,13 +639,27 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
     //
     //     Publish the project to its configured location.
     //
-    procon.publish = closure publish(stage, local rules, where, publish, error, outfs, inpath) {
-        rules = buildrules(stage)
+    //  {
+    //      input: "tutorApp/www/"
+    //      sources: [""]
+    //      output: ""
+    //      cacheControl: "max-age=2592000"
+    //  }
+    //
+    procon.publish = closure publish(stage, 
+        local error, rules, where, publish, error, outOptions, outfs, inpath) {
+        `(error, rules) = buildrules(stage)
+        if error
+            return (list(error))
         publish = rules.publish
         where = procon.localDict.publish[stage].where
         if !rules || !where
             return (list(Error("no project publish location configured")))
-        `(error, outfs) = projman.locate.connect(where.locationID, "NideFS", where.path)
+        if publish.cacheControl
+            outOptions = {
+                cacheControl: publish.cacheControl
+            }
+        `(error, outfs) = projman.locate.connect(where.locationID, "NideFS", where.path, outOptions)
         if error
             return (list(Error("can't access publishing filesystem", error)))
         inpath = fs.path.join(proj_configDataFolder, rules.products, publish.input)
@@ -671,8 +696,8 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
  */
 
 function projInit(local manifest) {
-
-    manifest = `(ProjectManager, projTracker, projConnector, projConfig, projInit)
+    manifest = `(ProjectManager, projTracker, projConnector, proj_configDataFolder,
+        proj_cliserConfigFile, projConfig, projInit)
 
     Naan.module.build(module.id, "projects", function(modobj, compobj) {
         require("./project.nlg")

@@ -12,6 +12,64 @@
 
 
 /*
+ * FileReader
+ *
+ *     Read file(s) from the browser's host machine. This is passed a File object and returns a
+ * nearly-standard (error, blob, size) tuple. If progress is specified then this function is called
+ * with a percentage of completion from zero to 100 if available, or true otherwise. The progress
+ * callback is called with "false" when completed, with or without success
+ *
+ */
+
+closure FileReader(file, progress, local pending, freader, result) {
+    pending = new(nonce)
+    freader = xnew(window.FileReader)
+    freader.addEventListener("load", function(event, local blob) {
+        blob = xnew(window.Blob, [freader.result], {
+            type: file.type
+        })
+        pending.signal(list(false, blob, event.total))
+    })
+    freader.addEventListener("error", function(error) {
+        pending.signal(list(error))
+    })
+    freader.AddEventListener("progress", function(event) {
+        if event.lengthComputable && event.total
+            progress(toint((event.loaded * 100) / event.total))
+        else
+            progress(true)
+    })
+    freader.readAsArrayBuffer(file)
+    result = pending.wait()
+    progress(false)
+    result
+};
+
+
+/*
+ * FileDownload
+ *
+ *     Download a file from the browser, returning a standard error tuple.
+ *
+ */
+
+closure FileDownload(file, progress, local error, blob, sizez, url, link) {
+    `(error, blob, size) = FileReader(file, progress)
+    if error
+        list(error)
+    else {
+        url = window.URL.createObjectURL(blob)
+        link = document.createElement("a")
+        link.href = url
+        link.download = file.name
+        link.click()
+        window.URL.revokeObjectURL(url)
+        list(false, file.name)
+    }
+};
+
+
+/*
  * brorInit
  *
  *     Initialize the browser module.
@@ -20,11 +78,18 @@
  */
 
 function brorInit(local manifest) {
-    manifest = `(brorInit)
+    manifest = `(FileReader, FileDownload, brorInit)
 
     Naan.module.build(module.id, "browser", function(modobj, compobj) {
         require("../common").LiveImport()
         compobj.manifest = manifest
-        runningExecutors = require("../running/executors.nlg")
+        modobj.exports.FileReader = FileReader
+        modobj.exports.FileDownload = FileDownload
+
+        function brorReload() {
+            window = js.w
+            document = window.document
+        }()
+        module.reload = brorReload
     })
 } ();

@@ -309,7 +309,7 @@ exports.NaanControllerWeb = function() {
     //
     
     this.VsiteRefresh = function VsiteRefresh(url_origin) {
-        if (window.location.href.startsWith(url_origin)) {
+        if (vsiteName && window.location.href.startsWith(url_origin)) {
             window.location.reload();                                       // we have changed underneath
             return (true);
         }
@@ -546,6 +546,7 @@ exports.NaanControllerWeb = function() {
                 naancont: contSelf,
                 title: vsiteName + " $Version$"
             });
+            vsiteName = false;                                              // window is going away
             termTextOut("\x1b[90m\x1b[3m".concat("\nwindow closed", "\x1b[0m\n"));
         }
     }
@@ -556,7 +557,10 @@ exports.NaanControllerWeb = function() {
         naanlib.banner();
         var hostpath = naanlib.js.r("path").dirname(window.location.href);
         naanlib.start({
-            cmd: 'Naan.module.webparse("naan_init.nlg", "' + hostpath + '"' + ');;\r\n'
+            cmd: 'App.version = "$Version$";;\r\n'
+                + 'App.cache = "$CacheBuster$";;\r\n'
+                + 'Naan.module.requireQuery({ naanver: App.cache });;\r\n'
+                + 'Naan.module.webparse("naan_init.nlg", "' + hostpath + '", { naanver: App.cache });;\r\n'
         });
     } else {
         if (!replstate) {                                                   // saved state but never opened a terminal

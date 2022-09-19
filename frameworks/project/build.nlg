@@ -716,6 +716,10 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                     entry.unzip = true
                     entry.writepath = outdirpath
                 }
+                if group.tasks.indexOf("catenate") >= 0
+                    entry.catenate = true
+                if group.tasks.indexOf("zip") >= 0
+                    entry.zip = true
                 if group.tasks.indexOf("naanpack") >= 0 || group.tasks.indexOf("jspack") >= 0 || group.tasks.indexOf("syntax") >= 0 {
                     let (inpar, outpar, extension) {                        // change extension for package output
                         inpar = JSpath.parse(infile)
@@ -740,12 +744,12 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                                 inpar.base = inpar.name.concat(extension)
                                 entry.insource = JSpath.format(inpar)
                             }
-                        } else
+                        } else if !entry.zip && !entry.catenate
                             entry.copy = true                               // fall back to copy
                     } ()
                 }
                 if group.tasks.indexOf("minimize") >= 0 {
-                    if infile.endsWith(".js") {
+                    if infile.endsWith(".js") || outfile.endsWith(".js") {
                         entry.minimize = true
                         if group.minprefix
                             entry.minprefix = group.minprefix               // use group minify prefix
@@ -753,10 +757,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                             entry.minprefix = build.minprefix               // use generic minify prefix
                     }
                 }
-                if group.tasks.indexOf("catenate") >= 0
-                    entry.catenate = true
-                if group.tasks.indexOf("zip") >= 0 {
-                    entry.zip = true
+                if entry.zip {
                     if !entry.writepath.toLowerCase().endsWith(".zip")
                         entry.writepath = entry.writepath.concat(".zip")    // always ends with .zip
                     outfile = entry.writepath
@@ -844,7 +845,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     // checked and any that have all the parts are written out. Catenates that don't have all their
     // parts are reported as an error in addition to the error that caused them to be incomplete.
     //
-    closure execute(local error, entries, pending, licFileDefs, buildno, verFileDefs, baddestpaths, catenates) {
+    closure execute(local error, licFileDefs, buildno, verFileDefs, version, entries, pending, 
+            baddestpaths, catenates) {
         if build.tasks.license > 0
             `(error, licFileDefs) = readSubstitutionFile(build.licfilepath)
         if build.tasks.version > 0 {
@@ -858,6 +860,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
             `(error, verFileDefs) = readSubstitutionFile(build.verfilepath, {
                 BuildNumber: buildno
             })
+            build.version = verFileDefs["Version"]
+            verFileDefs["CacheBuster"] = HashMD5(build.version.concat(Math.random()))
         }
         if build.tasks.catenate > 0 || build.tasks.zip > 0 {
             build.templates = { }
@@ -962,7 +966,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
 
         let (writepath, template, entry, content, catsub, dozip, docat, fsoptions, zipmap, error, result) {
             for :out1 writepath in catenates {
-                template = build.templates[writepath]                       // optional
+                template = build.templates[writepath]                       // optional in some cases ### should warn in others
                 catsub = { }
                 for entry in catenates[writepath] {                         // error check and substitution build
                     if !entry.content {
@@ -1054,7 +1058,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
             "\nfrom: ", JSpath.join(fs.rootpath, build.srcpath),
             "\n  to: ", build.destpath,
             "\ntype: ", options.stage,
-            "\nvers: ", options.buildnum,
+            "\nvers: ", build.version,
             "\n", sink.taketext())
         `(error) = fs.writeFile(JSpath.join(build.destpath, "build_log.txt"), outext)
         if error

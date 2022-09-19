@@ -29,7 +29,7 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
     closure updateReg(local mchan) {
         if !serv.sw
             return
-        mchan = xnew(js.w.MessageChannel)
+        mchan = xnew(window.MessageChannel)
         serv.msgport = mchan.port2
         serv.msgport.onmessage = workerMsg.proc
         serv.sw.postMessage({
@@ -112,13 +112,13 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
         serv.scope = scope
         if !scope
             return (makeResult(Error("service worker scope required")))
-        if !js.w.navigator.serviceWorker
+        if !window.navigator.serviceWorker
             return (makeResult(Error("service workers not supported")))
-        js.w.navigator.serviceWorker.addEventListener("message", function(event) {
+        window.navigator.serviceWorker.addEventListener("message", function(event) {
             if event.data.msg == "Naan_need_fetch_port"
                 updateReg()
         })
-        await(js.w.navigator.serviceWorker.register("sworker.js", { scope: scope }).then(function (reg) {
+        await(window.navigator.serviceWorker.register("sworker.js", { scope: scope }).then(function (reg) {
             return (reg.update())
         }).then(function (reg) {
             serv.reg = reg
@@ -211,7 +211,7 @@ closure ScopedServiceWorker(pubID, pubVersion, callback, local scoper, result) {
             }
             
             // read resource
-            filepath = xnew(js.w.URL, data.request.url).pathname
+            filepath = xnew(window.URL, data.request.url).pathname
             filepath = DecodeURIComponent(filepath)                         // "/run/<scope>/path..."
             filepath = filepath.slice(4)                                    // "/<scope>/path..."
             error = true                                                    // stays true iff not in scope
@@ -308,7 +308,7 @@ closure TrackedScope(track, scope, fs, rootpath, local trope, result) {
     trope = findTrackedScope(track, scope)
     if trope
         return (list(false, trope))
-    trope = runningExecutors.ExecutorBase(track, "ServiceWorkers", scope)
+    trope = require("../running/executors.nlg").ExecutorBase(track, "ServiceWorkers", scope)
     serviceWorker.register(scope, closure(filepath, scope, init,
         local options, mimeType, error, data) {
         mimeType = {

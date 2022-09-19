@@ -26,10 +26,8 @@ function sawsInit(local manifest) {
         require("frameworks/common").LiveImport()
         require("./aws_utils.nlg")
         function sawsPostload() {
-            if js.lambda
-                awsSDK = js.r("/opt/aws-sdk-node.min.js")                   // SDK is a layer
-            else if js.g
-                awsSDK = js.r("aws-sdk-node.min")                           // SDK must be in search path
+            if js.g
+                awsSDK = js.r(JSpath.join(js.d, module.locpath, "./aws/aws-sdk-node.min.js"))
             else
                 awsSDK = JsLoadScript(JSpath.join(module.locpath, "./aws/aws-sdk.min.js"), "awsSdk")
             module.exports.awsSDK = awsSDK

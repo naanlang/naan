@@ -515,6 +515,8 @@ closure DynaConverter(local conv) {
 closure DynaTable(dyna, tablename, local table) {
     table = new(object, this)
     table.name = tablename
+    if dyna.ycdb
+        table.ycdb = true                                                   // Yandex Cloud version of DynamoDB
 
     // info
     //
@@ -665,7 +667,7 @@ closure DynaTable(dyna, tablename, local table) {
     // Make a dynamoDB key dictionary for the table using the specified primary key, which can be a
     // tuple of hash/range or just a hash if only a hash is needed for this table.
     //
-    conv.makeDynKey = function makeDynKey(primaryKey, local hashValue, rangeValue, key) {
+    table.makeDynKey = function makeDynKey(primaryKey, local hashValue, rangeValue, key) {
         if tuple(primaryKey)
             `(hashValue, rangeValue) = primaryKey
         else
@@ -994,14 +996,22 @@ closure DynamoDB(local dyna) {
 
     // login
     //
-    dyna.login = function login(creds) {
-        dyna.aws = xnew(awsSDK.DynamoDB, {
-            region:                 creds.region
-            credentials: {
+    dyna.login = function login(creds, local params) {
+        if !awsSDK
+            return (list(Error("DynamoDB.login: no AWS SDK available")))
+        params = { }
+        if creds {
+            params.region = creds.region
+            params.credentials = {
                 accessKeyId:        creds.keyID
                 secretAccessKey:    creds.keySecret
             }
-        })
+            if creds.dyna_endpoint {
+                params.endpoint = creds.dyna_endpoint
+                dyna.ycdb = true
+            }
+        }
+        dyna.aws = xnew(awsSDK.DynamoDB, params)
         list(false, { ok: true })
     }
     
@@ -1011,6 +1021,8 @@ closure DynamoDB(local dyna) {
     // yet exist; see DynaTable for methods.
     //
     dyna.table = function table(name) {
+        if !dyna.aws
+            debuglog("DynamoDB.table: database not open:", name)
         DynaTable(dyna, name)
     }
     

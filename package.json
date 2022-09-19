@@ -1,6 +1,6 @@
 {
     "name": "@naanlang/naan",
-    "version": "1.0.6",
+    "version": "1.0.7",
     "author": "Richard C. Zulch",
     "description": "Naan™ software platform",
     "main": "./lib/core/naanlib.js",
@@ -12,6 +12,7 @@
     },
     "scripts": {
         "start": "node lib/node_repl.js",
+        "debug": "node --inspect-brk lib/node_repl.js",
         "test": "node test/node_test.js"
     }
 }

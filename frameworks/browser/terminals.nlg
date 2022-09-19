@@ -21,7 +21,7 @@
 closure TermHost(track, api, name, workerID, options,
     local target, nlregex, clientID, serverID)
 {
-    target = runningExecutors.ExecutorBase(track, "Host", name)
+    target = require("../running/executors.nlg").ExecutorBase(track, "Host", name)
     clientID = "DebugWorkers"
     serverID = "Workers"
     nlregex = RegExp("\\n", "g")
@@ -35,7 +35,7 @@ closure TermHost(track, api, name, workerID, options,
     closure connect(local pending) {
         if target.ws
             return
-        target.ws = xnew(js.w.WebSocket,"ws://".concat(js.w.location.host)) // ### use api parameter
+        target.ws = xnew(window.WebSocket,"ws://".concat(window.location.host)) // ### use api parameter
         pending = new(nonce)
     
         // onopen
@@ -52,7 +52,7 @@ closure TermHost(track, api, name, workerID, options,
         
         target.ws.onmessage = function onmessage(e, message, local msg) {
             try {
-                message = new(js.w.JSON.parse(e.data))
+                message = new(window.JSON.parse(e.data))
             } catch {
                 if true {
                     debuglog("can't decode incoming ws message:", exception)
@@ -169,7 +169,7 @@ closure TermHost(track, api, name, workerID, options,
     //     Send a message to the worker controller.
 
     target.sendControl = function sendControl(workerOp, payload) {
-        target.ws.send(js.w.JSON.stringify({
+        target.ws.send(window.JSON.stringify({
             guid: api.guid
             clientID: clientID
             serverID: serverID
@@ -368,23 +368,23 @@ closure TermLocal(track, name, workerID, options,
         options = new(options)
     else
         options = { }
-    target = runningExecutors.ExecutorBase(track, "Local", name)
+    target = require("../running/executors.nlg").ExecutorBase(track, "Local", name)
     nlregex = RegExp("\\n", "g")
     target.workerID = workerID
     target.msgQueue = []
     if workerID == "NaanIDE-Debug" {
-        target.worker = js.w.open(js.w.location.href, "_blank")
+        target.worker = window.open(window.location.href, "_blank")
         target.worker.addEventListener("beforeunload", function(e) {        // our target is closing
             destroy()
         })
-        js.w.addEventListener("beforeunload", function(e) {                 // we are closing
+        window.addEventListener("beforeunload", function(e) {               // we are closing
             // ### tell target we are closing (if needed)
         })
-        listener = js.w
+        listener = window
     } else {
-        if not js.w.Worker
+        if not window.Worker
             return (list(Error("Local environment does not support workers")))
-        target.worker = xnew(js.w.Worker, "env_webworker.js")
+        target.worker = xnew(window.Worker, "env_webworker.js")
         listener = target.worker
     }
 
@@ -460,6 +460,8 @@ closure TermLocal(track, name, workerID, options,
             target.statusCB(target, msg.status)
         else if msg.id == "debugout"
             target.debugger.debugData(target, msg.data)
+        else if msg.id == "download"
+            FileDownload(xnew(window.File, msg.bits, msg.name, msg.options))
         else if msg.id == "loaded" {
             if !target.started
                 target.worker.postMessage({
@@ -610,7 +612,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         track.update(target)
         return (target)
     }
-    target = runningExecutors.ExecutorBase(track, "Local", name)
+    target = require("../running/executors.nlg").ExecutorBase(track, "Local", name)
     target.name = name
     target.title = title
     target.workerID = workerID
@@ -778,7 +780,7 @@ closure termInstallVirtualWatcher(track, naancont) {
         }
     }
     
-    runningExecutors.TaskOnMessageHook(watchVsites)
+    require("../running/executors.nlg").TaskOnMessageHook(watchVsites)
 };
 
 

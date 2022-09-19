@@ -13,17 +13,36 @@
 
 /*
  * S3bucket
- *
- *     S3 buckets.
+ * 
+ * Bucket ooptions:
+ *  {
+ *      cacheControl: "max-age=2592000"         - default cache control, e.g. to "max-age=2592000"
+ *  }
  *
  */
 
-closure S3bucket(s3, name, local bucket) {
+closure S3bucket(s3, name, bucketOptions, local bucket) {
     bucket = new(object, this)
     bucket.name = name
-    
+        
     //
-    // list
+    // head
+    //
+    bucket.head = closure head(key, local pending) {
+        pending = new(nonce)
+        s3.aws.headObject({
+            Bucket: bucket.name
+            Key: key
+        }, function (error, data) {
+            if error
+                error = Error("S3bucket.head failed:", error.name, "key:", key, "in", bucket.name)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    //
+    // listObjects
     //
     bucket.listObjects = closure listObjects(local pending) {
         pending = new(nonce)
@@ -31,31 +50,46 @@ closure S3bucket(s3, name, local bucket) {
             Bucket: bucket.name
         }, function (error, data) {
             if error
-                error = Error("S3bucket.list failed", error)
+                error = Error("S3bucket.list failed:", error.name, "for", bucket.name)
             pending.signal(list(error, data))
         })
         pending.wait()
     }
 
     //
-    // upload
+    // put
     //
-    bucket.upload = closure upload(key, data, local pending) {
-        pending = new(nonce)
-        s3.aws.upload({
+    // options:
+    //  {
+    //      contentType: "text/plain"           - override contentType if specified
+    //      cacheControl: "max-age=2592000"     - default cache control, e.g. to "max-age=2592000"
+    //      metadata: { <items> }               - optional dictionary of keys to store
+    //  }
+    //
+    bucket.put = closure put(key, data, options, local params, pending) {
+        if !contentType
+            contentType = "application/octet-stream"
+        params = {
             Bucket: bucket.name
-            ACL: "public-read"
-            Body: data
             Key: key
-                ContentType: "application/octet-stream"                     // force download from browser
-        })
-        .on("httpUploadProgress", function(evt) {
-            debuglog("upload progress", totuple(evt))
-        })
-        .send(function(error, data) {
+            ContentMD5: HashMD5_base64(data)
+            Body: data
+        }
+        if options.contentType
+            params.ContentType = options.contentType
+        if options.metadata
+            params.Metadata = options.metadata
+        else
+            params.Metadata = "application/octet-stream"
+        if options.cacheControl
+            params.CacheControl = options.cacheControl
+        else if bucket.cacheControl
+            params.CacheControl = bucket.cacheControl
+        pending = new(nonce)
+        s3.aws.putObject(params, function(error, resp) {
             if error
-                error = Error("S3bucket.upload failed", error)
-            pending.signal(list(error, data))
+                error = Error("S3bucket.put failed:", error.name, "key:", key, "in", bucket.name)
+            pending.signal(list(error, resp))
         })
         pending.wait()
     }
@@ -88,6 +122,8 @@ closure S3(local s3) {
                 accessKeyId:        creds.keyID
                 secretAccessKey:    creds.keySecret
             }
+            if creds.endpoint
+                params.endpoint = creds.endpoint
         }
         s3.aws = xnew(awsSDK.S3, params)
         if awsSDK.S3Client
@@ -111,12 +147,23 @@ closure S3(local s3) {
     // This obtains a pre-signed URL for the specified command and its parameters. Options control
     // how the URL is generated.
     //
-    // Options:
+    // CommandParams:
     //  {
-    //      expiresIn:        <seconds>         // default expiration is 900 (15 minutes)
+    //      Bucket:             <string>        // bucket name
+    //      Key:                <string>        // object being operated upon
+    //      ContentType:        <string>        // video/mp4 or whatever
+    //      ResponseCacheControl:   <string>    // reportedly for getObject only
+    //      ACL:                <string>        // e.g. "public-read"
+    //      Body:               <data>          // fiik
     //  }
     //
-    s3.getSignedURL = closure getSignedURL(cmdname, cmdparams, local command, options, pending) {
+    // Options:
+    //  {
+    //      expiresIn:          <seconds>       // default expiration is 900 (15 minutes)
+    //      signingDate:        <epoch-secs>    // reference time for URL being created
+    //  }
+    //
+    s3.getSignedURL = closure getSignedURL(cmdname, cmdparams, options, local command, pending) {
         if s3.client {
             if cmdname == "putObject"
                 cmdname = "PutObjectCommand"
@@ -124,16 +171,15 @@ closure S3(local s3) {
                 cmdname = "GetObjectCommand"
             else
                 return (list(Error("S3bucket.getSignedURL: command not present:", cmdname)))
-            if cmdparams.Expires {
-                cmdparams = new(cmdparams)
-                options.expiresIn = cmdparams.Expires
-                cmdparams.Expires = undefined
-            } else
-                options = { }
             command = xnew(awsSDK.s3Commands[cmdname], cmdparams)
             await(awsSDK.getSignedUrl(s3.client, command, options))
         } else {
+            debuglog("s3.getSignedURL: warning: old API")
             pending = new(nonce)
+            if options.expiresIn {
+                cmdparams = new(cmdparams)
+                cmdparams.Expires = options.expiresIn
+            }
             s3.aws.getSignedUrl(cmdname, cmdparams, function(error, data) {
                 pending.signal(list(error, data))
             })

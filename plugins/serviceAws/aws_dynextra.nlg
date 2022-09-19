@@ -37,7 +37,7 @@ function dynexBatchGetRecords(dyna, request,
     request = new(request)                                                  // allow local modifications
     index = { }
     for titem in request {                                                  // preflight all tables
-        tname = titem.table.tablename
+        tname = titem.table.name
         if index[tname]
             return (Error("DynaTable.batchGetRecords: duplicate table in request:", tname))
         `(error) = titem.table.info()
@@ -57,7 +57,7 @@ function dynexBatchGetRecords(dyna, request,
             activity = false
             for `(tname, titem) in index {
                 if titem.keys.length > 0 {
-                    primary = titem.table.makeDynKey(titem.keys.unshift())
+                    primary = titem.table.makeDynKey(titem.keys.shift())
                     if params.RequestItems[tname].Keys
                         params.RequestItems[tname].Keys.push(primary)
                     else
@@ -81,7 +81,7 @@ function dynexBatchGetRecords(dyna, request,
             dyna.aws.batchGetItem(params, function(err, data) {
                 if err
                     debuglog("aws.batchGetItem failed", err)
-                pending.signal(err, data)
+                pending.signal(list(err, data))
             })
             `(err, response) = pending.wait()
             for `(tname, table) in response.Responses
@@ -124,7 +124,8 @@ function dynexBatchGetRecords(dyna, request,
  *
  */
 
-closure dynexBatchWriteRecords(dyna, request, local batches, error, activity) {
+closure dynexBatchWriteRecords(dyna, request,
+    local index, group, tname, batches, error, activity) {
     if !dyna.aws
         return (list(Error("DynaTable.batchWriteRecords: not logged into AWS")))
 
@@ -132,19 +133,18 @@ closure dynexBatchWriteRecords(dyna, request, local batches, error, activity) {
     // addOp
     // Add a put or delete operation to the parameters
     //
-    function addOp(params, table, del, record, local request) {
+    function addOp(params, table, del, record, primary, local request) {
         if del {                                                            // deleting a record
-            if tuple(record)
-                record = table.makeDynKey(record)                           // caller provided hash/range key pair
-            else
-                request = { DeleteRequest: { Key: dyna.conv.recordNaanToDyn(record) } }
+            if !tuple(record)
+                record = list(record[table.hashKey], record[table.rangeKey])
+            request = { DeleteRequest: { Key: table.makeDynKey(record) } }
         }
         else                                                                // putting a record
             request = { PutRequest: { Item: dyna.conv.recordNaanToDyn(record) } }
-        if params.RequestItems[table.tablename]
-            params.RequestItems[table.tablename].push(request)
+        if params.RequestItems[table.name]
+            params.RequestItems[table.name].push(request)
         else
-            params.RequestItems[table.tablename] = [request]
+            params.RequestItems[table.name] = [request]
     }
 
     // transform into batches
@@ -155,48 +155,68 @@ closure dynexBatchWriteRecords(dyna, request, local batches, error, activity) {
     // request have no more entries.
     //
     request = new(request)                                                  // allow local modifications
+    index = { }
+    for group in request {                                                  // preflight all tables
+        tname = group.table.name
+        if index[tname]
+            return (Error("DynaTable.dynexBatchWriteRecords: duplicate table in request:", tname))
+        `(error) = group.table.info()
+        if error
+            return (Error("DynaTable.dynexBatchWriteRecords: table", tname, ":", error))
+        index[tname] = group
+        if group.put                                                        // ### in case these are xobjects
+            group.put = new(group.put)                                      // new() doesn't deep clone them
+        if group.delete
+            group.delete = new(group.delete)
+    }
+    request = new(request)                                                  // allow local modifications
     batches = []
     activity = true
     while activity
-        let (params, batchsize, table) {
+        let (params, batchsize) {
             params = {
                 RequestItems: { }
             }
             batchsize = 0
             while :fillbatch activity {                                     // loop until no activity or batch full
                 activity = false
-                for table in request {
-                    if table.delete.length > 0
-                        addOp(params, table, true, table.delete.unshift())
-                    else if table.put.length > 0
-                        addOp(params, table, false, table.put.unshift())
-                    else
-                        continue
-                    activity = true
-                    if ++batchsize >= 25
+                for group in request {
+                    if group.delete.length > 0 {
+                        addOp(params, group.table, true, group.delete.shift())
+                        activity = true
+                        ++batchsize
+                    }
+                    if group.put.length > 0 {
+                        addOp(params, group.table, false, group.put.shift())
+                        activity = true
+                        ++batchsize
+                    }
+                    if batchsize >= 25
                         break :fillbatch                                    // our batch is full
                 }
             }
             if batchsize > 0
                 batches.push(params)
         } ()
-    asyncArray(batches, 10, closure bwr(params, local delayer, pending, err, response) {
+    asyncArray(batches, 1, closure bwr(params, local delayer, pending, err, response) {
         delayer = dyna.conv.genBackoffDelayer()
         loop {
             pending = new(nonce)
-            dyna.aws.batchWriteItem(params, function(err, data) {
+            dyna.aws.batchWriteItem(params, closure(err, data) {
                 if err
                     debuglog("aws.batchWriteItem failed", err)
-                pending.signal(err, data)
+                pending.signal(list(err, data))
             })
             `(err, response) = pending.wait()
             if response.UnprocessedKeys
                 params.RequestItems = response.UnprocessedKeys              // still more to do
             else
                 break                                                       // total success or failure
+            debuglog("dynexBatchWriteRecords unprocessedKeys:", response.UnprocessedKeys)
             if delayer() > dyna.timeout {
                 if !error                                                   // too slow
                     error = err
+                debuglog("dynexBatchWriteRecords timeout", error, err)
                 break
             }
         }
@@ -235,7 +255,7 @@ closure dynexTransactGetRecords(dyna, request,
     request = new(request)                                                  // allow local modifications
     index = { }
     for titem in request {                                                  // preflight all tables
-        tname = titem.table.tablename
+        tname = titem.table.name
         if index[tname]
             return (Error("DynaTable.batchGetRecords: duplicate table in request:", tname))
         `(error) = titem.table.info()
@@ -252,7 +272,7 @@ closure dynexTransactGetRecords(dyna, request,
             params.TransactItems.push({
                 Get: {
                     TableName: tname
-                    Key: makeDynKey(titem.keys.unshift())
+                    Key: makeDynKey(titem.keys.shift())
                 }
             })
         }
@@ -262,7 +282,7 @@ closure dynexTransactGetRecords(dyna, request,
     dyna.aws.transactGetItems(params, function(err, data) {
         if err
             debuglog("aws.transactGetItems failed", err)
-        pending.signal(err, data)
+        pending.signal(list(err, data))
     })
     `(error, response) = pending.wait()
     if error

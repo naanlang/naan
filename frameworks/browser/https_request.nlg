@@ -72,7 +72,7 @@ closure HttpsApiRequest(url, options,
     //
     // perform the fetch and return when complete
     //
-    `(error, response) = await(js.w.fetch(urlq, fetchOptions))
+    `(error, response) = await(window.fetch(urlq, fetchOptions))
     if error
         return (list(Error("HttpsApiRequest fetch failed:", error, url)))
     contentType = response.headers.get("content-type")
@@ -113,7 +113,7 @@ function https_browserInit(local manifest) {
     manifest = `(HttpsApiRequest, https_browserInit)
 
     Naan.module.build(module.id, "https_request", function(modobj, compobj) {
-        require("./browser.nlg")
+        require("browser.nlg")
         compobj.manifest = manifest
         modobj.exports.HttpsApiRequest = HttpsApiRequest
     })

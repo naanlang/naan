@@ -119,7 +119,7 @@ closure taskDispatcher(replier, local contexts, gohome, util) {
                 }
             }
             else
-                call(onMessageHook, data)
+                onMessageHook(data)
         } catch {
             if true {
                 if tuple(exception)

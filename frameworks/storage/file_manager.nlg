@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2022 by Richard C. Zulch
  *
  */
 
@@ -287,6 +287,7 @@ closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
             fixed: true
             ignoreCase: true
             returnText: true
+            excludeDirs: []
         }
     }
     

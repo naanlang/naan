@@ -465,14 +465,24 @@ closure FSview(table, rootpath, local view, error) {
         if !callback
             return (syncAdapter(info, path))
         dbReadRecord(path, true, function(error, data, local finfo) {
-            if data {
+            if data {                                                       // try to glean the node info
                 finfo = new(data.finfo)
                 if !finfo
                     finfo = { }
                 if data._md5
                     finfo.md5 = data._md5
-                if data._length
-                    finfo.length = data._length }
+                if xobject(data.modified) {
+                    finfo.mtimeMs = data.modified.getTime()
+                    finfo.mtime = data.modified.toISOString()
+                }
+                if data.contentType
+                    finfo.contentType = data.contentType
+                if data.length
+                    finfo.length = data.length
+                else if data._length
+                    finfo.length = data._length
+                if finfo.length
+                    finfo.type = "file" }
             else if path == "" {
                 error = false                                               // we were asked for info on superoot
                 finfo = {

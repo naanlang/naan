@@ -143,7 +143,7 @@ function JsonStringify(data) {
 jsScripts = { };                                                            // script values become false on reload
  
 function JsLoadScript(libpath, globalID, local scriptTag, fpath) {
-    if jsScripts[jsScripts]
+    if jsScripts[libpath]
         return                                                              // already loaded
     if libpath.startsWith("/")
         fpath = libpath
@@ -155,10 +155,10 @@ function JsLoadScript(libpath, globalID, local scriptTag, fpath) {
     } else if js.w {                                                        // load in browser context
         pending = new(nonce)
         scriptTag = js.w.document.createElement("script")
-        scriptTag.src = js.w.location.origin.concat(fpath)
+        scriptTag.src = js.w.location.origin.concat(fpath, requireQuery())
         scriptTag.onload = function (event) {
             jsScripts[libpath] = js.w[globalID]
-            pending.signal(JSZipLib)
+            pending.signal(js.w[globalID])
             true
         }
         scriptTag.onerror = function (event) {
@@ -303,7 +303,8 @@ JSONparse = false;
 Uint8ArrayFromString = false;
 
 function comrInit(local manifest) {
-    manifest = `(EncodeQuery, ContentTypeFromFileExt, UUID, JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
+    manifest = `(EncodeQuery, ContentTypeFromFileExt, UUID, JsonParse, JsonStringify, JsLoadScript,
+        LoadComponentOnDemand, LiveExport, comrInit)
 
     Naan.module.build(module.id, "common", closure(modobj, compobj) {
         compobj.manifest = manifest
@@ -418,7 +419,9 @@ function comrInit(local manifest) {
                 }
                 //
                 // MD5 functions
-                JsLoadScript("frameworks/browser/spark-md5/spark-md5.min.js", "SparkMD5")
+                if symbol(NideBuild) {                                      // execute if we are not building
+                    JsLoadScript("frameworks/browser/spark-md5/spark-md5.min.js", "SparkMD5")
+                }
                 //
                 // hasMD5 in hex
                 HashMD5 = function browserMD5(data, raw) {

@@ -144,7 +144,7 @@ function procstring(procdef, options, local name, output, parm) {
 function runnInit(local manifest) {
     manifest = `(rootproc, baseproc, pathmatch, procpath, procname, procstring, runnInit)
 
-    build(module.id, "running", closure(modobj, compobj) {
+    Naan.module.build(module.id, "running", closure(modobj, compobj) {
         require("../common").LiveImport()
         compobj.manifest = manifest
     })
