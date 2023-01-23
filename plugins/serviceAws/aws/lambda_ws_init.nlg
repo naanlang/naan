@@ -22,7 +22,8 @@ function initPreload() {
     Naan.module.chns("Play")
     sudo(putproc(exception, false))                                         // ### need a better mechanism
 };
-initPreload();
+if symbol(NideBuild)
+    initPreload();                                                          // not building
 
 
 /*

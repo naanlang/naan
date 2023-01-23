@@ -652,7 +652,7 @@ closure DynaTable(dyna, tablename, local table) {
     // Ensure that the table is ready before executing an operation. This returns an error tuple or
     // false to proceed.
     //
-    function preflightError(op) {
+    function preflightError(op, local result) {
         if !dyna.aws
             return (list(Error("DynaTable.".concat(op, ": not logged into AWS"))))
         if !table.hashKey {
@@ -683,7 +683,7 @@ closure DynaTable(dyna, tablename, local table) {
     //
     // Get a record from the table with the specified hash value, and optional range value.
     //
-    table.getRecord = closure getRecord(hashValue, rangeValue, local result, params, pending) {
+    table.getRecord = closure getRecord(hashValue, rangeValue, local params, pending) {
         if preflightError(this)
             return
         params = {
@@ -708,7 +708,7 @@ closure DynaTable(dyna, tablename, local table) {
     //
     //     Put a record in the table, replacing any existing record with the same key.
         
-    table.putRecord = closure putRecord(record, local result, params, pending) {
+    table.putRecord = closure putRecord(record, local params, pending) {
         if preflightError(this)
             return
         params = {
@@ -737,13 +737,15 @@ closure DynaTable(dyna, tablename, local table) {
     //      set:        [`(attribute, value)]   // set attributes to values
     //      sum:        [`(attribute, value)]   // attributes += values
     //      diff:       [`(attribute, value)]   // attributes -= values
+    //      add:        [`(attribute, value)]   // ADD(attributes, values) -- attrib need not exist
     //      remove:     [attribute]             // remove attributes from the record
     //      return:     "all_old" | "all_new" | "updated_old" | "updated_new"
     //                                          // return the record as chosen, otherwise { }
     //  }
     // The result is a standard result tuple `(error, record).
         
-    table.updateRecord = closure updateRecord(hashValue, rangeValue, options, local error, result, params, actions, pending) {
+    table.updateRecord = closure updateRecord(hashValue, rangeValue, options,
+        local error, params, actions, pending) {
         if preflightError(this)
             return
         params = {
@@ -752,13 +754,10 @@ closure DynaTable(dyna, tablename, local table) {
         params.Key = makeDynKey(list(hashValue, rangeValue))
         if options.condition {
             `(error) = dyna.conv.createKeyExpression(params, {
-                KeyConditionExpression: {
-                    key: table.hashKey
-                    "=": hashValue
-                }
+                ConditionExpression: options.condition
             })
             if error
-                return (list(Error("table.updateRecord:", error)))
+                return (list(Error("table.updateRecord condition:", error)))
         }
         dyna.conv.createUpdateExpression(params, options)
         if options.return {
@@ -795,7 +794,8 @@ closure DynaTable(dyna, tablename, local table) {
     //  }
  
         
-    table.deleteRecord = closure deleteRecord(hashValue, rangeValue, options, local result, params, pending) {
+    table.deleteRecord = closure deleteRecord(hashValue, rangeValue, options,
+        local params, pending) {
         if preflightError(this)
             return
         params = {
@@ -804,13 +804,10 @@ closure DynaTable(dyna, tablename, local table) {
         params.Key = makeDynKey(list(hashValue, rangeValue))
         if options.condition {
             `(error) = dyna.conv.createKeyExpression(params, {
-                KeyConditionExpression: {
-                    key: table.hashKey
-                    "=": hashValue
-                }
+                ConditionExpression: options.condition
             })
             if error
-                return (list(Error("table.deleteRecord:", error)))
+                return (list(Error("table.deleteRecord condition:", error)))
         }
         if options.return {
             params.ReturnValues = {
@@ -871,7 +868,7 @@ closure DynaTable(dyna, tablename, local table) {
     //
 
     table.queryRecords = closure queryRecords(hashValue, options
-        local error, result, params, hashKey, op, expr, output, error)
+        local error, params, hashKey, op, expr, output, error)
     {
         if preflightError(this)
             return
@@ -940,7 +937,7 @@ closure DynaTable(dyna, tablename, local table) {
     //
 
     table.scanRecords = closure scanRecords(options
-        local result, params, op, expr, output, error)
+        local params, op, expr, output, error)
     {
         if preflightError(this)
             return
@@ -1044,9 +1041,9 @@ closure DynamoDB(local dyna) {
         dynexBatchGetRecords(dyna, request, options)
     }
     
-    // dynexBatchWriteRecords
+    // batchWriteRecords
     //
-    dyna.batchWriteRecords = function batchWriteRecords(request, options) {
+    dyna.batchWriteRecords = function loadBatchWriteRecords(request, options) {
         require("./aws_dynextra.nlg")
         dyna.batchWriteRecords = function bwr(request, options) {
             dynexBatchWriteRecords(dyna, request, options)
@@ -1054,7 +1051,7 @@ closure DynamoDB(local dyna) {
         dynexBatchWriteRecords(dyna, request, options)
     }
     
-    // dynexTransactGetRecords
+    // transactGetRecords
     //
     dyna.transactGetRecords = function loadTransactGetRecords(request, options) {
         require("./aws_dynextra.nlg")
@@ -1062,6 +1059,16 @@ closure DynamoDB(local dyna) {
             dynexTransactGetRecords(dyna, request, options)
         }
         dynexTransactGetRecords(dyna, request, options)
+    }
+
+    // transactWriteRecords
+    //
+    dyna.transactWriteRecords = function loadTransactWriteRecords(request, options) {
+        require("./aws_dynextra.nlg")
+        dyna.transactWriteRecords = function tgr(request, options) {
+            dynexTransactWriteRecords(dyna, request, options)
+        }
+        dynexTransactWriteRecords(dyna, request, options)
     }
 
     // finis

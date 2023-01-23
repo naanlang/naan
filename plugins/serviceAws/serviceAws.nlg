@@ -27,7 +27,7 @@ function sawsInit(local manifest) {
         require("./aws_utils.nlg")
         function sawsPostload() {
             if js.g
-                awsSDK = js.r(JSpath.join(js.d, module.locpath, "./aws/aws-sdk-node.min.js"))
+                awsSDK = js.r(JSpath.resolve(js.d, module.locpath, "aws/aws-sdk-node.min.js"))
             else
                 awsSDK = JsLoadScript(JSpath.join(module.locpath, "./aws/aws-sdk.min.js"), "awsSdk")
             module.exports.awsSDK = awsSDK

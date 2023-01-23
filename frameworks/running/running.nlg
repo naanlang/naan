@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
@@ -48,17 +48,26 @@ function baseproc(procdef) {
 /*
  * pathmatch
  *
- *     Given a parent symbol and a tuple of child procedure symbols within it, return the child 
- * procedure named by the path in the tuple.
+ *     Given a parent symbol and a tuple of child procedures within it, return the child procedure
+ * named by the path in the tuple. Each element in the child procedures is either a symbol == to the
+ * procedure or, in the case of lambdas, a tuple comprising the procedure symbol and an integer
+ * specifying the nth matching child. This is necessary because a procedure can have any number of
+ * children named lambda, and we need to pick the right ones even though we don't have identical
+ * symbols.
  *
  */
 
-function pathmatch(parent, path, local segment) {
+function pathmatch(parent, path, local segment, nth, child) {
     if empty(path)
         return (parent)
-    segment = tostring(pop(path))
+    segment = pop(path)
+    if tuple(segment) {                                                     // select nth instance of matching symbol
+        nth = segment.1
+        segment = segment.0
+    } else
+        nth = 0
     for child in parent@\.children
-        if tostring(child) == segment
+        if child == segment && nth-- == 0
             return (pathmatch(child, path))
     false
 };
@@ -68,14 +77,27 @@ function pathmatch(parent, path, local segment) {
  * procpath
  *
  *     Return a tuple of parent prcoedure symbols for the specified child procedure. Note that this
- * path includes the parent but pathmatch above requires the parent as a separate argument.
+ * path includes the parent but pathmatch above requires the parent as a separate argument. As noted
+ * above, the segments of the path are either a procedure symbol, or a tuple of symbol and integer.
  *
  */
 
-function procpath(procdef, local path) {
+function procpath(procdef, local path, segment, parent, peers, nth, peer) {
     loop {
-        push(procdef.1, path)
-        parent = procdef.1@\.parent
+        segment = procdef.1
+        parent = segment@\.parent
+        if segment == lambda && parent {                                    // lambdas all have same name
+            peers = parent@\.children
+            nth = 0
+            for peer in peers {
+                if peer === segment
+                    break
+                if peer == segment
+                    ++nth
+            }
+            push(list(segment, nth), path)                                  // we are the nth of the matching ones
+        } else
+            push(segment, path)
         if !parent
             break
         procdef = parent.proc

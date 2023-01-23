@@ -23,6 +23,7 @@
  *      contentType:    <string>                // sets Content-Type header, otherwise auto-determined
  *      range:          <string>                // sets range header
  *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
+ *      debug:          <boolean>               // log errors and status results
  *  }
  *
  */
@@ -52,25 +53,27 @@ closure HttpsApiRequest(url, options, local urlq, reqOptions, putdata, item, pen
             if error
                 return (list(Error("HttpsApiRequest encode:", url)))
         }
-        fetchOptions.body = putdata
+        reqOptions.body = putdata
     }
     if array(options.headers)
         for item in options.headers
             reqOptions.headers[item.0] = item.1
     pending = new(nonce)
     chunks = []
-    request = nodeHttps.request(url, reqOptions, function (response) {
-        if response.statusCode < 200 || response.statusCode >= 300 {
-            pending.signal(list(Error("HttpsApiRequest statusCode:", url, response.statusCode, {
-                status: response.statusCode
-            })))
-            return
-        }
+    request = nodeHttps.request(url, reqOptions, closure (response) {
         response.on("data", function (chunk) {
             chunks.push(chunk)
         })
         response.on("end", function (local content, error) {
-            content = Buffer.concat(chunks)
+            content = js.g.Buffer.concat(chunks)
+            if response.statusCode < 200 || response.statusCode >= 300 {
+                if options.debug
+                    debuglog("HttpsApiRequest status:", url, response.statusCode, "message:", content)
+                pending.signal(list(Error("HttpsApiRequest statusCode:", url, response.statusCode, {
+                    status: response.statusCode
+                })))
+                return
+            }
             if response.complete {
                 if response.headers["content-type"].startsWith("application/json") {
                     `(error, content) = JsonParse(content.toString())
@@ -86,16 +89,18 @@ closure HttpsApiRequest(url, options, local urlq, reqOptions, putdata, item, pen
                 }
             }
             else
-                error = Error("HttpsApiRequest terminated prematurely:", url)
+                error = Error("HttpsApiRequest terminated prematurely:", url, response.statusCode)
             pending.signal(list(error, content))
         })
     })
-    request.on("error", function(error) {
+    request.on("error", function hre(error) {
+        if options.debug
+            debuglog("HttpsApiRequest error:", url, "error:", error)
         error = Error("HttpsApiRequest failed:", url, error)
         pending.signal(list(error))
     })
-    if data
-        request.write(data)
+    if putdata
+        request.write(putdata)
     request.end()
     pending.wait()
 };
@@ -109,7 +114,7 @@ closure HttpsApiRequest(url, options, local urlq, reqOptions, putdata, item, pen
  */
 
 function https_nodeInit(local manifest) {
-    manifest = `(HttpsGetJson, HttpsPutJson, https_nodeInit)
+    manifest = `(HttpsApiRequest, https_nodeInit)
 
     Naan.module.build(module.id, "https_request", function(modobj, compobj) {
         require("./node.nlg")

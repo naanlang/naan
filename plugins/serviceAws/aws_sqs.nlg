@@ -1,0 +1,113 @@
+/*
+ * aws_sqs.nlg
+ * serviceAws
+ *
+ *     Access to SQS (Simple Queue Service) for AWS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2023 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * SqsMQ
+ *
+ *     SqsMQ, a container for holding the queue name and sending messages to it.
+ *
+ */
+
+closure SqsMQ(sqs, queueUrl, local sqsq) {
+    sqsq = new(object, this)
+
+    //
+    // sendMessage
+    //
+    sqsq.sendMessage = closure sendMessage(msgBody) {
+        sqs.sendMessage(queueUrl, msgBody)
+    }
+    
+    // finis
+    sqsq
+}
+
+
+/*
+ * SQS
+ *
+ *     SQS service functions.
+ *
+ */
+
+closure SQS(local sqs) {
+    sqs = new(object, this)
+
+    //
+    // login
+    //
+    sqs.login = closure login(creds, local params) {
+        if !awsSDK
+            return (list(Error("SQS.login: no AWS SDK available")))
+        params = {
+        }
+        if creds {
+            params.region = creds.region
+            params.credentials = {
+                accessKeyId:        creds.keyID
+                secretAccessKey:    creds.keySecret
+            }
+            if creds.sqs_endpoint
+                params.endpoint = creds.sqs_endpoint
+        }
+        sqs.aws = xnew(awsSDK.SQS, params)
+        `(false, { ok: true })
+    }
+    
+    //
+    // sendMessage
+    //
+    sqs.sendMessage = closure sendMessage(queueUrl, msgBody, local params, pending) {
+        debuglog("SQS.sendMessage:", awsSDK, sqs.aws, sqs.aws.sendMessage)
+        params = {
+            MessageBody: msgBody
+            QueueUrl: queueUrl
+        }
+        pending = new(nonce)
+        sqs.aws.sendMessage(params, function(error, data) {
+            if error
+                ErrorDebuglog("aws.sendMessage failed", error)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+    
+    //
+    // mq
+    //
+    sqs.mq = function(queueUrl) {
+        SqsMQ(sqs, queueUrl)
+    }
+
+    // finis
+    sqs
+}
+
+
+/*
+ * sqsInit
+ *
+ *     Initialize the SQS module.
+ *
+ */
+
+function sqsInit(local manifest) {
+    manifest = `(SqsMQ, SQS, sqsInit)
+
+    Naan.module.build(module.id, "aws_sqs", function(modobj, compobj) {
+        require("./serviceAws.nlg")
+        compobj.manifest = manifest
+        modobj.exports.SQS = SQS
+    })
+
+} ();

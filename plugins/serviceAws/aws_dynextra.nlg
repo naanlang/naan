@@ -228,7 +228,6 @@ closure dynexBatchWriteRecords(dyna, request,
 };
 
 
-
 /*
  * dynexTransactGetRecords
  *
@@ -257,10 +256,10 @@ closure dynexTransactGetRecords(dyna, request,
     for titem in request {                                                  // preflight all tables
         tname = titem.table.name
         if index[tname]
-            return (Error("DynaTable.batchGetRecords: duplicate table in request:", tname))
+            return (Error("DynaTable.transactGetRecords: duplicate table in request:", tname))
         `(error) = titem.table.info()
         if error
-            return (Error("DynaTable.batchGetRecords: table", tname, ":", error))
+            return (Error("DynaTable.transactGetRecords: table", tname, ":", error))
         titem.data = []
         index[tname] = titem
     }
@@ -272,7 +271,7 @@ closure dynexTransactGetRecords(dyna, request,
             params.TransactItems.push({
                 Get: {
                     TableName: tname
-                    Key: makeDynKey(titem.keys.shift())
+                    Key: titem.table.makeDynKey(titem.keys.shift())
                 }
             })
         }
@@ -298,6 +297,111 @@ closure dynexTransactGetRecords(dyna, request,
 
 
 /*
+ * dynexTransactWriteRecords
+ *
+ * column positioning:                          //                          //                      !
+ * Write records to one or more tables using arrays of keys as a single transaction. The result is an
+ * error if anything failed or generic success if it worked. The request layout is as follows. Note
+ * that unlike the other dynex* calls, each table/key/operation item is separately specified.
+ *
+ *  [
+ *      {
+ *          table:  <DynaTable object>          // table to act upon
+ *          key:    <hash-range tuple>
+ *          put:    {
+ *              condition:  <range-expression>  // conditional expression
+ *              item:       <record-to-put>
+ *          }
+ *          update: {
+ *              condition:  <range-expression>      // conditional expression
+ *              set:        [`(attribute, value)]   // set attributes to values
+ *              sum:        [`(attribute, value)]   // attributes += values
+ *              diff:       [`(attribute, value)]   // attributes -= values
+ *              add:        [`(attribute, value)]   // ADD(attributes, values) -- attrib need not exist
+ *              remove:     [attribute]             // remove attributes from the record
+ *          }
+ *          delete: {
+ *              condition:  <range-expression>  // conditional expression
+ *          }
+ *          check:  {
+ *              condition:  <range-expression>  // conditional expression
+ *              return:     "all_old"           // optionally return record if condition fails
+ *          }
+ *      }
+ *      { <next-item> }
+ *  ]
+ * This returns a standard result tuple `(error, result). An error is only reported if we are 
+ * unable to complete all operations.
+ *
+ */
+
+closure dynexTransactWriteRecords(dyna, request,
+    local index, titem, tname, error, params, opset, spec, op, pending, response) {
+    if !dyna.aws
+        return (list(Error("DynaTable.transactWriteRecords: not logged into AWS")))
+    request = new(request)                                                  // allow local modifications
+    index = { }
+    for titem in request {                                                  // preflight all tables
+        tname = titem.table.name
+        if !index[tname] {
+            `(error) = titem.table.info()
+            if error
+                return (Error("DynaTable.transactWriteRecords: table", tname, ":", error))
+            index[tname] = titem
+        }
+    }
+    params = {
+        TransactItems: []
+    }
+    for titem in request {
+        opset = {
+            TableName: titem.table.name
+            Key: titem.table.makeDynKey(titem.key)
+        }
+        if titem.check {
+            spec = titem.check
+            op = `ConditionCheck
+            if spec.return
+                opset.ReturnValues = "ALL_OLD"
+        } else if titem.put {
+            spec = titem.put
+            op = `Put
+            opset.Item = dyna.conv.recordNaanToDyn(spec.item)
+            opset.Key = undefined                                           // key must be in item
+        } else if titem.update {
+            spec = titem.update
+            op = `Update
+            dyna.conv.createUpdateExpression(opset, spec)
+        } else if titem.delete {
+            spec = titem.delete
+            op = `Delete
+        }
+        if spec.condition {
+            `(error) = dyna.conv.createKeyExpression(opset, {
+                ConditionExpression: spec.condition
+            })
+            if error
+                return (list(Error("DynaTable.transactWriteRecords condition:", error)))
+        }
+        titem = { }
+        titem[op] = opset
+        params.TransactItems.push(titem)
+    }
+    pending = new(nonce)
+    dyna.aws.transactWriteItems(params, function(err, data) {
+        if err
+            debuglog("aws.transactWriteItems failed", err)
+        pending.signal(list(err, data))
+    })
+    `(error, response) = pending.wait()
+    if error
+        list(error)
+    else
+        list(false, response)
+};
+
+
+/*
  * dynexInit
  *
  *     Initialize the component.
@@ -305,7 +409,8 @@ closure dynexTransactGetRecords(dyna, request,
  */
 
 function dynexInit(local manifest) {
-    manifest = `(dynexBatchGetRecords, dynexBatchWriteRecords, dynexTransactGetRecords, dynexInit)
+    manifest = `(dynexBatchGetRecords, dynexBatchWriteRecords, dynexTransactGetRecords,
+        dynexTransactWriteRecords, dynexInit)
 
     Naan.module.build(module.id, "aws_dynextra", function(modobj, compobj) {
         compobj.manifest = manifest

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2023 by Richard C. Zulch
  *
  */
 
@@ -70,6 +70,29 @@ closure FileDownload(file, progress, local error, blob, sizez, url, link) {
 
 
 /*
+ * Platform
+ *
+ *     Return a string identifying the platform our browser is running on, or false if unknown.
+ *
+ */
+
+function Platform(local agent, patterns, key, rx) {
+    agent = window.navigator.userAgent.toLowerCase()
+    patterns = {
+        macos: RegExp("macintosh|macintel|macppc|mac68k|macos")
+        windows: RegExp("win32|win64|windows|wince")
+        ios: RegExp("iphone|ipad|ipod")
+        android: RegExp("android")
+        linux: RegExp("linux")
+    }
+    for `(key, rx) in patterns
+        if rx.test(agent)
+            return (key)
+    false
+};
+
+
+/*
  * brorInit
  *
  *     Initialize the browser module.
@@ -78,13 +101,14 @@ closure FileDownload(file, progress, local error, blob, sizez, url, link) {
  */
 
 function brorInit(local manifest) {
-    manifest = `(FileReader, FileDownload, brorInit)
+    manifest = `(FileReader, FileDownload, Platform, brorInit)
 
     Naan.module.build(module.id, "browser", function(modobj, compobj) {
         require("../common").LiveImport()
         compobj.manifest = manifest
         modobj.exports.FileReader = FileReader
         modobj.exports.FileDownload = FileDownload
+        modobj.exports.Platform = Platform
 
         function brorReload() {
             window = js.w

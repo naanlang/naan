@@ -76,10 +76,15 @@ closure Gitter(fs, local gitt) {
     // Compute the bridge path to an absolute repopath (which can point inside a repo) from the
     // phyiscal repo root. If these are the same, or an error occurs, then the result is "".
     //
-    function bridgePath(repopath, local top) {
-        top = repoRoot(repopath).1
-        if top && repopath.startsWith(top) && repopath.length > top.length
-           top = repopath.slice(top.length+1).concat(fs.path.sep)           // move leading "/" of bridge path to trailing
+    function bridgePath(repopath, local above) {
+		above = repoRoot(repopath).1
+		if above
+			above = fs.path.normalize(above)
+        if above && repopath.startsWith(above) && repopath.length > above.length {
+            above = fs.path.relative(above, repopath).split(fs.path.sep).join("/")
+            if above != ""
+                above = above.concat("/")
+        }
         else
             ""                                                              // we are looking at the root, or an error
     }

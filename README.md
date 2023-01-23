@@ -4,8 +4,8 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     Naan for NPM version 1.0.7+2
-     Copyright (c) 2017-2022 Zulch Laboratories, Inc.
+     **Naan for NPM** version **1.0.8+1**
+     Copyright (c) 2017-2023 Zulch Laboratories, Inc.
 
 #### Features
 - **Naan** runs in NodeJS and web browsers using JavaScript
@@ -51,6 +51,24 @@ It can also evaluate an expression or execute a source file.
 Naan prints the results of evaluating each expression with the REPL, but not
 by default with an expression or source file. The interactive flag overrides
 this to print the result of each expression in all cases.
+
+##### Example shell commands
+
+Define a function, call it, and return the length of the base-10 result. First recursive and then tail recursive:
+
+```
+% naan -e "function fact(x){if x>0 x*fact(x-1) else 1}(1000).length"
+2568
+% naan -e "function factr(x,a){if x>0 factr(x-1,x*a) else a}(10000,1).length"
+35660
+```
+Fetch your public IP from a website (NodeJS version 18 or later):
+
+```
+% naan -e "new(await(await(js.g.fetch('http://ip.jsontest.com/')).1.json()).1)"
+{ ip: "64.201.122.183" }
+```
+
 
 ##### Shell scripting
 

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2021 by Richard C. Zulch
+ * Copyright (c) 2017-2023 by Richard C. Zulch
  *
  */
 
@@ -45,6 +45,16 @@ RegisterTestCategory("strings", [
     [ "typeof(c);", "symbol" ],
     [ "explode(c);>", "(\"a\" \"b\" \"c\" \"d\" \"e\" \"f\")" ],
     [ "c=compress(\"b\", 123);", "b123" ],
+
+
+    //
+    // template strings
+    //
+
+    [ "'$${4+3}';", '"7"' ],                                                // these have an extra $escape
+    [ "'$$${4+3}';", '"$${4+3}"' ],
+    [ "'a$${4+3}b';", '"a7b"' ],
+    [ "'$${}';", '' ],
 
 
     //

@@ -63,6 +63,7 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
                 pathmod = JSpath.win32
             else
                 pathmod = JSpath.posix
+            view.path.sep = pathmod.sep
             false
         }
     }

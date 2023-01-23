@@ -567,7 +567,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     // info for each file as well.
 
     files.dirList = closure dirList(path, options, callback, local error, localpath, output, nodelist, file) {
-        if path == "" && js.g.process.platform == "win32" && rootpath == "\\"
+        if js.g.process.platform == "win32" && rootpath == "\\" && (path == "" || path == "\\")
             return (files.winDrives(callback))                              // top level is drive letters in Windows
         if !callback
             return (syncAdapter(dirList, path, options))
@@ -867,31 +867,37 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         if !callback
             return (syncAdapter(reveal, path))
 
-        function addpath(path, local error, localpath) {
-            `(error, localpath) = localPath(path)
-            if error
-                errors.push(error)
-            else
-                pathargs.push("file://localhost".concat(localpath))
-        }
-    
-        errors = []
-        pathargs = ["-R", "--"]                                             // reveal, then stop using '-' for ags
-        if array(path)
-            for item in path
-                addpath(item)
-        else
-            addpath(path)
-        nodecp.execFile("open",
-            pathargs,                                                       // command-line options
-            { },                                                            // execution options
-            function(err, stdout, stderr) {
-                if err
-                    callback(Error("open failed", err, stderr))
-                else
-                    callback(false, errors)
-            }
-        )
+		if js.g.process.platform == "win32" {                               // ### windows only allows one path
+			nodecp.exec('explorer.exe /select,"'.concat(path, '"'), function(err, stdout, stderr) {
+			    callback(false, { ok: true })                               // reports failure even if it works
+			})
+		} else {
+			function addpath(path, local error, localpath) {
+				`(error, localpath) = localPath(path)
+				if error
+					errors.push(error)
+				else
+					pathargs.push("file://localhost".concat(localpath))
+			}
+
+			errors = []
+			pathargs = ["-R", "--"]                                         // reveal, then stop using '-' for ags
+			if array(path)
+				for item in path
+					addpath(item)
+			else
+				addpath(path)
+			nodecp.execFile("open",
+				pathargs,                                                   // command-line options
+				{ },                                                        // execution options
+				function(err, stdout, stderr) {
+					if err
+						callback(Error("open failed", err, stderr))
+					else
+						callback(false, errors)
+				}
+			)
+		}
     }
 
     //

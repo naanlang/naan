@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2018-2021 by Richard C. Zulch
+ * Copyright (c) 2018-2023 by Richard C. Zulch
  *
  */
 
@@ -63,7 +63,7 @@ RegisterTestCategory("Lingo parse", [
     [ "4&&3;", { exprs: "(&& 4 3)" } ],
     [ "4\n&&3;", { exprs: "(&& 4 3)" } ],
     [ "4&&\n3;", { exprs: "(&& 4 3)" } ],
-    [ "function test0(x, y) { \n x \n y = 3 \n };", { exprs: "(defproc function test0 (x y) x (= y 3))" } ],
+    [ "function test0(x, y) { \n y = 3\n x  \n };", { exprs: "(defproc function test0 (x y) (= y 3) x)" } ],
 
     //
     // Procedure types
@@ -297,8 +297,8 @@ RegisterTestCategory("Lingo parse", [
         { exprs: "(defproc function test2 (x) (loop false ((> x 3) (print \"done\")) (printline \"loop \" x) (= x (+ x 1))))",
         text: "==> redefined: test2" } ],
     
-    [ "function test2(x) { loop { if x > 3 print(\"done\"), break, printline(\"loop \", x), x = x+1 } };",
-        { exprs: "(defproc function test2 (x) (loop false (((> x 3) (print \"done\"))) (break) (printline \"loop \" x) (= x (+ x 1))))",
+    [ "function test2(x) { loop { if x > 3 print(\"done\"), break } };",
+        { exprs: "(defproc function test2 (x) (loop false (((> x 3) (print \"done\"))) (break)))",
         text: "==> redefined: test2" } ],
     
     [ "function test2(x) { loop { if x > 3 if x > 2 { print(\"done\"), break }, printline(\"loop \", x), x = x+1 } };",
@@ -313,8 +313,8 @@ RegisterTestCategory("Lingo parse", [
         { exprs: "(defproc function test2 (x) (loop false (((> x 3) (((> x 2) (print \"done\"))) (break))) (printline \"loop \" x) (= x (+ x 1))))",
         text: "==> redefined: test2" } ],
     
-    [ "function test2(x) { loop { if x <= 3 print(\" \") else break, printline(\"loop \", x), x = x+1 } };",
-        { exprs: "(defproc function test2 (x) (loop false (((<= x 3) (print \" \")) (break)) (printline \"loop \" x) (= x (+ x 1))))",
+    [ "function test2(x) { loop { if x <= 3 print(\" \") else break } };",
+        { exprs: "(defproc function test2 (x) (loop false (((<= x 3) (print \" \")) (break))))",
         text: "==> redefined: test2" } ],
     
     [ "function test2(x) { loop { if x > 3 { if x > 2 { print(\"done\"), break }, print(\" \")} , printline(\"loop \", x), x = x+1 } };",
@@ -346,12 +346,12 @@ RegisterTestCategory("Lingo parse", [
     [ "function(x) { loop { if x 2 else if y 3 } };",
         { exprs: "(function lambda (x) (loop false (((identity x) 2) ((identity y) 3))))" } ],
 
-    [ "function() { if 1 { 2, loop { if 3 4 }, 5 } };",
-        { exprs: "(function lambda false ((identity 1) 2 (loop false (((identity 3) 4))) 5))" } ],
-    [ "function() { if 1 { 2, loop { if 3 4 }, 5 } };",
+    [ "function() { if 1 { f(2), loop { if 3 4 }, 5 } };",
+        { exprs: "(function lambda false ((identity 1) (f 2) (loop false (((identity 3) 4))) 5))" } ],
+    [ "function() { if 1 { f(2), loop { if 3 4 }, 5 } };",
         "function () {\n"
         "    if 1 {\n"
-        "        2\n"
+        "        (f, 2)\n"
         "        loop\n"
         "            if 3\n"
         "                4\n"
@@ -421,11 +421,11 @@ RegisterTestCategory("Lingo parse", [
         
     [ "return;", { exprs: "(return)" } ],
     [ "return (777);", { exprs: "(return 777)" } ],
-    [ "function test4() { loop :dumb { if 1 < 2 { 3, break :dumb }, 4 }};",
-        { exprs: "(defproc function test4 false (loop dumb (((< 1 2) 3 (break dumb))) 4))",
+    [ "function test4() { loop :dumb { if 1 < 2 { f(3), break :dumb }, 4 }};",
+        { exprs: "(defproc function test4 false (loop dumb (((< 1 2) (f 3) (break dumb))) 4))",
         text: "==> redefined: test4" } ],
-    [ "function test4() { loop :smart { if 1 < 2 { 3, continue :smart }, 4 }};",
-        { exprs: "(defproc function test4 false (loop smart (((< 1 2) 3 (continue smart))) 4))",
+    [ "function test4() { loop :smart { if 1 < 2 { f(3), continue :smart }, 4 }};",
+        { exprs: "(defproc function test4 false (loop smart (((< 1 2) (f 3) (continue smart))) 4))",
         text: "==> redefined: test4" } ],
 
     //
@@ -497,4 +497,33 @@ RegisterTestCategory("Lingo parse", [
         "    else {\n"
         "        { a: 3 } }\n"                                              // need braces around dictionary
         "}" ],
+
+    //
+    // semantic validity
+    //
+
+    [ "function(x) { 3, x };",
+        { errors: "ignored atom in body at (1, 15) found 3" } ],
+    [ "function(x x) { x * x };",
+        { errors: "duplicate parameter at (1, 12) found x" } ],
+    [ "function(3) { 33 };",
+        { errors: "invalid parameter at (1, 11) found 3" } ],
+    [ "global(test);",
+        { errors: "global forbidden outside of a procedure at (1, 1)" } ],
+    [ "function(a) { b * a };",
+        { text: "" } ],
+    [ "function(a) { global(b), b * a };",
+        { text: "" } ],
+    [ "function&(a) { global(b), b * a };",
+        { errors: "global forbidden in function& and let& at (1, 16)" } ],
+    [ "let&(a) { global(b), b * a };",
+        { errors: "global forbidden in function& and let& at (1, 11)" } ],
+    [ "function(a) { global(b), a.c };",
+        { text: "" } ],
+    [ "function(a) { global(b), c.a };",
+        { errors: "undeclared global at (1, 26) found c" } ],
+    [ "function(a) { global(b), c * a };",
+        { errors: "undeclared global at (1, 26) found c" } ],
 ]);
+
+

@@ -311,11 +311,73 @@ exports.NaanControllerWeb = function() {
     this.VsiteRefresh = function VsiteRefresh(url_origin) {
         if (vsiteName && window.location.href.startsWith(url_origin)) {
             window.location.reload();                                       // we have changed underneath
+            window.scroll(0,0);                                             // Chrome 106 had flood pants 🤓
             return (true);
         }
         return (false);
     };
 
+    //==========================================================================
+    // Browser Console Terminal
+    //--------------------------------------------------------------------------
+    
+    // Commands:
+    //      Naanlang.debug(<text>)          -- command line text entry
+    //      Naanlang.int()                  -- interrupt and enter debugger
+    //      Naanlang.detach()               -- close the console terminal
+
+    var conDebTerm;
+
+    //
+    // ConsoleDebugTerminal
+    //
+    function ConsoleDebugTerminal() {
+        var termSelf = this;
+        //
+        // OnMessageOut
+        //
+        this.OnMessage = function OnMessage(msg) {
+            if (msg.id == "debugtext")
+                console.log("dbug-" + msg.level + " " + msg.text);
+            else if (msg.id == "textout")
+                console.log(msg.text);
+        };
+        //
+        // cmd
+        //
+        this.cmd = function cmd(keys) {
+            keys = keys.trim();
+            contSelf.Return(keys + "\n", termSelf);
+            return (keys);
+        };
+        //
+        // int
+        //
+        this.int = function int() {
+            contSelf.Interrupt();
+        };
+    }
+    
+    //
+    // debug
+    //
+    function debug(text) {
+        if (!conDebTerm) {
+            conDebTerm = new ConsoleDebugTerminal();
+            contSelf.Attach(conDebTerm);
+        }
+        exports.debug = conDebTerm.cmd;
+        exports.int = conDebTerm.int;
+        exports.detach = function() {
+            contSelf.Detach(conDebTerm);
+            exports.debug = debug;
+            exports.int = undefined;
+            exports.detach = undefined;
+            conDebTerm = false;
+        };
+        return (conDebTerm.cmd(text));
+    }
+    exports.debug = debug;
 
     //==========================================================================
     // Clone Debug Interface
@@ -528,27 +590,34 @@ exports.NaanControllerWeb = function() {
     }
         
     function virtualOpen() {
-        vsiteName = window.document.title;                                  // consistent name at open and close
-        if (window.opener && window.opener.Naanlang)
-            window.opener.Naanlang.naancon.DispatchMessage({
-                op: "VsiteOpen",
-                name: vsiteName,
-                naancont: contSelf,
-                title: vsiteName + " $Version$"
-            });
+        try {
+            if (window.opener && window.opener.Naanlang) {
+                vsiteName = window.document.title;                          // consistent name at open and close
+                window.opener.Naanlang.naancon.DispatchMessage({
+                    op: "VsiteOpen",
+                    name: vsiteName,
+                    naancont: contSelf,
+                    title: vsiteName + " $Version$"
+                });
+            }
+        } catch (e) {
+        }
     }
     
     function virtualClose() {
-        if (window.opener && window.opener.Naanlang) {
-            window.opener.Naanlang.naancon.DispatchMessage({
-                op: "VsiteClose",
-                name: vsiteName,
-                naancont: contSelf,
-                title: vsiteName + " $Version$"
-            });
-            vsiteName = false;                                              // window is going away
-            termTextOut("\x1b[90m\x1b[3m".concat("\nwindow closed", "\x1b[0m\n"));
+        try {
+            if (window.opener && window.opener.Naanlang) {
+                window.opener.Naanlang.naancon.DispatchMessage({
+                    op: "VsiteClose",
+                    name: vsiteName,
+                    naancont: contSelf,
+                    title: vsiteName + " $Version$"
+                });
+                termTextOut("\x1b[90m\x1b[3m".concat("\nwindow closed", "\x1b[0m\n"));
+            }
+        } catch (e) {
         }
+        vsiteName = false;                                                  // window is going away
     }
 
     /*jshint sub:true */

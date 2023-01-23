@@ -248,8 +248,8 @@ closure MakePSMutil(fs, local util) {
     //      erase:      <boolean>           -- remove extraneous files in destination folders
     //      force:      <boolean>           -- copy files even if older (default is only copy if new/newer)
     //      follow:     <boolean>           -- follow links instead of treating them as files
-    //      preserve:   <boolean>           -- preserve file info where possible
-    //                                         (e.g. mtime/atime/mode/uid/gid on NodeJS)
+    //      idmode:     <boolean>           -- preserve id/mode where possible
+    //      times:      <boolean>           -- preserve time where possible
     // }
     //
     // Limitations:
@@ -336,7 +336,8 @@ closure MakePSMutil(fs, local util) {
         //
         // Pass 3 - copy files and links
         //
-        asyncArray(copies, 10, closure cpfiles(entry, index, elements, local error, data, instat, outstat) {
+        asyncArray(copies, 10, closure cpfiles(entry, index, elements, 
+            local error, data, dest, instat, outstat) {
             `(error, instat) = fs.info(entry.source, fsopt)
             if !error {
                 `(error, outstat) = outfs.info(entry.dest)
@@ -348,6 +349,13 @@ closure MakePSMutil(fs, local util) {
                     error = Error("deepcopy: can't overwrite", entry.dest)
                 else if instat.type == "symlink" && !options.follow {
                     `(error, data) = fs.readlink(entry.source)
+                    if !error {
+                        `(error, dest) = outfs.readlink(entry.dest)         // get destination to compare links
+                        if dest == data
+                            return                                          // symlink unchanged
+                        outfs.delete(entry.dest)
+                        error = false                                       // ignore any destination errors
+                    }
                     if !error
                         `(error, data) = outfs.symlink(data, entry.dest)
                 }
@@ -355,8 +363,16 @@ closure MakePSMutil(fs, local util) {
                     `(error, data) = fs.readFile(entry.source, { encoding: "binary"})
                     if !error
                         `(error, data) = outfs.writeFile(entry.dest, data, { encoding: "binary"})
-                    if !error && options.preserve
+                    if !error && (options.idmode || options.times) {
+                        if !options.idmode
+                            instat.mode = instat.uid = instat.gid = false
+                        if !options.times {
+                            instat.mtimeMs = instat.mtime = false
+                            instat.nodejs_stat.mtimeMs = instat.nodejs_stat.mtime = false
+                            instat.nodejs_stat.atimeMs = instat.nodejs_stat.atime = false
+                        }
                         `(error) = outfs.setInfo(entry.dest, instat)
+                    }
                 }
             }
             if error

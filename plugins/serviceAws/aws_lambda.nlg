@@ -46,10 +46,8 @@ closure Lambda(local lamb) {
             params.Qualifier = qualifier
         pending = new(nonce)
         lamb.aws.getFunction(params, function(error, data) {
-            if error {
-                lambdaError = error
-                debuglog("aws.getFunction failed", error)
-            }
+            if error
+                ErrorDebuglog("aws.getFunction failed", error)
             pending.signal(list(error, data))
         })
         pending.wait()
@@ -69,10 +67,8 @@ closure Lambda(local lamb) {
         }
         pending = new(nonce)
         lamb.aws.updateFunctionCode(params, function(error, data) {
-            if error {
-                lambdaError = error
-                debuglog("aws.updateFunctionCode failed", error)
-            }
+            if error
+                ErrorDebuglog("aws.updateFunctionCode failed", error)
             pending.signal(list(error, data))
         })
         pending.wait()

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2022 by Richard C. Zulch
+ * Copyright (c) 2020-2023 by Richard C. Zulch
  *
  */
 
@@ -93,6 +93,27 @@ function UUID(local rando, cc) {
             cc = bitand(rando[offset], 15)
         "0123456789abcdef".charAt(cc)
     })
+};
+
+
+/*
+ * VersionCheck
+ *
+ *     Check if the test version is new enough compared to the reference version. This returns false
+ * if the test version is out of date, or the difference between the build numbers otherwise, which
+ * is positive if the test is larger than the reference.
+ *
+ */
+
+function VersionCheck(testv, refv, local rxver, test, ref) {
+    rxver = RegExp("([0-9]+)[.]([0-9]+)[.]([0-9]+)-?[A-Za-z_]*[+]?([0-9]+)")
+    function numerify(x){ Number.parseInt(x) }
+    test = testv.match(rxver).map(numerify.proc)
+    ref = refv.match(rxver).map(numerify.proc)
+    if test.1 == ref.1 && test.2 == ref.2 && test.3 == ref.3
+        test.4 - ref.4                                                      // build number difference
+    else
+        false
 };
 
 
@@ -303,8 +324,8 @@ JSONparse = false;
 Uint8ArrayFromString = false;
 
 function comrInit(local manifest) {
-    manifest = `(EncodeQuery, ContentTypeFromFileExt, UUID, JsonParse, JsonStringify, JsLoadScript,
-        LoadComponentOnDemand, LiveExport, comrInit)
+    manifest = `(EncodeQuery, ContentTypeFromFileExt, UUID, VersionCheck, JsonParse, JsonStringify,
+        JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
 
     Naan.module.build(module.id, "common", closure(modobj, compobj) {
         compobj.manifest = manifest
@@ -477,12 +498,18 @@ function comrInit(local manifest) {
                 //
                 // binary to Base64
                 EncodeBase64 = function nodejsEncodeBase64(data) {
-                    wsg.Buffer.from(data, "binary").toString("base64")
+                    if data
+                        wsg.Buffer.from(data, "binary").toString("base64")
+                    else
+                        ""
                 }
                 //
                 // Base64 to binary
                 DecodeBase64 = function nodejsDecodeBase64(data) {
-                    wsg.Buffer.from(data, "base64").toString("binary")
+                    if data
+                        wsg.Buffer.from(data, "base64").toString("binary")
+                    else
+                        xnew(wsg.Buffer, "")                                // empty buffer
                 }
                 if !crypto
                     crypto = js.r("crypto")
@@ -535,6 +562,7 @@ function comrInit(local manifest) {
             modobj.exports.JSONparse = JSONparse
             modobj.exports.JsonStringify = JsonStringify
             modobj.exports.JsonParse = JsonParse
+            modobj.exports.VersionCheck = VersionCheck
             modobj.exports.Uint8ArrayFromString = Uint8ArrayFromString
             modobj.exports.EncodeBase64url = EncodeBase64url
             modobj.exports.DecodeBase64url = DecodeBase64url

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2022 by Richard C. Zulch
+ * Copyright (c) 2017-2023 by Richard C. Zulch
  *
  */
 
@@ -417,7 +417,7 @@ RegisterTestCategory("core", [
         "2 3 4 caught: done|cleanup|\"xo\"" ],
     [ "try { looper() } catch { if false { print(\"caught: \"), printline(exception), \"xo\" } } finally { printline(cleanup) };",
         { errors: "exception: done", text: "2 3 4 cleanup" } ],
-    [ "try { looper() } catch { if false { print(\"caught: \"), printline(exception), \"xo\" } } finally { throw(3), printline(cleanup) };",
+    [ "try { looper() } catch { if false { print(\"caught: \"), printline(exception), \"xo\" } } finally { throw(3) };",
         { errors: "exception: 3", text: "2 3 4" } ],
     [ "try { throw(blah) } catch { if true try { throw(needer) } catch { if true exception } };",
         "needer" ],

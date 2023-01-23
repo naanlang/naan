@@ -56,6 +56,7 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
             })
         } else if msg.id == "upgrade" {
             if serv.upgrade != msg.version {
+                debuglog("service worker upgrade:", serv.upgrade, "to", msg.version)
                 serv.upgrade = msg.version                                  // only report once
                 callback(false, {
                     message: "upgrade"
@@ -133,6 +134,12 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
             reg.addEventListener("updatefound", function() {
                 serv.sw = serv.reg.installing                               // worker version was updated
                 updateReg()
+            })
+            reg.addEventListener("statechange", function() {
+                debuglog("service worker state change:", serv.reg.state)
+            })
+            reg.addEventListener("controllerchange", function() {
+                debuglog("service worker controller change:", serv.upgrade)
             })
             result = makeResult(false, {
                 message: "opened"

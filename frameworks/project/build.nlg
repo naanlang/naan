@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2022 by Richard C. Zulch
+ * Copyright (c) 2019-2023 by Richard C. Zulch
  *
  */
 
@@ -47,6 +47,20 @@
  *      srcpath     - the source path in common to all sources
  *      destpath    - the destination path in common to all outputs
  *
+ * Special paths:
+ *      srcpath     - the Build object looks for all sources within the srcpath specified when it's
+ *                    instantiated. For example, the files in a group are located in the join of the
+ *                    paths: <srcpath> / <group.input> / <srcname.xx>.
+ *      destpath    - the Build object writes all output files within the destpath specified when
+ *                    it's instantiated. For example, the files output from a group are located in
+ *                    the join of the paths: <destpath> / <group.output> / <srcname.xx>. Note that
+ *                    group.input is used to locate the files, but is not part of the output.
+ *      @           - the @ character stands in for a persistent, temporary directory within the
+ *                    build folder that replaces srcpath or destpath. It can be used in fields that
+ *                    are otherwise absolute: group.input, group.output, and template paths. Build
+ *                    detects piplines formed from temporary files and processes them in order from
+ *                    beginning to end.
+ *
  * Templates:
  *           A dictionary where each key is a destfile as described above, and the data for the key
  *     is the path to a template file relative to srcpath. When a template file exists for multiple-
@@ -76,6 +90,7 @@
  *          licfile: <license file, path relative to srcpath>
  *          verfile: <version file, path relative to srcpath>
  *          buildno: <build number file, path relative to srcpath>
+ *          xvrfile: <external version file, path relative to srcpath>
  *          run: {
  *              "open": "Nide_LaunchMac.tool",
  *              "args": []
@@ -129,6 +144,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     build = new(object, this)
     build.srcpath = srcpath
     build.destpath = destpath
+    build.intpath = JSpath.join(destpath, "tmp")
     build.tasks = {                                                         // all tasks counter
         copy: 0,
         version: 0,
@@ -152,11 +168,16 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         build.verfilepath = JSpath.join(build.srcpath, rules.verfile)
     if rules.buildno
         build.buildnopath = JSpath.join(build.srcpath, rules.buildno)
+    if rules.xvrfile
+        build.xvrfilepath = JSpath.join(build.srcpath, rules.xvrfile)
     if rules.templates {                                                    // templates for catenates
         let (tpath, writepath) {
             build.tepaths = { }                                             // template for each catenate output
             for tpath in rules.templates {
-                writepath = JSpath.join(build.destpath, tpath)
+                if tpath.startsWith("@")
+                    writepath = JSpath.join(build.intpath, tpath.substring(1))
+                else
+                    writepath = JSpath.join(build.destpath, tpath)
                 build.tepaths[writepath] = JSpath.join(build.srcpath, rules.templates[tpath])
             }
             build.testats = { }
@@ -616,7 +637,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         }
 
         groups = new(build.groups)                                          // copy so we can append more groups as needed
-        sourcemax = groups.reduce(function(acc, group) { Math.max(acc, group.sources.length) }, 0)
+        sourcemax = 10000
         catenates = { }                                                     // catenate groups
         pending = new(nonce)
         pending.active = 0
@@ -635,11 +656,18 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
             groupVerStat, source, sdex) {
             ++pending.active
             future(function test1() {
-                if group.input
+                if group.input.startsWith("@") {                            // intermediate directory
+                    group.intSource = true
+                    indirpath = JSpath.join(build.intpath, group.input.substring(1))
+                }
+                else if group.input
                     indirpath = JSpath.join(build.srcpath, group.input)
                 else
                     indirpath = build.srcpath
-                outdirpath = JSpath.join(build.destpath, group.output)
+                if group.output.startsWith("@")
+                    outdirpath = JSpath.join(build.intpath, group.output.substring(1))
+                else
+                    outdirpath = JSpath.join(build.destpath, group.output)
                 destcheck = new(group.destcheck).reverse()                  // get next destination to check
                 groupVerStat = verfileStat
                 if group.depend_buildno {
@@ -655,11 +683,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                         else
                             outfile = JSpath.join(outdirpath, source)
                         fs.info(infile, false, function(error, instat, local listing, addgroup, file) {
-                            if error
-                                build.errorlist.push(error)
-                            else if instat.type != "directory"
-                                addEntry(infile, outfile, instat, sdex)     // add execution entry if needed
-                            else {                                          // add a new group for directory source
+                            if !error && instat.type == "directory" {
                                 `(error, listing) = fs.dirList(infile, { stat: true })
                                 if error
                                     build.errorlist.push(error)
@@ -681,6 +705,10 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                                     groups.push(addgroup)
                                 }
                             }
+                            else if !error || group.intSource
+                                addEntry(infile, outfile, instat, sdex)     // add execution entry
+                            else
+                                build.errorlist.push(error)
                             --pending.active
                             doMore()
                         })
@@ -692,11 +720,17 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
             // Add an entry to execution list if it's needed.
             //
             closure addEntry(infile, outfile, instat, sdex, local error, outstat, entry) {
+                if sdex >= sourcemax {
+                    build.errorlist.push(Error("Too many sources in one group:", groupno.group))
+                    return
+                }
                 entry = {
                     readpath: infile,
                     writepath: outfile
                 }
-                if group.input                                              // insource is the name within zip/cat
+                if group.input.startsWith("@")
+                    entry.insource = JSpath.join(group.input.substring(1), group.sources[sdex])
+                else if group.input                                         // insource is the name within zip/cat
                     entry.insource = JSpath.join(group.input, group.sources[sdex])
                 else
                     entry.insource = group.sources[sdex]
@@ -771,23 +805,24 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                 ++pending.active
                 if destcheck {                                              // destcheck is special target for determining if task needed
                     entry.destcheck = JSpath.join(outdirpath, destcheck.pop())
-                    fs.info(entry.destcheck, false, addIfOutOfDate)
+                    fs.info(entry.destcheck, false, addOne)
                 } else
-                    fs.info(outfile, false, addIfOutOfDate)
+                    fs.info(outfile, false, addOne)
                     
-                function addIfOutOfDate(error, outstat, local entryop) {
+                function addOne(error, outstat, local entryop) {
                     if error || toint(instat.mtimeMs) > toint(outstat.mtimeMs) {
+                        entry.outOfDate = true
                         catenates[entry.writepath] = true                   // this entire group needed
-                        build.filelist.push(entry)                          // destination is out of date
+                        build.filelist.push(entry) 
                         entryop = "make:"
                     } else if entry.catorder {
                         build.filelist.push(entry)                          // needed if any in group out of date
-                        entryop = "maybe-needed:"
+                        entryop = "cat-check:"
                     }
                     else
                         entryop = "up-to-date:"
                     if debugMake
-                        debuglog(entryop, entry.*, instat.mtimeMs, outstat.mtimeMs, entry.readpath, entry.writepath)
+                        debuglog(entryop, entry.readpath, entry.*, instat.mtimeMs, outstat.mtimeMs, entry.writepath)
                     --pending.active
                     doMore()
                 }
@@ -809,6 +844,32 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         pending.wait()
 
         //
+        // Cross-check inputs from intermediate files that will be built
+        //
+        
+        let (outint, entry) {
+            outint = {}
+            for entry in build.filelist
+                if entry.outOfDate && entry.writepath.startsWith(build.intpath) {
+                    outint[entry.writepath] = entry                         // at least one component out of date
+                    break
+                }
+            for entry in build.filelist
+                if outint[entry.writepath].catorder > entry.catorder
+                    outint[entry.writepath] = entry                         // find first component
+            for entry in build.filelist
+                if outint[entry.readpath] {
+                    entry.outOfDate = true
+                    catenates[entry.writepath] = true                       // this entire group needed
+                    entry.depends = outint[entry.readpath]
+                    if !entry.depends.done
+                        entry.depends.done = new(nonce)
+                    if debugMake
+                        debuglog("add-make:", entry.readpath, entry.*, entry.writepath)
+                }
+        } ()
+
+        //
         // Remove unneeded catenate entries and index the remainder
         //
 
@@ -820,10 +881,15 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                 else if catenates[entry.writepath] {
                     if !renumber[entry.writepath]
                         renumber[entry.writepath] = []
-                    renumber[entry.writepath].push(entry)                   // this catenate is needed
+                    if renumber[entry.writepath].indexOf(entry) < 0
+                        renumber[entry.writepath].push(entry)               // this catenate is needed
+                    entry.outOfDate = true                                  // this entry is needed
                     true
                 } else
                     false                                                   // this one is not
+            })
+            build.filelist = build.filelist.filter(function(entry) {
+                entry.outOfDate
             })
             for wpath in renumber {                                         // assign entries in catorder
                 renumber[wpath].sort(function(a,b) { a.catorder <=> b.catorder })
@@ -845,8 +911,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     // checked and any that have all the parts are written out. Catenates that don't have all their
     // parts are reported as an error in addition to the error that caused them to be incomplete.
     //
-    closure execute(local error, licFileDefs, buildno, verFileDefs, version, entries, pending, 
-            baddestpaths, catenates) {
+    closure execute(local error, licFileDefs, buildno, verFileDefs, xvrFileDefs,
+        entries, pending, baddestpaths, catenates) {
         if build.tasks.license > 0
             `(error, licFileDefs) = readSubstitutionFile(build.licfilepath)
         if build.tasks.version > 0 {
@@ -857,9 +923,15 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
             } else
                 build.buildno = buildno = toint(buildno.trim())
             build.buildno = buildno
-            `(error, verFileDefs) = readSubstitutionFile(build.verfilepath, {
-                BuildNumber: buildno
-            })
+            if build.xvrfilepath {
+                `(error, xvrFileDefs) = readSubstitutionFile(build.xvrfilepath)
+                if error
+                    build.errorlist.push(error)
+            }
+            if !xvrFileDefs
+                xvrFileDefs = { }
+            xvrFileDefs.BuildNumber = buildno
+            `(error, verFileDefs) = readSubstitutionFile(build.verfilepath, xvrFileDefs)
             build.version = verFileDefs["Version"]
             verFileDefs["CacheBuster"] = HashMD5(build.version.concat(Math.random()))
         }
@@ -889,6 +961,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         closure processOneFile(entry, local result, content, error) {
             ++pending.active
             future(function build1(local dirpath) {
+                if entry.depends
+                    entry.depends.done.wait()                               // wait for our precursor
                 dirpath = JSpath.dirname(entry.writepath)
                 if baddestpaths[dirpath]
                     { }                                                     // error already reported
@@ -904,7 +978,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                         erase: true                                         // not really needed
                         overwrite: true                                     // overwrite files
                         force: true                                         // ignore modify date
-                        preserve: true                                      // preserve attributes
+                        idmode: true                                        // preserve ids and mode
                     })
                     if error                                                // deepcopy returns a list of errors
                         error = error.0                                     // but we're only doing one item
@@ -936,10 +1010,20 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                             if !catenates[entry.writepath]
                                 catenates[entry.writepath] = new(Array(entry.catcount))
                             entry.content = content
-                            catenates[entry.writepath][entry.catindex] = entry }
-                        else
+                            catenates[entry.writepath][entry.catindex] = entry
+                            if catReady(entry.writepath) {
+                                `(error, result) = writeCatenate(entry.writepath)
+                                if error
+                                    build.errorlist.push(error)
+                                catenates[entry.writepath].0.done.signal(error)
+                            }
+                        }
+                        else {
                             `(error, result) = fs.writeFile(entry.writepath, content)
-                    }
+                            entry.done.signal(error)
+                        }
+                    } else
+                        entry.done.signal(error)
                 }
                 if error
                     build.errorlist.push(error)
@@ -960,52 +1044,76 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         if pending.remaining > 0
             pending.wait()                                                  // don't wait if nothing to do
 
+        // catReady
         //
-        // Write out any completed catenates
+        // Return true iff the catenate has all its elements.
+        //
+        function catReady(writepath, local entry) {
+            for entry in catenates[writepath]
+                if !entry.content
+                    return (false)
+            true
+        }
+
+        // writeCatenate
+        //
+        // Write out a catenate, returning a standard result tuple.
+        //
+        function writeCatenate(writepath,
+            local template, entry, content, catsub, dozip, docat, fsoptions, zipmap, error, result) {
+            template = build.templates[writepath]                       // optional in some cases ### should warn in others
+            catsub = { }
+            for entry in catenates[writepath] {                         // error check and substitution build
+                if !entry.content
+                    return (list(Error("Incomplete zip/cat:", writepath)))
+                catsub[entry.insource] = entry.content
+                if entry.zip
+                    dozip = true
+                if entry.catenate
+                    docat = true
+            }
+            if docat {                                                  // catenate the files
+                if dozip
+                    return (list(Error("Cannot combine zip/cat into:", writepath)))
+                if template {
+                    `(content, result) = applySubstitutions(template, catsub)
+                    if length(catsub) != result
+                        return (list(Error("Matched ", result, " of ", length(catsub),
+                            "substitutions in template:", build.tepaths[writepath])))
+                }
+                else
+                    content = catenates[writepath].map(function(entry){entry.content}).join("\n")
+                if dozip {
+                    zipmap = { }
+                    zipmap[JSpath.basename(writepath)] = content
+                    `(error, content) = zip(zipmap)                     // compress the catenated file
+                }
+            } else {
+                if template
+                    zipmap = applyZipTemplate(template, catsub)
+                else
+                    zipmap = trimZipPaths(catsub)
+                `(error, content) = zip(zipmap)                         // compress each of the files
+            }
+            if dozip
+                fsoptions = { encoding: "base64" }
+            if !error
+                `(error, result) = fs.writeFile(writepath, content, fsoptions)
+            if error
+                list(error)
+            else
+                list(false, { ok: true })
+        }
+
+        //
+        // Check for any incomplete catenates.
         //
 
-        let (writepath, template, entry, content, catsub, dozip, docat, fsoptions, zipmap, error, result) {
-            for :out1 writepath in catenates {
-                template = build.templates[writepath]                       // optional in some cases ### should warn in others
-                catsub = { }
-                for entry in catenates[writepath] {                         // error check and substitution build
-                    if !entry.content {
-                        build.errorlist.push(Error("Catenate incomplete:", writepath))
-                        continue :out1 }
-                    catsub[entry.insource] = entry.content
-                    if entry.zip
-                        dozip = true
-                    if entry.catenate
-                        docat = true
-                }
-                if docat {                                                  // catenate the files
-                    if template {
-                        `(content, result) = applySubstitutions(template, catsub)
-                        if length(catsub) != result
-                            build.errorlist.push(Error("Matched ", result, " of ", length(catsub),
-                                "substitutions in template:", build.tepaths[writepath]))
-                    }
-                    else
-                        content = catenates[writepath].map(function(entry){entry.content}).join("\n")
-                    if dozip {
-                        zipmap = { }
-                        zipmap[JSpath.basename(writepath)] = content
-                        `(error, content) = zip(zipmap)                     // compress the catenated file
-                    }
-                } else {
-                    if template
-                        zipmap = applyZipTemplate(template, catsub)
-                    else
-                        zipmap = trimZipPaths(catsub)
-                    `(error, content) = zip(zipmap)                         // compress each of the files
-                }
-                if dozip
-                    fsoptions = { encoding: "base64" }
-                if !error
-                    `(error, result) = fs.writeFile(writepath, content, fsoptions)
-                if error
-                    build.errorlist.push(error)
-            }
+        let (writepath, entry) {
+            for writepath in catenates
+                for entry in catenates[writepath]
+                    if !entry.content
+                        build.errorlist.push(Error("Missing zip/cat element", writepath, "--", entry.readpath))
         } ()
     }
 
@@ -1086,7 +1194,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
             `(error, executor) = track.spawn(build.runway.spawn.0, build.runway.spawn.1, "Build-".concat(build.buildnum), {
                 startup: {
                     initcmds: maintext
-                    dirpath: JSpath.join(fs.rootpath, build.destpath)
+                    dirpath: fs.path.resolve(fs.path.sep, fs.rootpath, build.destpath)
                 }
             })
             if error
@@ -1136,6 +1244,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         `(error, site) = track.spawn("V-Site", build.runway."v-site", fs, vpath)
         if error
             return (list(Error("Builder: cannot create virtual site", error)))
+        sleep(1)                                                            // needed on Windows or it won't open, fiik why
         window = js.w.open(url, title, features)
         list(false, { ok: true })                                           // we don't know the executor
     }
