@@ -538,7 +538,7 @@ closure execLambda(track, url, name, workerID, local target, nlregex, clientID, 
         // onmessage
         // A message was received from the worker via WebSockets.
         
-        target.ws.onmessage = function onmessage(e, local message, msg) {
+        target.ws.onmessage = function onmessage(e) {
             if target.msgQueue
                 target.msgQueue.push(e.data)
             else

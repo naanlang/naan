@@ -524,6 +524,12 @@ RegisterTestCategory("Lingo parse", [
         { errors: "undeclared global at (1, 26) found c" } ],
     [ "function(a) { global(b), c * a };",
         { errors: "undeclared global at (1, 26) found c" } ],
+    [ "closure nest() { function t() { function t() { 3 } } };", "nest"],
+    [ "function errch1() { global(), while:seeking true { loop { break:seeking } } };", "errch1" ],
+    [ "closure errch2() { global(), function a() { b.proc }, function b() { a } };", "errch2" ],
+    [ "function errch3(local a) { f.g(function() { a = 3 }) };", "errch3" ],
+    [ "function errch4(local a) { try {} catch { if true { a=3 } } };", "errch4" ],
+    [ "function errch5() { function&(local a) { } };", "errch5"]
 ]);
 
 

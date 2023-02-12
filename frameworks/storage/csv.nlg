@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2022 by Richard C. Zulch
+ * Copyright (c) 2022-2023 by Richard C. Zulch
  *
  */
 
@@ -84,7 +84,7 @@ function csvPrint(rows, local output, quoter, row, line, delim, col) {
  *
  */
 
-closure csvQuoteGenerator(delimiter, local rxComma, rxQuote) {
+closure csvQuoteGenerator(delimiter, local rxDelimiter, rxQuote) {
     if !delimiter
         delimiter = ','
     rxDelimiter = RegExp('['.concat('"\\', delimiter, ']'))

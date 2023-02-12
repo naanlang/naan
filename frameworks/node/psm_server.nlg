@@ -59,7 +59,7 @@ closure psmsFsView(rootpath, local view, gitter) {
     //
     // Entry point for API requests.
     
-    view.api = closure api(req, res, local path, proc, result) {
+    view.api = closure api(req, res, local path, proc) {
         if not string(req.query.path) {
             res.status(400).send("invalid path")
             return }
@@ -78,7 +78,7 @@ closure psmsFsView(rootpath, local view, gitter) {
         }
 
         // op: pathOp
-        function pathOpApi(local selector, local result) {
+        function pathOpApi(local selector, result) {
             try {
                 result = list(false, xapply(JSpath, req.query.selector, totuple(js.g.JSON.parse(req.query.arglist))))
             } catch {
@@ -489,7 +489,7 @@ closure psmsFsConnector(psm, api, local connClassID, connector, watch) {
     //
     // Connect to the specified service. The first argument is the rootpath, which is required.
     //
-    connector.connect = function connect(resID, service, args, local error, creds, api) {
+    connector.connect = function connect(resID, service, args, local error, creds) {
         `(error, creds) = connector.access(resID)
         if !error {
             if creds == "HostFS"

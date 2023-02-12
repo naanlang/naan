@@ -307,7 +307,7 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // optionally deleting the files in the existing location. If options.move is true then we
     // delete the source after the copy.
     
-    view.copy = closure copy(srcpath, dest, options, callback, local parameters) {
+    view.copy = closure copy(srcpath, dest, options, callback) {
         if options
             options = new(options)
         else

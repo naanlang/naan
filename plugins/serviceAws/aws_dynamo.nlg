@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2022 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
@@ -88,7 +88,7 @@ closure TimeKeys(prefix, baseMS, local timekeys, prelen) {
     // partition key in the specified direction, or false if there are no more keys. Dates in the
     // future are considered invalid and return false.
     //
-    timekeys.adjustPartID = function adjustPartID(partID, adjust, local year, doy, dayms, msec) {
+    timekeys.adjustPartID = function adjustPartID(partID, adjust, local yyyy, doy, dayms, msec) {
         partID = partID.slice(prelen)
         yyyy = toint(partID.substring(0,4))
         doy = toint(partID.substring(4,7))
@@ -246,7 +246,7 @@ closure DynaConverter(local conv) {
     // datumDynToNaan
     // Convert a DynamoDB typed attribute to Naan format.
     //
-    conv.datumDynToNaan = function datumDynToNaan(dtype, dvalue, local output) {
+    conv.datumDynToNaan = function datumDynToNaan(dtype, dvalue) {
         if dtype == "BS" || dtype == "SS"
             dvalue
         else if dtype == "NS"
@@ -305,7 +305,7 @@ closure DynaConverter(local conv) {
     // specified parameter block.
     //
     closure genAttributeNameAdder(params, local adex) {
-        function attrib(name, local adef, atype, key, data) {
+        function attrib(name, local key, data) {
             if !string(name)
                 name = tostring(name)                                       // try to make it a string
             if !params.ExpressionAttributeNames
@@ -377,7 +377,7 @@ closure DynaConverter(local conv) {
     //
 
     conv.createKeyExpression = function createKeyExpression(params, conds
-        local error, attval, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
+        local attval, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
 
         // dupeop
         //
@@ -535,7 +535,7 @@ closure DynaTable(dyna, tablename, local table) {
     //      rangeType:  <name>                  // string | numeric (if exists)
     //  }
     //
-    table.info = closure info(local params, pending, info) {
+    table.info = closure info(local params, pending) {
         if !dyna.aws
             return (list(Error("DynaTable.info: not logged into AWS")))
         params = {
@@ -691,7 +691,7 @@ closure DynaTable(dyna, tablename, local table) {
         }
         params.Key = makeDynKey(list(hashValue, rangeValue))
         pending = new(nonce)
-        dyna.aws.getItem(params, function(error, data, local output) {
+        dyna.aws.getItem(params, function(error, data) {
             if error {
                 dynaTableError = error
                 debuglog("aws.getItem failed", tablename, ErrorString(error))
@@ -716,7 +716,7 @@ closure DynaTable(dyna, tablename, local table) {
             Item: dyna.conv.recordNaanToDyn(record)
         }
         pending = new(nonce)
-        dyna.aws.putItem(params, function(error, data, local output) {
+        dyna.aws.putItem(params, function(error, data) {
             if error {
                 dynaTableError = error
                 debuglog("aws.putItem failed", tablename, ErrorString(error))
@@ -745,7 +745,7 @@ closure DynaTable(dyna, tablename, local table) {
     // The result is a standard result tuple `(error, record).
         
     table.updateRecord = closure updateRecord(hashValue, rangeValue, options,
-        local error, params, actions, pending) {
+        local error, params, pending) {
         if preflightError(this)
             return
         params = {
@@ -817,7 +817,7 @@ closure DynaTable(dyna, tablename, local table) {
                 params.ReturnValues = "NONE"
         }
         pending = new(nonce)
-        dyna.aws.deleteItem(params, function(error, data, local output) {
+        dyna.aws.deleteItem(params, function(error, data) {
             if error {
                 dynaTableError = error
                 debuglog("aws.deleteItem failed", tablename, ErrorString(error))
@@ -868,7 +868,7 @@ closure DynaTable(dyna, tablename, local table) {
     //
 
     table.queryRecords = closure queryRecords(hashValue, options
-        local error, params, hashKey, op, expr, output, error)
+        local error, params, hashKey, output)
     {
         if preflightError(this)
             return
@@ -937,7 +937,7 @@ closure DynaTable(dyna, tablename, local table) {
     //
 
     table.scanRecords = closure scanRecords(options
-        local params, op, expr, output, error)
+        local params, output, error)
     {
         if preflightError(this)
             return

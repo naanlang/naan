@@ -390,7 +390,7 @@ closure DebugNub(local nub, debug, paused) {
     //
     // Report all our breakpoints as an array of dictionary items.
     
-    nub.breakList = function breakList(local output, id, bp) {
+    nub.breakList = function breakList(local output, bpid) {
         output = []
         for bpid in debug.breakpoints
             output.push(breakInfo(bpid))

@@ -650,7 +650,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
             naancont.Interrupt(inbound)
         }
 
-        function onreturn(local text) {
+        function onreturn() {
             naancont.Return(term.TakeText(), inbound)
         }
     

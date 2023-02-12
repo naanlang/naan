@@ -181,9 +181,10 @@ closure ResourceManager(dbname, prefix, local reman, watch, result) {
     //
     // Return an array of labels for the registered connectors.
     reman.labels = function labels(local classID, labels) {
+        debuglog("ResourceManager.labels is broken")
         labels = []
         for remanID in reman.conns.*
-            labels.push(reman.conns[classID].label)
+            labels.push(reman.conns[classID].label)                         // ### classID?
         labels
     }
         
@@ -329,7 +330,7 @@ closure ResourceTracker(reman, local retor, watch) {
     //
     // Update credentials for accessing a resource, returning the added credential record.
     
-    retor.updateResource = function updateResource(resID, resource, local error, classI) {
+    retor.updateResource = function updateResource(resID, resource, local error, classID) {
         `(error, classID) = resourceClassID(resID)
         if error
             list(error)

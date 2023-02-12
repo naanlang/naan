@@ -396,7 +396,7 @@ closure MakePSMutil(fs, local util) {
  *
  */
 
-closure MakePSM(dbname, local psm) {
+closure MakePSM(dbname) {
     ResourceManager(dbname, "PSM_locations/")
 };
 

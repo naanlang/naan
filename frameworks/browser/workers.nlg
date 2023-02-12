@@ -311,7 +311,7 @@ closure findTrackedScope(track, scope, local exec) {
  *
  */
 
-closure TrackedScope(track, scope, fs, rootpath, local trope, result) {
+closure TrackedScope(track, scope, fs, rootpath, local trope) {
     trope = findTrackedScope(track, scope)
     if trope
         return (list(false, trope))

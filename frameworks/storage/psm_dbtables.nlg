@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2023 by Richard C. Zulch
  *
  */
 
@@ -36,7 +36,7 @@
  *
  */
 
-closure FSview(table, rootpath, local view, error) {
+closure FSview(table, rootpath, local view) {
     if !table
         return (list(Error("invalid arguments")))
     view = new(object, this)
@@ -676,7 +676,7 @@ closure FSview(table, rootpath, local view, error) {
             }
             children: []
         }
-        dbDirRecords(path, false, function(error, data, local item, result, slashdex, offset, finfo) {
+        dbDirRecords(path, false, function(error, data, local item, slashdex, offset, finfo) {
             if error
                 return (callback(error))
             if data.rows.length == 0 && path != ""
@@ -716,7 +716,7 @@ closure FSview(table, rootpath, local view, error) {
     //
     // Read a directory at the specified path
     
-    view.readir = closure readir(path, callback, local name, dirdict) {
+    view.readir = closure readir(path, callback) {
         dirList(path, { stat: true }, callback)
     }
 

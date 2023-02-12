@@ -79,7 +79,7 @@ closure CodeManager(options,  local coman, cache)
     // standard `(error, expr) format. The optional locals are symbols to provide context.
     //
     coman.parseExprs = function parseExprs(texts, locals,
-        local output, text, source, registry, dialect, error, expr)
+        local output, text, source, registry, dialect)
     {
         output = []
         for text in texts {
@@ -124,7 +124,7 @@ closure CodeManager(options,  local coman, cache)
     //
     //     Get a CodeComposite from our cache, or false.
     
-    coman.cachGet = function cachGet(cocode, manifest, local entry, item, mandefs) {
+    coman.cachGet = function cachGet(cocode, manifest, local item, mandefs) {
         if cache.modname != cocode.modname || cache.compname != cocode.compname || cache.manifest != manifest
             return (false)
         for item in manifest

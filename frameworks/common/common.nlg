@@ -80,7 +80,7 @@ function ContentTypeFromFileExt(filepath, local mimeType, encoding) {
  *
  */
  
-function UUID(local rando, cc) {
+function UUID(local rando) {
     if !RandomBytes
         return (false)
     rando = RandomBytes(36)                                                 // length of UUID

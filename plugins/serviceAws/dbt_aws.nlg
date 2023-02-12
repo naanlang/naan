@@ -365,7 +365,7 @@ closure dawsTable(database, path, tableOptions, local table) {
     //
     // Convert an S3 get response to a new table document.
     
-    function s3resp2doc(resp, local doc, metadata, metakey) {
+    function s3resp2doc(resp, local doc) {
         if resp.Metadata.naandbt
             try {
                 doc = new(JSONparse(resp.Metadata.naandbt))
@@ -787,7 +787,7 @@ closure S3DB(s3b, local database, result) {
     //
     // Delete the database and close it.
 
-    database.destroy = function destroy(local pending) {
+    database.destroy = function destroy() {
         if !database.bucket
             return (list(Error("database closed")))
         list(Error("not sure how to destroy this database"))                // ### delete the base object?

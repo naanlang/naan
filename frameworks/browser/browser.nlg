@@ -53,7 +53,7 @@ closure FileReader(file, progress, local pending, freader, result) {
  *
  */
 
-closure FileDownload(file, progress, local error, blob, sizez, url, link) {
+closure FileDownload(file, progress, local error, blob, size, url, link) {
     `(error, blob, size) = FileReader(file, progress)
     if error
         list(error)

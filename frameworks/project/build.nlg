@@ -391,7 +391,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     // Run the zip operation on a worker.
     //
 
-    closure zip(files, options, local result, annote) {
+    closure zip(files, options, local result) {
         if !build.zipper
             build.zipper = ExecutorParallel({                               // create worker for zipping
                 maxcount: 1                                                 // stupid Zip lib can't do more than one
@@ -527,7 +527,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     // Run the parseAndPack operation on a worker.
     //
 
-    closure parseAndPack(text, fpath, options, local result, annote) {
+    closure parseAndPack(text, fpath, options, local result) {
         if !build.parallel
             build.parallel = ExecutorParallel({                             // create worker pool
                 basename: "build"
@@ -652,7 +652,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         // added as a separate new group. A counter is kept of all outstanding async functions, and
         // analyze does not return until all pending async operations have completed.
         //
-        closure processOneGroup(group, local error, indirpath, outdirpath, destcheck,
+        closure processOneGroup(group, local indirpath, outdirpath, destcheck,
             groupVerStat, source, sdex) {
             ++pending.active
             future(function test1() {
@@ -719,7 +719,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     
             // Add an entry to execution list if it's needed.
             //
-            closure addEntry(infile, outfile, instat, sdex, local error, outstat, entry) {
+            closure addEntry(infile, outfile, instat, sdex, local entry) {
                 if sdex >= sourcemax {
                     build.errorlist.push(Error("Too many sources in one group:", groupno.group))
                     return
@@ -1271,7 +1271,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //
     // Refresh after updating the v-site, returning true iff an existing vsite was found.
     //
-    build.refresh = function refresh(track local main, url_origin, found) {
+    build.refresh = function refresh(track local url_origin, found) {
         if build.runway."v-site" {
             url_origin = js.w.location.origin.concat("/run", build.runway."v-site")
             for target in track.enumlist() {

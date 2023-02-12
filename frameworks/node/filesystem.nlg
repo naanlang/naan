@@ -566,7 +566,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     // Return array of files in a directory if it exists. If options.stat is true then this reads 
     // info for each file as well.
 
-    files.dirList = closure dirList(path, options, callback, local error, localpath, output, nodelist, file) {
+    files.dirList = closure dirList(path, options, callback, local error, localpath, output, file) {
         if js.g.process.platform == "win32" && rootpath == "\\" && (path == "" || path == "\\")
             return (files.winDrives(callback))                              // top level is drive letters in Windows
         if !callback
@@ -608,7 +608,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         `(error, localpath) = localPath(path)
         if error
             return (asyncResult(callback, error))
-        fs.mkdir(localpath, { recursive: true }, function(errmkdir, local result) {
+        fs.mkdir(localpath, { recursive: true }, function(errmkdir) {
             if errmkdir.code == "EEXIST"
                 fs.stat(localpath, function(errstat, stat) {
                     if errstat || !stat.isDirectory()
@@ -807,7 +807,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     //      overwrite:  <boolean>           -- overwrite existing file, if any
     // }
     
-    files.copy = closure copy(srcpath, dest, options, callback, local error, localsrc, localdest, pending) {
+    files.copy = closure copy(srcpath, dest, options, callback, local error, localsrc, localdest) {
         if !callback
             return (syncAdapter(copy, srcpath, dest, options))
         `(error, localsrc) = localPath(srcpath)
@@ -906,7 +906,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     // Execute the uglifyjs utility on the specified source, returning the result as a standard
     // tuple: `(error, minified)
     //
-    files.minimize = closure minimize(input, callback, local child, stdinStream) {
+    files.minimize = closure minimize(input, callback, local child) {
         if !callback
             return (syncAdapter(minimize, input))
         debuglog("==> Warning: files.minimize is deprecated")
@@ -1012,7 +1012,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     //      ignoreBinary:                       -- ignore binary files
     //
     files.grepLines = closure grepLines(path, options, callback,
-        local error, localpath, cmdargs, item, execOptions, grep, result, lineRE, maxcount) {
+        local error, localpath, cmdargs, item, execOptions, result, lineRE, maxcount) {
         if !callback
             return (syncAdapter(grepLines, path, options))
         `(error, localpath) = localPath(path)
@@ -1099,7 +1099,8 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     //  
     //
 
-    files.execLines = closure execLines(cmdname, options, callback, local output, arg, execops, spawn, linerErr, linerOut) {
+    files.execLines = closure execLines(cmdname, options, callback, 
+        local output, execops, spawn, linerErr, linerOut) {
         if !callback
             return (syncAdapter(execLines, cmdname, options))
         if !string(cmdname) || cmdname == ""
@@ -1124,7 +1125,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         // kill
         // terminate the command
         function kill() {
-            grep.kill()
+            spawn.kill()
             completed(false, output) }                                      // the official end will never come
 
         //

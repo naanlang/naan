@@ -28,7 +28,8 @@ Naan.module.chns("Play");;
  *
  */
 
-closure Parsenv(name, local penv, gohome, saveOperators, lingo, libns, naansym) {
+closure Parsenv(name, local penv, gohome, lingo, naansym) {
+    global()
     penv = new(object, this)
     gohome = makeActivator()
     sleep(1)

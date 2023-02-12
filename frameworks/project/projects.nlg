@@ -296,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.8+1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.9+1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -432,7 +432,7 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
     //
     // ### we need to update this for optional multiple-configuraiton builds
     //
-    procon.create = closure create(name, local error, data, configpath) {
+    procon.create = closure create(name, local error, data) {
         if procon.loaded
             return (list(Error("Project.create: project already loaded")))
         if validate(name)
@@ -476,7 +476,7 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
     //     Load the project, i.e. read the project configuration if valid. This is non-destructive.
     // The result is a standard error tuple with a dictionary result on success.
     //
-    procon.load = closure load(local error, data, info, configpath) {
+    procon.load = closure load(local error, data, info) {
         if procon.loaded
             return (list(false, procon.configDict))
         if validate()
@@ -599,7 +599,7 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
     //     Run the project by building and then launching.
     //
     procon.run = closure run(stage, buildonly, 
-        local error, rules, builder, buildpath, error, buildnum) {
+        local error, rules, builder, buildpath, buildnum) {
         `(error, rules) = buildrules(stage)
         if error
             return (list(error))
@@ -647,7 +647,7 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
     //  }
     //
     procon.publish = closure publish(stage, 
-        local error, rules, where, publish, error, outOptions, outfs, inpath) {
+        local error, rules, where, publish, outOptions, outfs, inpath) {
         `(error, rules) = buildrules(stage)
         if error
             return (list(error))

@@ -301,14 +301,14 @@ RegisterTestCategory("Lingo", [
         "function() {"
         "   loop {"
         "       if 1 {"
-        "           2, if false"
+        "           f(), if false"
         "               break"
-        "       }, 3, break } });>", "(function lambda false (loop false (((identity 1) 2 ((identity false) (break)))) 3 (break)))" ],
+        "       }, 3, break } });>", "(function lambda false (loop false (((identity 1) (f) ((identity false) (break)))) 3 (break)))" ],
            
-    [ "quote(function(){if 1 { 2, if 3 { if 4 5 } else 6 } else 7 });",
+    [ "quote(function(){if 1 { f(), if 3 { if 4 5 } else 6 } else 7 });",
            "function () {\n"
            "    if 1 {\n"
-           "        2\n"
+           "        (f)\n"
            "        if 3 {\n"
            "            if 4\n"
            "                5 }\n"
@@ -387,7 +387,7 @@ RegisterTestCategory("Lingo", [
     [ "for x in `(a b c) print(x);>", "abc|Dictionary{8}" ],
     [ "function() { loop { if x > 3 break, 4 } };>", "(function lambda false (loop false ((> x 3)) 4))" ],
     [ "function () { for xx in [a,b,c] { if true { if xx eq 3, break }, print(xx) } }();>", "abc|Dictionary{7}" ],
-    [ "function (x) { loop try { 1, if x continue, 2, break } catch { 3 } }();", "2" ],
+    [ "function (x) { loop try { f(), if x continue, 2, break } catch { 3 } }();", "2" ],
         
     [ "miter=iterate(`(a,b,c), `x);", "{\n"
         "    target  : (a, b, c),\n"
@@ -455,11 +455,11 @@ RegisterTestCategory("Lingo", [
     [ "function(){function jim(){ print(\"1\"),function jim(){print(\"2\")}, jim()}, jim()}();", "12|\"2\"" ],
     [ "closure(){function jim(){ print(\"1\"),function jim(){print(\"2\")}, jim()}, jim()}();", "12|\"2\"" ],
     [ "function(){function jim(){print(\"1\")},function jim(){print(\"2\")}, jim()}();",
-        { errors: "exception: internal,duplicate procedure name jim in lambda" } ],
+        { errors: "duplicate procedure name at (1, 48) found jim" } ],
     [ "closure(){function jim(){print(\"1\")},function jim(){print(\"2\")}, jim()}();",
-        { errors: "exception: internal,duplicate procedure name jim in lambda" } ],
+        { errors: "duplicate procedure name at (1, 47) found jim" } ],
     [ "function(){function jim(){print(\"1\")}(),function jim(){print(\"2\")}, jim()}();",
-        { errors: "exception: internal,duplicate procedure name jim in lambda" } ],
+        { errors: "duplicate procedure name at (1, 50) found jim" } ],
         
     [ "function(){{spawn:function(){[{ok:true}]}}};", "function () {\n"
         "    {\n"
@@ -482,7 +482,7 @@ RegisterTestCategory("Lingo", [
     [ "function  eee(f) { print(f), function  iii(f) { print(f), ccc() }(7) } (4);", "47|f" ],
     [ "function  fff(f) { print(f), function& iii(f) { print(f), ccc() }(9) } (6);", "69|f" ],
 
-    [ "function  (f, local jjj) { print(f), function jjj(f) { print(f), ccc() }, jjj(21) } (22);", "2221|f" ],
+    [ "function  (f) { print(f), function jjj(f) { print(f), ccc() }, jjj(21) } (22);", "2221|f" ],
     [ "function& (f, local jjj) { print(f), function jjj(f) { print(f), ccc() }, jjj(23) } (24);", "2423|24" ],
     
     [ "function  (g, local f) { f = 17, function  f(g) { print(f, g), ccc() },  f(25) } (26);", "1725|f" ],

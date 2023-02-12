@@ -46,7 +46,7 @@ closure proj_lambdaInstance(projman, where, projID, local project) {
     // load
     //
     // Load the project, which fails if it does not already exist.
-    project.load = closure load(local error, info) {
+    project.load = closure load(local result) {
         if project.loaded
             return (list(false, { ok: true }))
         result = project.config.load()
