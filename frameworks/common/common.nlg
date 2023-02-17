@@ -176,7 +176,7 @@ function JsLoadScript(libpath, globalID, local scriptTag, fpath) {
     } else if js.w {                                                        // load in browser context
         pending = new(nonce)
         scriptTag = js.w.document.createElement("script")
-        scriptTag.src = js.w.location.origin.concat(fpath, requireQuery())
+        scriptTag.src = JSpath.dirname(js.w.location.href).concat(fpath, requireQuery())
         scriptTag.onload = function (event) {
             jsScripts[libpath] = js.w[globalID]
             pending.signal(js.w[globalID])
