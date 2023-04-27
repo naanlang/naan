@@ -767,7 +767,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         }
         output = []
         debuglog("dirSearch begins", localpath)
-        asyncArray(localpaths, 10, closure(localpath, index, elements, local error, direnum, node, lines, line) {
+        asyncArray(localpaths, 10, closure(localpath, local error, direnum, node, lines, line) {
             `(error, direnum) = dirList(localpath, { })
             if direnum.children
                 for node in direnum.children

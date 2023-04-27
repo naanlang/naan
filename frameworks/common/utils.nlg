@@ -1,0 +1,77 @@
+/*
+ * utils.nlg
+ * naanlib/frameworks/common/utils
+ *
+ *     Platform-independent utility functions.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2023 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * DictCompare
+ *
+ * Compare two dictionaries and report differences in a dictionary with the following structure of
+ * differences from aa to bb:
+ * {
+ *      added:      [<item>,<item>...<item>]
+ *      changed:    [<item>,<item>...<item>]
+ *      deleted:    [<item>,<item>...<item>]
+ * }
+ *
+ * >  DictCompare({a:3,b:2,c:5,f:8},{g:0,a:3,b:4,e:7,f:9});
+ * $: {
+ *      changed: ["b", "f"],
+ *      deleted: ["c"],
+ *      added  : ["e", "g"] }
+ *
+ */
+
+function DictCompare(aa, bb, local output, keysa, keysb, ka, kb, comp) {
+    function compare(ka, kb) { ka <=> kb }
+    function added(key) { output.added.push(key) || output.added = [key] }
+    function changed(key) { output.changed.push(key) || output.changed = [key] }
+    function deleted(key) { output.deleted.push(key) || output.deleted = [key] }
+
+    output = { }
+    keysa = aa.*.toarray.sort(compare).reverse()
+    keysb = bb.*.toarray.sort(compare).reverse()
+    ka = keysa.pop()
+    kb = keysb.pop()
+    while ka || kb {
+        comp = ka <=> kb
+        if comp < 0
+            deleted(ka)
+        else if comp > 0
+            added(kb)
+        else if aa[ka] != bb[ka]
+            changed(ka)
+        if comp <= 0
+            ka = keysa.pop()
+        if comp >= 0
+            kb = keysb.pop()
+    }
+    output
+};
+
+
+/*
+ * utilsInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function utilsInit(local manifest) {
+    manifest = `(DictCompare, utilsInit)
+
+    Naan.module.build(module.id, "utils", function(modobj, compobj) {
+        require("./common.nlg")
+        compobj.manifest = manifest
+        module.exports.DictCompare = DictCompare
+        updateExports()
+    })
+} ();

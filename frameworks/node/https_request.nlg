@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2022 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
@@ -23,12 +23,15 @@
  *      contentType:    <string>                // sets Content-Type header, otherwise auto-determined
  *      range:          <string>                // sets range header
  *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
+ *      auth:           <string>                // username:password string
+ *      cacert:         <data>                  // ca for verifying peer
  *      debug:          <boolean>               // log errors and status results
  *  }
  *
  */
 
-closure HttpsApiRequest(url, options, local urlq, reqOptions, putdata, item, pending, chunks, request) {
+closure HttpsApiRequest(url, options,
+    local urlq, reqOptions, putdata, item, xurl, pending, chunks, request) {
     if options.query
         urlq = url.concat(EncodeQuery("?", options.query))
     else
@@ -58,6 +61,20 @@ closure HttpsApiRequest(url, options, local urlq, reqOptions, putdata, item, pen
     if array(options.headers)
         for item in options.headers
             reqOptions.headers[item.0] = item.1
+    if options.auth
+        reqOptions.auth = options.auth
+    if options.cacert
+        reqOptions.ca = options.cacert
+    if options.allowSelfSigned {
+        xurl = nodeUrl.parse(url)
+        reqOptions.agent = xnew(nodeHttps.Agent({
+            host: xurl.hostname
+            port: xurl.port
+            path: xurl.path
+            rejectUnauthorized: false
+            ca: [ selfSignedRootCaPemCrtBuffer ]
+        }))
+    }
     pending = new(nonce)
     chunks = []
     request = nodeHttps.request(url, reqOptions, closure (response) {

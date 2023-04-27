@@ -250,12 +250,7 @@ closure DynaConverter(local conv) {
         if dtype == "BS" || dtype == "SS"
             dvalue
         else if dtype == "NS"
-            new(dvalue).map(function(item) {
-                if item.indexOf(".") >= 0
-                    Number.parseFloat(item)
-                else
-                    Number.parseInt(item)
-            })
+            new(dvalue).map(Number.parseFloat(item))
         else if dtype == "M"
             recordDynToNaan(dvalue)
         else if dtype == "L"
@@ -265,11 +260,8 @@ closure DynaConverter(local conv) {
             })
         else if dtype == "BOOL"
             dvalue && true
-        else if dtype == "N" {
-            if dvalue.indexOf(".") >= 0
-                Number.parseFloat(dvalue)
-            else
-                Number.parseInt(dvalue) }
+        else if dtype == "N"
+            Number.parseFloat(dvalue)
         else if dtype == "NULL"
             null
         else if dtype == "B" || dtype == "S"
@@ -567,7 +559,8 @@ closure DynaTable(dyna, tablename, local table) {
                     else if key.AttributeName == output.range
                         output.rangeType = dyna.conv.fieldTypeDynToNaan(key.AttributeType)
                 table.hashKey = compress(output.hash)                       // hash attribute name
-                table.rangeKey = compress(output.range)                     // range attribute name or false
+                if output.range
+                    table.rangeKey = compress(output.range)                 // range attribute name or false
             }
             pending.signal(list(error, output))
         })
@@ -842,9 +835,9 @@ closure DynaTable(dyna, tablename, local table) {
             processed = doneCB(data)
             if processed
                 remaining -= processed
+            params.ExclusiveStartKey = data.LastEvaluatedKey
             if processed && remaining > 0 && data.LastEvaluatedKey {
                 params.limit = remaining                                // set up for next iteration
-                params.ExclusiveStartKey = data.LastEvaluatedKey
                 true                                                    // continue looping
             }
         })
@@ -862,7 +855,7 @@ closure DynaTable(dyna, tablename, local table) {
     //      attmap:         <dictionary>                                    // map attribute names to #shortcuts
     //      reverse:        <boolean>                                       // reverse order
     //      project:        <array>                                         // project only specified attributes
-    //      exstart:        <exclusive start key>                           // for paging
+    //      paging:         <exclusive start key>                           // for paging; updated each call
     //      limit:          <number>                                        // maximum count of results
     //  }
     //
@@ -907,8 +900,8 @@ closure DynaTable(dyna, tablename, local table) {
             params.ScanIndexForward = false
         if options.project
             params.ProjectionExpression = options.project.join(", ")
-        if options.exstart
-            params.ExclusiveStartKey = options.exstart
+        if options.paging
+            params.ExclusiveStartKey = options.paging
         output = []
         `(error) = dynQueryPager(`query, params, options.limit, function(data) {
             if data.Count > 0
@@ -919,6 +912,7 @@ closure DynaTable(dyna, tablename, local table) {
             error = Error("table.queryRecords(".concat(tablename, ") failed"), error)
             output = false
         }
+        options.paging = params.ExclusiveStartKey
         list(error, output)
     }
 
@@ -931,7 +925,7 @@ closure DynaTable(dyna, tablename, local table) {
     //      filter:     <key-expression>                                    // conditions for items to return
     //      attmap:     <dictionary>                                        // map attribute names to #shortcuts
     //      project:    <array>                                             // project only specified attributes
-    //      exstart:    <exclusive start key>                               // for paging
+    //      paging:     <exclusive start key>                               // for paging; updated each call
     //      limit:      <number>                                            // maximum count of results
     //  }
     //
@@ -957,8 +951,8 @@ closure DynaTable(dyna, tablename, local table) {
             params.ExpressionAttributeNames = attmap
         if options.project
             params.ProjectionExpression = options.project.join(", ")
-        if options.exstart
-            params.ExclusiveStartKey = options.exstart
+        if options.paging
+            params.ExclusiveStartKey = options.paging
         output = []
         `(error) = dynQueryPager(`scan, params, options.limit, function(data) {
             if data.Count >= 0
@@ -969,6 +963,7 @@ closure DynaTable(dyna, tablename, local table) {
             error = Error("table.scanRecords(".concat(tablename, ") failed"), error)
             output = false
         }
+        options.paging = params.ExclusiveStartKey
         list(error, output)
     }
 

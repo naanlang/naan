@@ -1,0 +1,195 @@
+/*
+ * os_dynamo.nlg
+ * openSearch
+ *
+ *     OpenSearch-DynamoDB integration.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2023 by Richard C. Zulch
+ *
+ */
+
+/*
+ * OSDynIndexer
+ *
+ * Index a dynamoDB database into an OpenSearch index. The index should be created before this is
+ * called, with the proper fields and types already configured. The database is the source of truth,
+ * so the index can be recreated from scratch if necessary. Source _ids are assigned by OpenSearch
+ * and therefore this creates all new records. It is not a sync tool.
+ *     This operates by scanning the database for a page of records, then starting the indexing
+ * operation in the background, scanning another batch, and then waiting for the previous background 
+ * index to complete. Each time it has both a set of database records and the ids from indexing, it 
+ * can optionally update the database records with the newly-assigned ID. There is never more than
+ * one database or index operation proceeding at the same time, but they overlap.
+ *
+ * Options:
+ *  {
+ *      chunkSize:      <integer>               // size of each chunk of transfer
+ *      dbFilter:       <array-or-dict>         // DynamoDB KeyExpression(s)
+ *      converter:      <procedure>             // convert DB record to index info
+ *      progress:       <procedure>             // called for each batch completed
+ *      writeID:        <string>                // write OpenSearch _id to database with key writeID
+ *  }
+ *
+ * The converter protocol is:
+ *      converter(dbRecord)                     // return _source doc for database record
+ * The progress protocol is:
+ *      progress(completed)                     // integer number of records completed
+ *
+ */
+
+closure OSDynIndexer(index, table, options,
+    local dbOptions, scanPending, indexPending, updatePending, output, error, records, data, ids) {
+    if !options.converter
+        return (Error("OSDynIndexer: options.converter is required"))
+    dbOptions = {
+        filter: options.filter
+        limit: options.chunkSize || 100
+    }
+    //
+    // Scan records in the database, returning a nonce signaled with records array
+    //
+    closure scanRecords(local pending) {
+        if !output
+            output = []                                                     // just starting to scan records
+        else if !dbOptions.paging
+            return (false)                                                  // scanned all records
+        pending = new(nonce)
+        future(function() {
+            pending.signal(table.scanRecords(dbOptions))
+        },0)
+        pending
+    }
+    //
+    // Update ids into the database, returning a nonce signaled with error array.
+    //
+    closure updateRecordIDs(docs, ids, writeID) {
+        asyncArray(docs, 10, function(entry, index, cancel, local error) {
+            ignore(error)
+            `(error) = table.updateRecord(
+                entry[table.hashKey],
+                entry[table.rangeKey], {
+                set: [list(writeID, ids[index])]
+            })
+            error
+        })
+    }
+    //
+    // Batch index documents into OpenSearch, returning a nonce signaled with ids array.
+    //
+    closure batchIndex(records, local pending, docs) {
+        pending = new(nonce)
+        docs = records.map(function(record) {
+            options.converter(record)
+        })
+        future(function(local error, ids) {
+            `(error, ids) = index.write(docs)
+            pending.signal(list(error, records, ids))
+        }, 0)
+        pending
+    }
+    //
+    // execute
+    //
+    //  loop    operation
+    //    1       scan(a)start
+    //    2       scan(a)end,index(a)start,scan(b)start,index(a)end,update(a)start
+    //    3       scan(b)end,index(b)start,scan(c)start,index(b)end,update(a)end,update(b)start
+    //    4       scan(c)end,index(c)start,scan(d)start,index(c)end,update(b)end,update(c)start
+    //
+    // |-----------|-----------|        |-----------|-----------|
+    // | 1.scan(a) | 3.scan(b) |        | 6.scan(c) | 9.scan(d) |
+    // |-----------|-----------|        |-----------|-----------|
+    //             |------------|------------|      |-------------|
+    //             | 2.index(a) | 5.index(b) |      | 8.index(c)  |
+    //             |------------|------------|      |-------------|
+    //                          |---------------|---------------| |----------------|
+    //                          | 4.update(a,a) | 7.update(b,b) | | 10.update(c,c) |
+    //                          |---------------|---------------| |----------------|
+    //
+    // As of 2023-04-12 with Yandex Cloud and a minimal OpenSearch cluster, The indexing operation is
+    // the long pole in the tent--taking the longest time to process. However the timing has a lot of
+    // variation, e.g. the first DynamoDB update being longer but then very fast after that.
+    //
+    loop {
+        //
+        // finish scanning
+        //
+        if scanPending {
+            `(error, records) = scanPending.wait()
+            scanPending = false
+            if error
+                break
+        }
+        //
+        // start indexing
+        //
+        if records.length > 0
+            indexPending = batchIndex(records)
+        records = false
+        //
+        // start scanning
+        //
+        if !output || output.length <= Number.MAX_SAFE_INTEGER                         // for future limit option
+            scanPending = scanRecords()
+        //
+        // finish indexing
+        //
+        if indexPending {
+            `(error, records, ids) = indexPending.wait()
+            indexPending = false
+            if error
+                break
+            output = output.concat(ids)
+        }
+        //
+        // finish updating
+        //
+        if updatePending {
+            `(data) = updatePending.wait()
+            updatePending = false
+            error = data.find(function(item) { item })
+            if error
+                break
+            options.progress(output.length)                                 // progress with update
+        }
+        //
+        // start updating
+        //
+        if options.writeID {
+            if records && ids
+                updatePending = updateRecordIDs(records, ids, options.writeID)
+        }
+        else
+            options.progress(output.length || 0)                                 // progress without update
+        records = ids = false
+        //
+        // check for termination
+        //
+        if !scanPending && !indexPending && !updatePending
+            break
+    }
+    if error
+       list(error)
+    else
+       list(false, output)
+};
+
+
+/*
+ * osdyInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function osdyInit(local manifest) {
+    manifest = `(OSDynIndexer, osdyInit)
+
+    Naan.module.build(module.id, "os_dynamo", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("./openSearch.nlg")
+        modobj.exports.OSDynIndexer = OSDynIndexer
+    })
+} ();

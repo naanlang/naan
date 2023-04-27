@@ -55,7 +55,10 @@ RegisterTestCategory("JSinterop", [
 
     [ "sqrt = false;", "false" ],
     [ "Math.sqrt(9);", "3" ],                                               // ensure method selector is not evalulated
-    
+        
+    [ "merge({ a:3, b:4 }, { a:6, c:7, d:8, e:`(x, y, z) }, xnew({ d:77, f:88 }));",
+        "{ a: 6, b: 4, c: 7, d: 77, e: (x, y, z), f: 88 }"],
+
     [ "xnew(js.g.Promise, function() {});", "[object Promise]" ],
     
     

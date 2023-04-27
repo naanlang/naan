@@ -1,0 +1,490 @@
+/*
+ * openSearch.nlg
+ * openSearch
+ *
+ *     OpenSearch client.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2023 by Richard C. Zulch
+ *
+ */
+
+/*
+ * openSearchIndex
+ *
+ * Access object for API functions on a single index.
+ *
+ * This client provides a custom datatype facility as a layer on top of OpenSearch. A schema defines
+ * the fields in an index, which are compiled into a mapping dictionary. The extra layer allows for
+ * adding additional configuration to the field.
+ *
+ * The inbuilt schema types are:
+ *      `literal                                -- keyword
+ *      `title                                  -- text for a title
+ *      `hashtags                               -- set of hashtags
+ *      `date                                   -- date
+ *      `boolean                                -- boolean
+ *      `currency                               -- currency with type
+ *      `text                                   -- block of text
+ *      `name                                   -- proper name, first-last-middle-etc.
+ *      `integer                                -- integer
+ *      `url                                    -- URL
+ *
+ * Current options are:
+ *  {
+ *      languages: [
+ *          <language>: {
+ *              keywords: [<strings>...]        -- lowercase keywords not to stem
+ *          }
+ *          ...
+ *      ]
+ *  }
+ *
+ */
+
+closure openSearchIndex(prosc, indexName, ioptions, local osin) {
+    global()
+    osin = new(object, this)
+    if symbol(indexName)
+        indexName = indexName.tostring()
+    osin.analyzers = {                                                      // map names, language to analyzer
+        english: "english"
+    }
+
+    // langKeywords
+    //
+    // Customize the specified language with an array of keywords that will not be stemmed. This is
+    // useful for proper names like Дарья and Таня which otherwise become three-letter words that
+    // match too many things. Note that the keywords must be lowercase.
+    //
+    function langKeywords(language, keywords,
+        local keywordFilter, stopFilter, stemFilter, params) {
+        keywordFilter = "naan_${language}_keywords"
+        stopFilter = "naan_${language}_stop"
+        stemFilter = "naan_${language}_stemmer"
+        filters = [ "lowercase", keywordFilter, stopFilter, stemFilter ]
+        params = {
+            settings: {
+                analysis: {
+                    filter: { }
+                    analyzer: { }
+                }
+            }
+        }
+        osin.analyzers[language] = "naan_${language}"
+        params.settings.analysis.analyzer[osin.analyzers[language]] = {
+            tokenizer: "standard"
+            filter: filters
+        }
+        params.settings.analysis.filter[keywordFilter] = {
+            type: "keyword_marker"
+            keywords: keywords
+        }
+        params.settings.analysis.filter[stopFilter] = {
+            type: "stop"
+            stopwords: "_${language}_"
+        }
+        params.settings.analysis.filter[stemFilter] = {
+            type: "stemmer"
+            language: language
+        }
+        params
+    }
+
+    // textRawMF
+    //
+    // Return a text+raw multifield in the languages configured for our client.
+    //
+    function textRawMF(local fieldspec, language) {
+        fieldspec = {
+            type: "text"
+            fields: {
+                raw: {
+                    "type":         "keyword"
+                }
+            }
+        }
+        for language in osin.analyzers
+            fieldspec.fields[language] = {                                  // add languages
+                type: "text"
+                analyzer: osin.analyzers[language]
+            }
+        fieldspec
+    }
+    
+    // makeMapping
+    //
+    // Make an OpenSearch mapping dictionary for the specified dictionary of field names/types.
+    //
+    function makeMapping(fields, local mapping, fname, ftype, osfield) {
+        osin.fields = fields
+        osin.fieldNames = []
+        mapping = { }
+        for `(fname, ftype) in fields {
+            osin.fieldNames.push(fname)
+            osfield = eval({
+                //
+                // literal
+                //
+                literal: quote({
+                    type: "keyword"
+                })
+                //
+                // title
+                //
+                title: quote(
+                    textRawMF()
+                )
+                //
+                // hashtags
+                //
+                hashtags: quote(
+                    textRawMF()
+                )
+                //
+                // date
+                //
+                date: quote(
+                    textRawMF()
+                )
+                //
+                // boolean
+                //
+                boolean: quote(
+                    textRawMF()
+                )
+                //
+                // currency
+                //
+                currency: quote(
+                    textRawMF()
+                )
+                //
+                // text
+                //
+                text: quote(
+                    textRawMF()
+                )
+                //
+                // name
+                //
+                name: quote(
+                    textRawMF()
+                )
+                //
+                // integer
+                //
+                integer: quote(
+                    textRawMF()
+                )
+                //
+                // url
+                //
+                url: quote(
+                    textRawMF()
+                )
+            }[ftype])
+            if !osfield
+                debuglog("OpenSearchClient.makeMapping: unknown field type ${ftype}")
+            else {
+                osfield.meta = {
+                    type: ftype
+                }
+                mapping[fname] = osfield
+            }
+        }
+        mapping
+    }
+    
+    // bulkDocs
+    //
+    // Create a bulk docs request body with the specified operation. Returns a standard 
+    // `(error, string) result tuple.
+    //
+    function bulkDocs(docs, action, local items, doc, index, operation, error, data) {
+        items = []
+        for `(doc, index) in docs {
+            operation = { }
+            operation[action] = { _index: indexName }
+            `(error, data) = JsonStringify(operation)
+            if !error
+                `(error, doc) = JsonStringify(doc)
+            if error {
+                error = Error("openSearchIndex.write: doc[${index}] unwritable:", error)
+                ErrorDebuglog(error)
+                return (list(error))
+            }
+            items.push(data)
+            items.push(doc)
+        }
+        list(false, items.join("\n").concat("\n"))
+    }
+
+    // schema
+    //
+    // Get the schema for the named index.
+    //
+    osin.schema = closure schema(local error, data, fields, key, osfield) {
+        `(error, data) = prosc.request(indexName.concat("/_mapping"), {
+            method: "GET"
+        })
+        if error
+            return (list(error))
+        osin.fieldNames = []
+        fields = {}
+        for `(key, osfield) in data[indexName].mappings.properties {
+            osin.fieldNames.push(key)
+            fields[key] = osfield.meta.type
+        }
+        list(false, fields)
+    }
+            
+    // createIndex
+    //
+    // Create the index with the specified field types.
+    //
+    osin.createIndex = closure createIndex(fields, local params, language, opts) {
+        params = { }
+        if ioptions.languages {
+            for `(language, opts) in ioptions.languages
+                if opts.keywords
+                    params = merge(params, langKeywords(language, opts.keywords))
+                else
+                    osin.analyzers[language] = language
+        }
+        params = merge(params, {
+            mappings: {
+                properties: makeMapping(fields)
+            }
+        })
+        // printline("OpenSearchClient.create:\n${Dialect.print(params)}")
+        prosc.request(indexName, {
+            method: "PUT"
+            putdata: params
+        })
+    }
+            
+    // deleteIndex
+    //
+    // Delete the index.
+    //
+    osin.deleteIndex = closure deleteIndex() {
+        prosc.request(indexName, {
+            method: "DELETE"
+        })
+    }
+
+    // write
+    //
+    // Write a document or an array of documents to our index. Returns a standard `(error, data) 
+    // tuple where the data is the _id (or [_ids]) when there was no error.
+    //
+    osin.write = closure write(doc, local error, docs, data) {
+        if array(doc) {
+            `(error, docs) = bulkDocs(doc, "create")
+            if docs
+                `(error, data) = prosc.request(indexName.concat("/_bulk"), {
+                    method: "POST"
+                    putdata: docs
+                    contentType: "application/json"
+                })
+            if data
+                data = data.items.map(function(item) {
+                    item.create._id
+                })
+        }
+        else {
+            `(error, data) = write([doc])
+            if data
+                data = data.0
+        }
+        list(error, data)
+    }
+
+    // update
+    //
+    // Update a document in our index.
+    //
+    osin.update = closure update(doc, _id) {
+        prosc.request(indexName.concat("/_update/${_id}"), {
+            method: "POST"
+            putdata: {
+                doc: doc
+            }
+        })
+    }
+
+    // delete
+    //
+    // Remove a document from our index.
+    //
+    osin.delete = closure delete(_id) {
+        prosc.request(indexName.concat("/_doc/${_id}"), {
+            method: "DELETE"
+        })
+    }
+
+    // search
+    //
+    // Simple search on our index, default to all fields. Options are:
+    //  {
+    //      where:  <array>                         -- fields to search, defaulting to * (all)
+    //      qopts:  <dictionary>                    -- OpenSearch query options
+    //  }
+    //
+    osin.search = closure search(what, soptions, local where, params) {
+        where = soptions.where
+        if !array(where)
+            where = ["*"]
+        params = {
+            query: {
+                multi_match: {
+                    query: what
+                    fields: where
+                }
+            }
+        }
+        if dictionary(soptions.qopts)
+            params.query.multi_match = merge(params.query.multi_match, soptions.qopts)
+        // printline("OpenSearchClient.search:\n${Dialect.print(params)}")
+        prosc.request(indexName.concat("/_search"), {
+            method: "POST"
+            putdata: params
+        })
+    }
+
+    // finis
+    
+    osin
+};
+
+
+/*
+ * OpenSearchClient
+ *
+ * An OpenSearchClient client as a wrapper for the REST API. Options are:
+ *  {
+ *      url:    <string>                        -- host URL with port
+ *      cacert: <data>                          -- CA pem for host
+ *      auth:   <user>:<password>               -- basic authentication
+ *      debug:  <boolean>                       -- debuglog additional error information
+ *      languages: [
+ *          <language>: {
+ *              keywords: [<strings>...]        -- lowercase keywords not to stem
+ *          }
+ *          ...
+ *      ]
+ *  }
+ *
+ */
+
+closure OpenSearchClient(goptions, local oscl, prosc) {
+    global(JSpath)
+    oscl = new(object, this)
+    prosc = new(object, this)
+    prosc.oscl = oscl
+    goptions = new(goptions)
+    if goptions.url.slice(-1) != "/"
+        goptions.url = goptions.url.concat("/")
+
+    // request
+    //
+    // Perform a request on the host as specified.
+    //
+    prosc.request = closure request(path, roptions, local url, error, data) {
+        if roptions
+            roptions = new(roptions)
+        else
+            roptions = { }
+        roptions.debug = goptions.debug
+        roptions.auth = goptions.auth
+        roptions.cacert = goptions.cacert
+        roptions.allowSelfSigned = true
+        url = goptions.url.concat(path)
+        `(error, data) = HttpsApiRequest(url, roptions)
+    }
+    
+    // ping
+    //
+    // Ping the cluster and get basic ID and version information.
+    //
+    oscl.ping = closure ping() {
+        request("")
+    }
+    
+    // index
+    //
+    // Return an object for the named index, which may not exist yet.
+    //
+    oscl.index = closure index(indexName) {
+        openSearchIndex(prosc, indexName, goptions)
+    }
+
+    // search
+    //
+    // Simple search on all indexes and fields. Options are:
+    //  {
+    //      indexes:    <array>                     -- indexes to search, default all
+    //      size:       <integer>                   -- results to return, default 10
+    //      query:      <dictionary>                -- OpenSearch query, default multi_match
+    //      qopts:      <dictionary>                -- OpenSearch query options for multi_match
+    //      filter:     <dictionary>                - OpenSearch query filter
+    //  }
+    //
+    oscl.search = closure search(what, soptions, local params, query, path) {
+        params = { }
+        query = {
+            multi_match: {
+                query: what
+                fields: "*"
+                fuzziness: "auto"
+            }
+        }
+        if soptions.size
+            params.size = soptions.size                                     // results to return
+        if soptions.query
+            query = soptions.query
+        if dictionary(soptions.qopts)
+            query.multi_match = merge(query.multi_match, soptions.qopts)
+        if dictionary(soptions.filter) {
+            query = {
+                bool: {
+                    must: query
+                    filter: soptions.filter
+                }
+            }
+        }
+        params.query = query
+        path = "_search"
+        if soptions.indexes
+            path = soptions.indexes.join(",").concat("/", path)
+        prosc.request(path, {
+            method: "POST"
+            putdata: params
+        })
+    }
+
+    // finis
+    
+    oscl
+};
+
+
+/*
+ * opseInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function opseInit(local manifest) {
+    manifest = `(openSearchIndex, OpenSearchClient, opseInit)
+
+    Naan.module.build(module.id, "openSearch", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("frameworks/common").LiveImport()
+        letimport(require("frameworks/node/https_request.nlg"))
+        modobj.exports.OpenSearchClient = OpenSearchClient
+    })
+} ();

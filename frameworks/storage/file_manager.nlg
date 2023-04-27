@@ -385,7 +385,7 @@ closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
         else if files.fs.dirSearch
             processGrep(files.fs.dirSearch)
         else {
-            asyncArray(files.nodes, 5, closure(node, index, elements, local error, lines) {
+            asyncArray(files.nodes, 5, closure(node, local error, lines) {
                 ++fileCount
                 `(error, lines) = files.fs.readLines(node, config)
                 if error

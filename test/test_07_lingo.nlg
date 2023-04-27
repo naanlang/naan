@@ -108,7 +108,8 @@ RegisterTestCategory("Lingo", [
     //
         
     [ "false <=> false;", "0" ],
-    [ "false <=> true;", "0" ],
+    [ "false <=> true;", "1" ],
+    [ "true <=> false;", "-1" ],
     [ "'a' <=> 'a';", "0" ],
     [ "'a' <=> 'b';", "-1" ],
     [ "'b' <=> 'a';", "1" ],

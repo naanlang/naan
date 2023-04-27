@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
@@ -61,7 +61,7 @@ closure CloudWatchLogs(local cwlogs) {
     // describeLogStreams
     //
     cwlogs.describeLogStreams = closure describeLogStreams(name, options,
-        local params, remaining, output, error)
+        local params, output, error)
     {
         params = {
             logGroupName: name
@@ -83,7 +83,7 @@ closure CloudWatchLogs(local cwlogs) {
     // getLogEvents
     //
     cwlogs.getLogEvents = closure getLogEvents(groupName, streamName, options
-        local params, remaining, output, error)
+        local params, output, error)
     {
         params = {
             logGroupName: groupName

@@ -356,6 +356,12 @@ exports.NaanControllerWeb = function() {
         this.int = function int() {
             contSelf.Interrupt();
         };
+        //
+        // StateSave
+        //
+        this.StateSave = function StateSave() {
+            return (false);
+        };
     }
     
     //
@@ -564,8 +570,8 @@ exports.NaanControllerWeb = function() {
             if ("localStorage" in window && window["localStorage"] !== null)
             {
                 localStorage.removeItem("NaanState_Hosted");
-                if (localStorage.setItem("NaanState_Hosted", statestr) !== undefined)
-                    return (true);
+                localStorage.setItem("NaanState_Hosted", statestr);
+                return (true);
             }
         } catch(e) {
             console.log("save state failed: " + "(" + e + ")");

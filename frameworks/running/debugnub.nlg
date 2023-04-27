@@ -19,13 +19,13 @@
  */
 
 closure DebugNub(local nub, debug, paused) {
+    if debugNub !== `debugNub {                                             // multiple load attempt
+        debuglog("DebugNub: a debugNub already exsts; there can be only one")
+        return (false)
+    }
     debug = module.owner.list.Util.exports.DebugController()
     if !debug {                                                             // no debugger support in worker
         debuglog("DebugNub: no debugger support in this execution instance")
-        return (false)
-    }
-    if debugNub !== `debugNub {                                             // multiple load attempt
-        debuglog("DebugNub: a debugNub already exsts; there can be only one")
         return (false)
     }
     nub = new(object, this)

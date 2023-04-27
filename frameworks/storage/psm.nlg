@@ -276,7 +276,7 @@ closure MakePSMutil(fs, local util) {
         //
         // Pass 1 - Get info on all source files, and make destination directories
         //
-        asyncArray(sources, 10, closure mklist(entry, index, elements,
+        asyncArray(sources, 10, closure mklist(entry,
             local srcpath, destpath, epath, error, stat, folder, node) {
             srcpath = fs.path.join(inpath, entry)
             destpath = outfs.path.join(outpath, entry)
@@ -308,7 +308,7 @@ closure MakePSMutil(fs, local util) {
         // Pass 2 - erase extraneous files and folders from destination
         //
         if options.erase {
-            asyncArray(keys(folders).toarray, 10, closure eraser(destpath, index, elements
+            asyncArray(keys(folders).toarray, 10, closure eraser(destpath
                 local error, outfolder, folder, namesin, removes, delopt) {
                 `(error, outfolder) = outfs.dirList(destpath)               // existing files in our destination
                 if error
@@ -336,7 +336,7 @@ closure MakePSMutil(fs, local util) {
         //
         // Pass 3 - copy files and links
         //
-        asyncArray(copies, 10, closure cpfiles(entry, index, elements, 
+        asyncArray(copies, 10, closure cpfiles(entry, 
             local error, data, dest, instat, outstat) {
             `(error, instat) = fs.info(entry.source, fsopt)
             if !error {

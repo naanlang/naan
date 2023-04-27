@@ -68,7 +68,11 @@ closure SQS(local sqs) {
     // sendMessage
     //
     sqs.sendMessage = closure sendMessage(queueUrl, msgBody, local params, pending) {
-        debuglog("SQS.sendMessage:", awsSDK, sqs.aws, sqs.aws.sendMessage)
+        if !sqs.aws || !queueUrl {
+            error = Error("SQS.sendMessage: invalid arguments", sqs.aws)
+            ErrorDebuglog(error)
+            return (list(error))
+        }
         params = {
             MessageBody: msgBody
             QueueUrl: queueUrl
