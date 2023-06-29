@@ -81,7 +81,7 @@ closure HttpsApiRequest(url, options,
         response.on("data", function (chunk) {
             chunks.push(chunk)
         })
-        response.on("end", function (local content, error) {
+        response.on("end", function (local content, error, headers) {
             content = js.g.Buffer.concat(chunks)
             if response.statusCode < 200 || response.statusCode >= 300 {
                 if options.debug
@@ -107,7 +107,10 @@ closure HttpsApiRequest(url, options,
             }
             else
                 error = Error("HttpsApiRequest terminated prematurely:", url, response.statusCode)
-            pending.signal(list(error, content))
+            pending.signal(list(error, content, {
+                headers: response.headers
+                status: response.statusCode
+            }))
         })
     })
     request.on("error", function hre(error) {

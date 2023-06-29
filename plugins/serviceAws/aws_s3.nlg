@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2022 by Richard C. Zulch
+ * Copyright (c) 2020-2023 by Richard C. Zulch
  *
  */
 
@@ -24,7 +24,7 @@
 closure S3bucket(s3, name, bucketOptions, local bucket) {
     bucket = new(object, this)
     bucket.name = name
-        
+
     //
     // head
     //
@@ -77,10 +77,10 @@ closure S3bucket(s3, name, bucketOptions, local bucket) {
         }
         if options.contentType
             params.ContentType = options.contentType
+        else
+            params.ContentType = "application/octet-stream"
         if options.metadata
             params.Metadata = options.metadata
-        else
-            params.Metadata = "application/octet-stream"
         if options.cacheControl
             params.CacheControl = options.cacheControl
         else if bucket.cacheControl
@@ -89,6 +89,129 @@ closure S3bucket(s3, name, bucketOptions, local bucket) {
         s3.aws.putObject(params, function(error, resp) {
             if error
                 error = Error("S3bucket.put failed:", error.name, "key:", key, "in", bucket.name)
+            pending.signal(list(error, resp))
+        })
+        pending.wait()
+    }
+
+    // listMultipartUploads
+    //
+    // options:
+    //  {
+    //      keyMarker: <string>                 - start after this key
+    //  }
+    //
+    bucket.listMultipartUploads = closure listMultipartUploads(prefix, options,
+        local params, pending) {
+        params = {
+            Bucket: bucket.name
+            Prefix: prefix
+        }
+        if options.keyMarker
+            params.KeyMarker = options.keyMarker
+        pending = new(nonce)
+        s3.aws.listMultipartUploads(params, function(error, resp) {
+            if error
+                error = Error("S3bucket.listMultipartUploads failed:", error.name, "in", bucket.name)
+            pending.signal(list(error, resp))
+        })
+        pending.wait()
+    }
+
+    // listParts
+    //
+    bucket.listParts = closure listParts(key, uploadID,
+        local params, pending) {
+        params = {
+            Bucket: bucket.name
+            Key: key
+            UploadId: uploadID
+        }
+        pending = new(nonce)
+        s3.aws.listParts(params, function(error, resp) {
+            if error
+                error = Error("S3bucket.listParts failed:", error.name, "key:", key, "in", bucket.name)
+            pending.signal(list(error, resp))
+        })
+        pending.wait()
+    }
+
+    // createMultipartUpload
+    //
+    // options:
+    //  {
+    //      contentType:    <string>
+    //      cacheControl:   <string>
+    //      metadata:       { <items> }         - optional dictionary of keys to store
+    //      acl:            <string>            - e.g. "public-read"
+    //  }
+    //
+    bucket.createMultipartUpload = closure createMultipartUpload(key, options,
+        local params, pending) {
+        params = {
+            Bucket: bucket.name
+            Key: key
+        }
+        if options.contentType
+            params.ContentType = options.contentType
+        if options.cacheControl
+            params.CacheControl = options.cacheControl
+        if options.metadata
+            params.Metadata = options.metadata
+        if options.acl
+            params.ACL = options.acl
+        pending = new(nonce)
+        s3.aws.createMultipartUpload(params, function(error, resp) {
+            if error
+                error = Error("S3bucket.createMultipartUpload failed:", error.name, "key:", key, "in", bucket.name)
+            pending.signal(list(error, resp))
+        })
+        pending.wait()
+    }
+
+    // completeMultipartUpload
+    //
+    // parts:
+    //  {
+    //      [
+    //          ChecksumSHA256: <string>
+    //          ETag:           <string>
+    //          PartNumber:     <integer>
+    //      ]...
+    //  }
+    //
+    bucket.completeMultipartUpload = closure completeMultipartUpload(key, uploadID, parts,
+        local params, pending) {
+        params = {
+            Bucket: bucket.name
+            Key: key
+            UploadId: uploadID
+            MultipartUpload: {
+                Parts: parts
+            }
+        }
+        pending = new(nonce)
+        s3.aws.completeMultipartUpload(params, function(error, resp) {
+            if error
+                error = Error("S3bucket.completeMultipartUpload failed:", error.name, "key:", key, "in", bucket.name)
+            pending.signal(list(error, resp))
+        })
+        pending.wait()
+    }
+    
+    // abortMultipartUpload
+    //
+    bucket.abortMultipartUpload = closure abortMultipartUpload(key, uploadID,
+        local params, pending) {
+        params = {
+            Bucket: bucket.name
+            Key: key
+            UploadId: uploadID
+        }
+        pending = new(nonce)
+        s3.aws.abortMultipartUpload(params, function(error, resp) {
+            if error
+                error = Error("S3bucket.abortMultipartUpload failed:", error.name, "key:", key, "in", bucket.name)
             pending.signal(list(error, resp))
         })
         pending.wait()
@@ -154,7 +277,9 @@ closure S3(local s3) {
     //      ContentType:        <string>        // video/mp4 or whatever
     //      ResponseCacheControl:   <string>    // reportedly for getObject only
     //      ACL:                <string>        // e.g. "public-read"
-    //      Body:               <data>          // fiik
+    //      Body:               <data>          // fiik why you'd sign this
+    //      PartNumber:         <integer>       // required for uploadPart
+    //      UploadId:           <string>        // required for uploadPart
     //  }
     //
     // Options:
@@ -169,6 +294,8 @@ closure S3(local s3) {
                 cmdname = "PutObjectCommand"
             else if cmdname == "getObject"
                 cmdname = "GetObjectCommand"
+            else if cmdname == "uploadPart"
+                cmdname = "UploadPartCommand"
             else
                 return (list(Error("S3bucket.getSignedURL: command not present:", cmdname)))
             command = xnew(awsSDK.s3Commands[cmdname], cmdparams)

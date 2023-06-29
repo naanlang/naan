@@ -4,7 +4,7 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     **Naan for NPM** version **1.0.11+1**
+     **Naan for NPM** version **1.0.12+1**
      Copyright (c) 2017-2023 Zulch Laboratories, Inc.
 
 #### Features
@@ -66,7 +66,7 @@ Fetch your public IP from a website (NodeJS version 18 or later):
 
 ```
 % naan -e "new(await(await(js.g.fetch('http://ip.jsontest.com/')).1.json()).1)"
-{ ip: "64.201.122.183" }
+{ ip: "64.205.147.202" }
 ```
 
 

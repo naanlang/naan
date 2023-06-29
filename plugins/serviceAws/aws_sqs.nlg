@@ -14,7 +14,7 @@
 /*
  * SqsMQ
  *
- *     SqsMQ, a container for holding the queue name and sending messages to it.
+ *     SqsMQ, a container for holding the queue name and communicating messages with it.
  *
  */
 
@@ -28,6 +28,20 @@ closure SqsMQ(sqs, queueUrl, local sqsq) {
         sqs.sendMessage(queueUrl, msgBody)
     }
     
+    //
+    // receiveMessage
+    //
+    sqsq.receiveMessage = closure receiveMessage(options) {
+        sqs.receiveMessage(queueUrl, options)
+    }
+    
+    //
+    // deleteMessage
+    //
+    sqsq.deleteMessage = closure deleteMessage(receiptHandle) {
+        sqs.deleteMessage(queueUrl, receiptHandle)
+    }
+
     // finis
     sqsq
 }
@@ -63,16 +77,41 @@ closure SQS(local sqs) {
         sqs.aws = xnew(awsSDK.SQS, params)
         `(false, { ok: true })
     }
-    
+        
+    // checkopen
+    //
+    // Return an error if not open or badargs, otherwise return false.
+    //
+    function checkopen(where, badargs, local error) {
+        if !sqs.aws
+            error = Error("SQS.${where}: not open")
+        else if badargs
+            error = Error("SQS.${where}: invalid arguments")
+        else
+            return (false)
+        ErrorDebuglog(error)
+        return (list(error))
+    }
+
     //
     // sendMessage
     //
+    // Send a message on the SQS queue. Typical non-error response:
+    //
+    //  {
+    //      $metadata       : {
+    //          httpStatusCode      : 200,
+    //          requestId           : undefined,
+    //          extendedRequestId   : undefined,
+    //          cfId                : undefined,
+    //          attempts            : 1,
+    //          totalRetryDelay     : 0 },
+    //      MD5OfMessageBody: "0bbe03745ee74d6bed29461ed7f75e30",
+    //      MessageId       : "faf5cc92-84c7aa78-dfdf803-72c2b599" }
+    //
     sqs.sendMessage = closure sendMessage(queueUrl, msgBody, local params, pending) {
-        if !sqs.aws || !queueUrl {
-            error = Error("SQS.sendMessage: invalid arguments", sqs.aws)
-            ErrorDebuglog(error)
-            return (list(error))
-        }
+        if checkopen(`sendMessage, !queueUrl)
+            return
         params = {
             MessageBody: msgBody
             QueueUrl: queueUrl
@@ -80,16 +119,102 @@ closure SQS(local sqs) {
         pending = new(nonce)
         sqs.aws.sendMessage(params, function(error, data) {
             if error
-                ErrorDebuglog("aws.sendMessage failed", error)
+                ErrorDebuglog("sqs.sendMessage failed", error)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+        
+    //
+    // receiveMessage
+    //
+    // Reeive a message from the SQS queue. If the response has the array Messages defined then one
+    // or more messages were received, and otherwise not. Typical non-error response with message:
+    //
+    //  {
+    //      $metadata: {
+    //          httpStatusCode   : 200,
+    //          requestId        : undefined,
+    //          extendedRequestId: undefined,
+    //          cfId             : undefined,
+    //          attempts         : 1,
+    //          totalRetryDelay  : 0 },
+    //      Messages : [
+    //          {
+    //              MessageId    : "faf5cc92-84c7aa78-dfdf803-72c2b599",
+    //              ReceiptHandle: "EIoCINHnuIOMMSgA",
+    //              MD5OfBody    : "0bbe03745ee74d6bed29461ed7f75e30",
+    //              Body         : "{\"endpoint\":\"/video/process\",\"videoID\":\"vid-1673554543038-a31774508b8d\"}",
+    //              Attributes   : {
+    //                  ApproximateFirstReceiveTimestamp: "1686855627729",
+    //                  ApproximateReceiveCount: "1",
+    //                  SentTimestamp       : "1686855627375",
+    //                  SenderId            : "aje9s3df60gofsddio0c@as" } }] }
+    //
+    // Options:
+    //  {
+    //      attributes: [<names>, ...]          // SQS attributes to return, default All
+    //      messageAttributes: [<names>, ...]   // message names to return, default All
+    //      maxReceive:  <integer>              // max messages to return, default 1
+    //      rraid:      <string>                // Receive Request Attempt Id for FIFO queues
+    //      visibilityTimeout: <integer>        // hide time, default 30 seconds
+    //      waitTimeSeconds: <integer>          // time to wait for message, max 20 seconds, default 0
+    //  }
+    //
+    sqs.receiveMessage = closure receiveMessage(queueUrl, options, local params, pending) {
+        if checkopen(`receiveMessage, !queueUrl)
+            return
+        params = {
+            QueueUrl: queueUrl
+        }
+        options = merge({
+            attributes: [`All]
+            messageAttributes: [`All]
+            maxReceive: 1
+            visibilityTimeout: 30
+            waitTimeSeconds: 0
+        }, options)
+        params.Attributes = options.attributes
+        params.MessageAttributes = options.messageAttributes
+        params.MaxNumberOfMessages = options.maxReceive
+        params.VisibilityTimeout = options.visibilityTimeout
+        params.WaitTimeSeconds = options.waitTimeSeconds
+        if options.rraid
+            params.ReceiveRequestAttemptId = options.rraid
+        pending = new(nonce)
+        sqs.aws.receiveMessage(params, function(error, data) {
+            if error
+                ErrorDebuglog("sqs.receiveMessage failed", error)
             pending.signal(list(error, data))
         })
         pending.wait()
     }
     
     //
+    // deleteMessage
+    //
+    // Delete a message after processing.
+    //
+    sqs.deleteMessage = closure deleteMessage(queueUrl, receiptHandle, local params, pending) {
+        if checkopen(`deleteMessage, !queueUrl || !receiptHandle)
+            return
+        params = {
+            QueueUrl: queueUrl
+            ReceiptHandle: receiptHandle
+        }
+        pending = new(nonce)
+        sqs.aws.deleteMessage(params, function(error, data) {
+            if error
+                ErrorDebuglog("sqs.deleteMessage failed", error)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    //
     // mq
     //
-    sqs.mq = function(queueUrl) {
+    sqs.mq = function mq(queueUrl) {
         SqsMQ(sqs, queueUrl)
     }
 

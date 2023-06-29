@@ -2,11 +2,11 @@
  * workers.nlg
  * Naanlib/frameworks/browser
  *
- *     Service worker and worker pools for the browser.
+ *     Service worker control for the browser.
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2023 by Richard C. Zulch
  *
  */
 
@@ -19,32 +19,13 @@
  */
 
 closure ServiceWorker(pubID, pubVersion, local serv, callback) {
+    global(window)
     serv = new(object, this)
-
-    //
-    // updateReg
-    //
-    // Registration has updated the service worker, so reestablish communication with the new one.
     
-    closure updateReg(local mchan) {
-        if !serv.sw
-            return
-        mchan = xnew(window.MessageChannel)
-        serv.msgport = mchan.port2
-        serv.msgport.onmessage = workerMsg.proc
-        serv.sw.postMessage({
-            hereIsYourPort: mchan.port1
-            hereIsMyID: pubID
-            hereIsMyVersion: pubVersion
-        }, [mchan.port1])
-    }
-    
-    //
     // workerMsg
     //
     // A message has come in from the service worker.
     //
-    
     closure workerMsg(msg) {
         msg = msg.data
         if msg.id == "fetch" {                                              // fetching a resource for the page
@@ -68,17 +49,34 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
             debuglog("sw[".concat(serv.scope, "]: "), msg.text)             // handy remote debug capability
     }
     
+    // updateComms
     //
+    // Establish communication with a service worker, returning the message port.
+    //
+    closure updateComms(sworker, proc, local mchan, msgport) {
+        if !sworker
+            return (false)
+        mchan = xnew(window.MessageChannel)
+        msgport = mchan.port2
+        msgport.onmessage = proc
+        sworker.postMessage({
+            hereIsYourPort: mchan.port1
+            hereIsMyID: pubID
+            hereIsMyVersion: pubVersion
+        }, [mchan.port1])
+        msgport
+    }
+
     // defaultCB
     //
-    //     Default callback if one is not specified.
-    
+    // Default callback if one is not specified.
+    //
     closure defaultCB(error, data) {
         if error
             return (ErrorDebugLog("service worker error", error))
         debuglog("service worker", serv.scope.concat(":"), data.message, data.request.method, data.request.url)
         if data.message == "fetch" {
-            serv.msgport.postMessage({
+            serv.activePort.postMessage({
                 id: "response"
                 seq: data.seq
                 body: "body content stub - ".concat(data.request.method, " - ", data.request.url, " (", data.version, ")")
@@ -90,21 +88,18 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
         }
     }
     
-    //
     // reportResult
     //
-    
     closure makeResult(error, data) {
         callback(error, data)
         list(error, data)
     }
 
-    //
     // register
     //
     //     Register our service worker object for a specific scope.
-    
-    serv.register = closure register(scope, cb, local result) {
+    //
+    serv.register = closure register(scope, cb, local err, reg) {
         if !cb
             cb = defaultCB
         if serv.reg
@@ -115,61 +110,102 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
             return (makeResult(Error("service worker scope required")))
         if !window.navigator.serviceWorker
             return (makeResult(Error("service workers not supported")))
+        `(err, reg) = await(window.navigator.serviceWorker.register("sworker.js", { scope: scope }))
+        if err
+            return (list(Error("service worker register failed", err)))
+        serv.reg = reg
+        `(err) = await(reg.update())
+        if err
+            return (list(Error("service worker update failed", err)))
+        if reg.installing
+            serv.sw = reg.installing
+        else if reg.waiting
+            serv.sw = reg.waiting
+        else if reg.active
+            serv.sw = reg.active
+        if reg.waiting {
+            serv.upnotified = true
+            makeResult(false, {
+                message: "updated"
+            })
+        }
+        serv.activePort = updateComms(serv.sw, workerMsg.proc)
+        reg.addEventListener("updatefound", function() {
+            if !serv.upnotified
+                makeResult(false, {
+                    message: "updated"
+                })
+            serv.upnotified = true
+        })
+        reg.addEventListener("statechange", function() {
+            debuglog("service worker state change:", serv.reg.state)
+        })
+        reg.addEventListener("controllerchange", function() {
+            debuglog("service worker controller change:", serv.upgrade)
+        })
         window.navigator.serviceWorker.addEventListener("message", function(event) {
             if event.data.msg == "Naan_need_fetch_port"
-                updateReg()
+                serv.activePort = updateComms(serv.sw, workerMsg.proc)
         })
-        await(window.navigator.serviceWorker.register("sworker.js", { scope: scope }).then(function (reg) {
-            return (reg.update())
-        }).then(function (reg) {
-            serv.reg = reg
-            reg.update()
-            if reg.installing
-                serv.sw = reg.installing
-            else if reg.waiting
-                serv.sw = reg.waiting
-            else if reg.active
-                serv.sw = reg.active
-            updateReg()
-            reg.addEventListener("updatefound", function() {
-                serv.sw = serv.reg.installing                               // worker version was updated
-                updateReg()
-            })
-            reg.addEventListener("statechange", function() {
-                debuglog("service worker state change:", serv.reg.state)
-            })
-            reg.addEventListener("controllerchange", function() {
-                debuglog("service worker controller change:", serv.upgrade)
-            })
-            result = makeResult(false, {
-                message: "opened"
-            })
-        }).catch(function (error) {
-            result = makeResult(Error("registration failed", error))
-            ErrorDebuglog("serv.register failed", result)
-        }))
-        result
+        makeResult(false, {
+            message: "opened"
+        })
     }
     
+    // reload
     //
+    // If a sevice worker is waiting, then terminate the old one and activate the new one -- which
+    // will cause the page and all tabs on this page to reload. This returns false if there is no
+    // new service worker waiting, or true if we will soon be reloaded by the controllerchange
+    // event below.
+    //
+    serv.reload = closure reload(local waitingPort, activePort) {
+        waitingPort = updateComms(serv.reg.waiting, function() {})
+        if !waitingPort
+            return (false)
+        activePort = updateComms(serv.reg.active, function() {})
+        activePort.postMessage({
+            id: "terminate"
+        })
+        waitingPort.postMessage({
+            id: "skipWaiting"
+        })
+        return (true)
+    }
+
+    // reload on controllerchange event
+    //
+    window.navigator.serviceWorker.addEventListener("controllerchange", function() {
+    	window.location.reload()
+    })
+
+    // abortURL
+    //
+    // Send an abortURL message to the active service worker
+    //
+    serv.abortURL = closure abortURL(url) {
+        serv.activePort.postMessage({
+            id: "abortURL"
+            url: url
+        })
+    }
+
     // unregister
     //
     //     Unregister our service worker.
-    
-    serv.unregister = closure unregister(local result) {
+    //
+    serv.unregister = closure unregister(local err, success) {
         if !serv.reg
             return (makeResult(Error("already not registered")))
-        await(serv.reg.unregister().then(function(success) {
-            serv.reg = false                                                // good or bad, don't try again
-            callback = defaultCB
-            if success
-                result = makeResult(false, {
-                    message: "closed"
-                })
-            else
-                result = makeResult(Error("unregister failed"))
-        }))
-        result
+        `(err, success) = await(serv.reg.unregister())
+        serv.reg = false                                                    // good or bad, don't try again
+        callback = defaultCB
+        if success
+            makeResult(false, {
+                message: "closed"
+            })
+        else
+            makeResult(Error("unregister failed"))
     }
 
     // finis
@@ -213,7 +249,7 @@ closure ScopedServiceWorker(pubID, pubVersion, callback, local scoper, result) {
             if data.request.method != "GET" {
                 response.init.status = 405
                 response.init.statusText = "Method Not Allowed"
-                scoper.serv.msgport.postMessage(response)
+                scoper.serv.activePort.postMessage(response)
                 return
             }
             
@@ -236,15 +272,17 @@ closure ScopedServiceWorker(pubID, pubVersion, callback, local scoper, result) {
                 response.errorText = ErrorString(error)
                 response.init.status = 404
                 response.init.statusText = "Not Found"
-                scoper.serv.msgport.postMessage(response)
+                scoper.serv.activePort.postMessage(response)
                 return
             }
             
             // read resource succeeded
             response.body = data
-            scoper.serv.msgport.postMessage(response)
+            scoper.serv.activePort.postMessage(response)
             return
-        } else if data.message == "upgrade"
+        } else if data.message == "updated"
+            callback()
+        else if data.message == "upgrade"
             callback(data.version)
     })
     if result.0 {
@@ -384,6 +422,7 @@ closure TrackServiceWorkers(track, pubID, pubVersion, callback, local error) {
     if error
         ErrorDebugLog("TrackServiceWorkers: cannot load service worker", error)
     track.register(TrackedScope, "V-Site")
+    serviceWorker
 };
 
 

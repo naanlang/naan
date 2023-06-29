@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2022 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
@@ -138,7 +138,7 @@ function RandomBytes(bytes) {
  *
  */
  
-function UUID(local rando, cc) {
+function UUID(local rando) {
     rando = RandomBytes(36)                                                 // length of UUID
     "00000000-0000-4000-8000-000000000000".replace(RegExp("[018]", "g"), function(cc, offset) {
         if cc == "4"

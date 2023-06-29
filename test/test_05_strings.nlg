@@ -41,6 +41,7 @@ RegisterTestCategory("strings", [
 
     [ "\"abc\";", "\"abc\"" ],
     [ "strcat(\"abc\", \"def\");", "\"abcdef\"" ],
+    [ "strcat(\"abc\", `(d,e,f), \"ghi\");", "\"abc(d e f)ghi\"" ],
     [ "c=compress(\"abc\", \"def\");", "abcdef" ],
     [ "typeof(c);", "symbol" ],
     [ "explode(c);>", "(\"a\" \"b\" \"c\" \"d\" \"e\" \"f\")" ],

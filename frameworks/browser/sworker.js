@@ -32,11 +32,11 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2022 by Richard C. Zulch
+ * Copyright (c) 2020-2023 by Richard C. Zulch
  *
  */
 
-var CurrentCacheName = "Naanlang-1.0.11+1";
+var CurrentCacheName = "Naanlang-1.0.12+1";
 
 
 //
@@ -48,6 +48,9 @@ var fetchNextSeq = 1;                           // sequence number for source re
 var msgPorts = {};                              // message ports keyed by sourceId
 var fetchPorts = {};                            // message ports keyed by clientId
 var waitingForInit = [];                        // initialization functions, or false after done
+var upgradeMsgPorts = {};                       // message ports for sources to upgrade after activate
+var abortables = [];                            // requests that can be aborted
+var terminated;                                 // flag that this service worker has been terminated
 
 
 /*
@@ -89,25 +92,65 @@ var waitingForInit = [];                        // initialization functions, or 
         var pubVersion = event.data.hereIsMyVersion;
         var sourceId = event.source.id;                                     // client id of sender of message
         msgPorts[sourceId] = msgport;
-        console.log("[1.0.11+1] received new msgport for", sourceId, pubID, "-", pubVersion);
-        if (pubVersion != "1.0.11+1")
-            msgport.postMessage({                                           // notify new version available
-                id: "upgrade",
-                version: "1.0.11+1"
-            });
+        console.log("[1.0.12+1] received new msgport for", sourceId, pubID, "-", pubVersion);
+        if (pubVersion != "1.0.12+1") {
+            if (upgradeMsgPorts) {                                          // if not activated
+                console.log("[1.0.12+1] update pending for", sourceId);
+                upgradeMsgPorts[sourceId] = msgport;
+            }
+            else {
+                msgport.postMessage({                                       // notify new version available
+                    id: "upgrade",
+                    version: "1.0.12+1"
+                });
+                console.log("[1.0.12+1] update sent for:", sourceId);
+            }
+        }
         Reaper();                                                           // clean up obsolete info
-        
+
+        // terminate
+        //
+        // Terminate our service worker.
+        //
+        function terminate() {
+            terminated = true;
+            abortables.forEach(function(item) {
+                item.aborted = true;
+                item.abortcon.abort();
+            });
+            self.registration.unregister().then(function () {
+                return self.clients.matchAll();
+            }).then(function (clients) {
+                clients.forEach(function (client) {
+                    client.navigate(client.url);
+                });
+            });
+        }
+
         // msgport.onmessage events
         //
-        // This receives channel port messages that are responding to our fetch requests. The IDE
-        // can also send a text message for logging, but that is used only for debugging.
+        // This receives channel port messages from the IDE.
         //
         msgport.onmessage = function(msg) {
             msg = msg.data;
-            if (msg.id == "response")
+            if (msg.id == "skipWaiting") {                                  // try to activate this SW now
+                console.log("[1.0.12+1] attempting skipWaiting");
+                self.skipWaiting();
+            } else if (msg.id == "terminate") {                             // termiante this SW now
+                console.log("[1.0.12+1] terminated");
+                terminate();
+            } else if (msg.id == "abortURL") {                              // abort an I/O transaction
+                var href = new URL(msg.url).href;
+                abortables.forEach(function(item) {
+                    if (item.href == href) {
+                        item.aborted = true;
+                        item.abortcon.abort();
+                    }
+                });
+            } else if (msg.id == "response")                                // response from fetch request
                 processResponse(msg);
-            else if (msg.id == "text")
-                console.log("[1.0.11+1] msg received:", msg.text);
+            else if (msg.id == "text")                                      // just log some text
+                console.log("[1.0.12+1] msg received:", msg.text);
         };
         
         // send text to IDE log
@@ -118,7 +161,7 @@ var waitingForInit = [];                        // initialization functions, or 
             // don't clutter the log
             msgport.postMessage({
                 id: "text",
-                text: "port received by 1.0.11+1",
+                text: "port received by 1.0.12+1",
             });
             */
         if (--pending === 0)
@@ -135,7 +178,7 @@ var waitingForInit = [];                        // initialization functions, or 
         includeUncontrolled: true
     }).then(function(clientList) {
         clientList.every(function(client) {
-            console.log("[1.0.11+1] requesting new msgport for", client.id);
+            console.log("[1.0.12+1] requesting new msgport for", client.id);
             ++pending;
             client.postMessage({                                            // tell client(s) we need this fetch source
                 msg: "Naan_need_fetch_port",
@@ -181,12 +224,12 @@ function Reaper() {
             clients[clientList[clidex].id] = clientList[clidex];
         for (var sourceId in msgPorts)
             if (!clients[sourceId]) {
-                console.log("[1.0.11+1] source gone:", sourceId);
+                console.log("[1.0.12+1] source gone:", sourceId);
                 delete msgPorts[sourceId];                                  // no longer a source
             }
         for (var clientId in fetchPorts)
             if (!clients[clientId]) {
-                console.log("[1.0.11+1] client gone:", clientId);
+                console.log("[1.0.12+1] client gone:", clientId);
                 delete fetchPorts[clientId];                                // no longer a client
             }
         for (var fqdex = 0; fqdex < fetchQueue.length; ++fqdex) {
@@ -220,14 +263,17 @@ function ClearCaches() {
             return (Promise.all(
                 cacheNames.map(function(cacheName) {
                     if (cacheName != CurrentCacheName) {
-                        console.log('[1.0.11+1] deleting old cache:', cacheName);
+                        console.log('[1.0.12+1] deleting old cache:', cacheName);
                         return (caches.delete(cacheName));
                     }
                 })
             ));
         }).then(function() {                                                // claim all clients
-            console.log('[1.0.11+1] claiming clients');
+            console.log('[1.0.12+1] claiming clients');
             return (self.clients.claim());
+        }).then(function() {
+            console.log('[1.0.12+1] clients claimed');
+            return (Promise.resolve(true));
         });
     return (promise);
 }
@@ -269,7 +315,7 @@ function GetClientResponse(event, urlpath) {
             msgport.postMessage({
                 id: "fetch",
                 seq: seqno,
-                version: "1.0.11+1",
+                version: "1.0.12+1",
                 request: {
                     method: event.request.method,
                     url: event.request.url
@@ -317,8 +363,39 @@ function GetClientResponse(event, urlpath) {
  */
 
 self.addEventListener('install', function(event) {
-    console.log("[1.0.11+1] install");
+    console.log("[1.0.12+1] install");
     self.skipWaiting();
+});
+
+
+/*
+ * activate event
+ *
+ *     Received when our service worker is actually started, so remove any old cache data and claim clients.
+ *
+ */
+
+self.addEventListener('activate', function(event) {
+    console.log("[1.0.12+1] activate");
+    self.clients.matchAll({                                                 // for debugging, list controlled clients           
+        includeUncontrolled: true
+    }).then(function(clientList) {
+        var urls = clientList.map(function(client) {
+            return (client.url);
+        });
+        console.log('[1.0.12+1] matching clients:', urls.join(', '));
+    });
+    var promise = ClearCaches().then(function() {
+        for (var sourceId in upgradeMsgPorts) {
+            upgradeMsgPorts[sourceId].postMessage({                         // notify new version available
+                id: "upgrade",
+                version: "1.0.12+1"
+            });
+        }
+        upgradeMsgPorts = false;
+    });
+    if (event.waitUntil)
+        event.waitUntil(promise);
 });
 
 
@@ -335,12 +412,17 @@ self.addEventListener('fetch', function(event) {
         {
             if (response)
                 return (response);
-            var tid;
+            if (terminated)
+                return (new Response(undefined, {
+                    status: 299,
+                    statusText: "Request Cancelled"
+                }));
+            var request = event.request;
             var promise;
-            var url = new URL(event.request.url);
-            var nocache = event.request.method != "GET"
-                || url.search.length !== 0 && url.searchParams.get("naanver") !== "edf3a32af5c323a44ef5f80ba836e163"
-                || event.request.headers.get('range');
+            var url = new URL(request.url);
+            var nocache = request.method != "GET"
+                || url.search.length !== 0 && url.searchParams.get("naanver") !== "530fe56b481d458761fc3df60788d97b"
+                || request.headers.get('range');
             if (url.pathname.startsWith("/run/")) {
                 nocache = true;
                 if (waitingForInit) {
@@ -354,47 +436,43 @@ self.addEventListener('fetch', function(event) {
                 } else
                     promise = GetClientResponse(event, url.pathname);
             }
-            else
-                promise = fetch(event.request).catch(function (e) {
-                    console.log("[1.0.11+1] fetch failed", e);
+            else {
+                var abortcon = new AbortController();
+                var abortItem = {
+                    href: url.href,
+                    abortcon: abortcon
+                };
+                abortables.push(abortItem);
+                request = new Request(event.request, { signal: abortcon.signal });
+                promise = fetch(request).catch(function (e) {
+                    abortables = abortables.filter(function(item) {
+                        return (item !== abortItem);
+                    });
+                    if (abortItem.aborted) {
+                        return (new Response(undefined, {
+                            status: 299,
+                            statusText: "Request Cancelled"
+                        }));
+                    }
+                    console.log("[1.0.12+1] fetch failed", request.url, e);
                     return (new Response(undefined, {
                         status: 404,
                         statusText: "Fetch Failed"
                     }));
                 });
+            }
             return (promise.then(function(response) {
-                // delete tid timer ###
                 if (!nocache) {
                     var responseClone = response.clone();
                     caches.open(CurrentCacheName).then(function(cache) {
-                        cache.put(event.request, responseClone);
+                        cache.put(request, responseClone);
                     });
                 }
+                abortables = abortables.filter(function(item) {
+                    return (item !== abortItem);
+                });
                 return (response);
             }));
         })
     );
-});
-
-
-/*
- * activate event
- *
- *     Received when our service worker is actually started, so remove any old cache data and claim clients.
- *
- */
-
-self.addEventListener('activate', function(event) {
-    console.log("[1.0.11+1] activate");
-    self.clients.matchAll({                                                 // for debugging, list controlled clients           
-        includeUncontrolled: true
-    }).then(function(clientList) {
-        var urls = clientList.map(function(client) {
-            return (client.url);
-        });
-        console.log('[1.0.11+1] matching clients:', urls.join(', '));
-    });
-    var promise = ClearCaches();
-    if (event.waitUntil)
-        event.waitUntil(promise);
 });

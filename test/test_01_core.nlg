@@ -210,7 +210,89 @@ RegisterTestCategory("core", [
     [ "tuplepath(tetu, tetu.1.0)", "(1, 0)" ],
     [ "tuplepath(tetu, tetu.1.-1)", "(1, -1)" ],
     [ "tuplepath(tetu, tetu.1.1)", "(1, 1)" ],
+    
+    //
+    // recognizers
+    //
+    
+    [ "symbol();", "false" ],
+    [ "symbol('abc');", "false" ],
+    [ "symbol(false);", "true" ],
+    [ "symbol(true);", "true" ],
+    [ "symbol(false, true);", "true" ],
+    [ "symbol(false, 'abc');", "false" ],
 
+    [ "string();", "false" ],
+    [ "string('abc');", "true" ],
+    [ "string(false);", "false" ],
+    [ "string('abc', 'def');", "true" ],
+    [ "string(true, 'abc');", "false" ],
+
+    [ "name();", "false" ],
+    [ "name('abc');", "true" ],
+    [ "name(false);", "true" ],
+    [ "name('abc', 'def');", "true" ],
+    [ "name(true, 'abc');", "true" ],
+    [ "name(3);", "false" ],
+    [ "name(3, 'abc');", "false" ],
+    [ "name('abc', 3);", "false" ],
+
+    [ "builtin();", "false" ],
+    [ "builtin(builtin);", "false" ],
+    [ "builtin(builtin.proc);", "true" ],
+    [ "builtin(builtin.proc, true);", "false" ],
+    [ "builtin(builtin.proc, symbol.proc);", "true" ],
+
+    [ "procedure();", "false" ],
+    [ "procedure(procedure);", "false" ],
+    [ "procedure(`function);", "false" ],
+    [ "procedure(`(function));", "true" ],
+    [ "procedure(`(function), `(closure));", "true" ],
+    [ "procedure(`(function), `closure);", "false" ],
+    [ "procedure(`(function), 1);", "false" ],
+
+    [ "array();", "false" ],
+    [ "array([]);", "true" ],
+    [ "array([], {});", "false" ],
+    [ "array([], []);", "true" ],
+    [ "array(Array());", "false" ],
+    [ "array([], Array());", "false" ],
+
+    [ "dictionary();", "false" ],
+    [ "dictionary({});", "true" ],
+    [ "dictionary({}, []);", "false" ],
+    [ "dictionary({}, {});", "true" ],
+    [ "dictionary(xnew());", "false" ],
+    [ "dictionary({}, xnew());", "false" ],
+
+    [ "object();", "false" ],
+    [ "object(new(object));", "true" ],
+    [ "object(new(object), []);", "false" ],
+    [ "object(new(object), new(object));", "true" ],
+
+    [ "tuple();", "false" ],
+    [ "tuple(1);", "false" ],
+    [ "tuple(`());", "false" ],
+    [ "tuple(`(1));", "true" ],
+    [ "tuple(`(1), true);", "false" ],
+    [ "tuple(`(1), `(2));", "true" ],
+    [ "tuple(`(function), `(2));", "true" ],
+
+    [ "atom();", "false" ],
+    [ "atom(1);", "true" ],
+    [ "atom(1, 2);", "true" ],
+    [ "atom(`());", "true" ],
+    [ "atom(`(1));", "false" ],
+    [ "atom(`(1), true);", "false" ],
+    [ "atom(`(1), `(2));", "false" ],
+
+    [ "empty();", "false" ],
+    [ "empty(1);", "true" ],
+    [ "empty(1, 2);", "true" ],
+    [ "empty(`());", "true" ],
+    [ "empty(`(1));", "false" ],
+    [ "empty(`(1), true);", "false" ],
+    [ "empty(`(1), `(2));", "false" ],
 
     //
     // builtins
@@ -272,12 +354,12 @@ RegisterTestCategory("core", [
     [ "print(testcore=`testcore);", "testcore|testcore" ],
     [ "print(testcore=42);", "42|42" ],
  
-    [ "cond();", { errors: "cond( requires if expression at (1, 7) found )" } ],
+    [ "cond();", { errors: "cond( requires if expression at (1, 6) found )" } ],
     [ "quote(cond(if false 3 else if true 4));>", "(cond ((identity false) 3) ((identity true) 4))" ],
     [ "cond(if false 3 else if true 4);", "4" ],
     [ "cond (if 1 and\n 2, 3);", "3" ],
     [ "cond(print(false),print(\"hi\"));",
-        { errors: "cond( requires if expression at (1, 7) found print" } ],
+        { errors: "cond( requires if expression at (1, 6) found print" } ],
     
     [ "body();", "false" ],
     [ "quote(body(if false 3 else if true 4));>", "(body ((identity false) 3) ((identity true) 4))" ],
@@ -678,8 +760,15 @@ RegisterTestCategory("core", [
     [ "new(array).shift();>", "undefined" ],
     [ "totuple(new(array).concat(w, x, y, z));>", "(w x y z)" ],
     
-    [ "Array(1,2,3).forEach(function(x) { print(x),return });", "123|undefined" ],
-
+    [ "Array(1,2,3).forEach(function(x) { print(x) });", "123|undefined" ],
+    
+    [ "[3,1,2].sort();", "[1, 2, 3]" ],
+    [ "[`g,`a,`b].sort();", "[a, b, g]" ],
+    [ "[1,[2,3],4].flat();", { errors: 'arrayCall "flat": not defined' } ],
+    [ "[1,2,3].filter(function(x){0});", "[1, 2, 3]" ],
+    [ "[1,2,3].filter(function(x){ false });", "[]" ],
+    [ "[1,2,3].find(function(x){ x==2 && 0 });", "2" ],
+    [ "[1,2,3].findIndex(function(x){ x==2 && 0 });", "1" ],
 
     //
     // dates
@@ -710,56 +799,67 @@ RegisterTestCategory("core", [
     [ "length(stacktrace());", "55" ],
     
     //
-    // lower builtin
+    // relate builtin
     //
     
-    [ "lower(1, 1);", "false" ],
-    [ "lower(1, 2);", "true" ],
-    [ "lower(2, 1);", "false" ],
-    [ "lower(1.0, 1.0);", "false" ],
-    [ "lower(1.0, 2.0);", "true" ],
-    [ "lower(2.0, 1.0);", "false" ],
-    [ "lower(1, 1.0);", "true" ],
-    [ "lower(1, 2.0);", "true" ],
-    [ "lower(2, 1.0);", "true" ],
-    [ "lower(1.0, 1);", "false" ],
-    [ "lower(1.0, 2);", "false" ],
-    [ "lower(2.0, 1);", "false" ],
+    [ "relate(1, 1);", "0" ],
+    [ "relate(1, 2);", "-1" ],
+    [ "relate(2, 1);", "1" ],
+    [ "relate(1.0, 1.0);", "0" ],
+    [ "relate(1.0, 2.0);", "-1" ],
+    [ "relate(2.0, 1.0);", "1" ],
+    [ "relate(1, 1.0);", "0" ],
+    [ "relate(1, 2.0);", "-1" ],
+    [ "relate(2, 1.0);", "1" ],
+    [ "relate(1.0, 1);", "0" ],
+    [ "relate(1.0, 2);", "-1" ],
+    [ "relate(2.0, 1);", "1" ],
 
-    [ "lower(\"abc\", \"abc\");", "false" ],
-    [ "lower(\"abc\", \"def\");", "true" ],
-    [ "lower(\"def\", \"abc\");", "false" ],
-    [ "lower(\"abc\", 1);", "false" ],
-    [ "lower(\"abc\", 1.0);", "false" ],
-    [ "lower(1, \"def\");", "true" ],
-    [ "lower(1.0, \"def\");", "true" ],
+    [ "relate(\"abc\", \"abc\");", "0" ],
+    [ "relate(\"abc\", \"def\");", "-1" ],
+    [ "relate(\"def\", \"abc\");", "1" ],
+    [ "relate(\"abc\", 1);", "-1" ],
+    [ "relate(\"abc\", 1.0);", "-1" ],
+    [ "relate(1, \"def\");", "1" ],
+    [ "relate(1.0, \"def\");", "1" ],
 
-    [ "lower(car(nsactive(true)), car(nsactive(true)));", "false" ],
-    [ "lower(car(nsactive(true)), cadr(nsactive(true)));", "false" ],
-    [ "lower(cadr(nsactive(true)), car(nsactive(true)));", "true" ],
+    [ "relate(car(nsactive(true)), car(nsactive(true)));", "0" ],
+    [ "relate(car(nsactive(true)), cadr(nsactive(true)));", "1" ],
+    [ "relate(cadr(nsactive(true)), car(nsactive(true)));", "-1" ],
 
-    [ "lower(a, a);", "false" ],
-    [ "lower(a, b);", "false" ],
-    [ "lower(b, a);", "false" ],
+    [ "relate(`a, `a);", "0" ],
+    [ "relate(`a, `b);", "-1" ],
+    [ "relate(`b, `a);", "1" ],
 
-    [ "lower(a, 1);", "false" ],
-    [ "lower(a, 1.0);", "false" ],
-    [ "lower(a, \"def\");", "true" ],
-    [ "lower(a, car(nsactive(true)));", "true" ],
-    [ "lower(1, b);", "true" ],
-    [ "lower(1, \"def\");", "true" ],
-    [ "lower(1, car(nsactive(true)));", "true" ],
-    [ "lower(1.0, b);", "true" ],
-    [ "lower(1.0, \"def\");", "true" ],
-    [ "lower(1.0, car(nsactive(true)));", "true" ],
-    [ "lower(\"abc\", b);", "false" ],
-    [ "lower(\"abc\", 1);", "false" ],
-    [ "lower(\"abc\", 1.0);", "false" ],
-    [ "lower(\"abc\", car(nsactive(true)));", "true" ],
-    [ "lower(car(nsactive(true)), b);", "false" ],
-    [ "lower(car(nsactive(true)), 1);", "false" ],
-    [ "lower(car(nsactive(true)), 1.0);", "false" ],
-    
+    [ "relate(`a, 1);", "-1" ],
+    [ "relate(`a, 1.0);", "-1" ],
+    [ "relate(`a, \"def\");", "-1" ],
+    [ "relate(`a, car(nsactive(true)));", "-1" ],
+    [ "relate(1, `b);", "1" ],
+    [ "relate(1, \"def\");", "1" ],
+    [ "relate(1, car(nsactive(true)));", "-1" ],
+    [ "relate(1.0, `b);", "1" ],
+    [ "relate(1.0, \"def\");", "1" ],
+    [ "relate(1.0, car(nsactive(true)));", "-1" ],
+    [ "relate(\"abc\", `b);", "1" ],
+    [ "relate(\"abc\", 1);", "-1" ],
+    [ "relate(\"abc\", 1.0);", "-1" ],
+    [ "relate(\"abc\", car(nsactive(true)));", "-1" ],
+    [ "relate(car(nsactive(true)), `b);", "1" ],
+    [ "relate(car(nsactive(true)), 1);", "1" ],
+    [ "relate(car(nsactive(true)), 1.0);", "1" ],
+
+    [ "relate(1, false);", "-1" ],
+    [ "relate(false, 1);", "1" ],
+
+    [ "relate(`(a,b,c), `(a,b,c));", "0" ],
+    [ "relate(`(a,b,c), `(d,e,f));", "-1" ],
+    [ "relate(`(d,e,f), `(a,b,c));", "1" ],
+    [ "relate(`(a,b), `(a,b,c));", "-1" ],
+    [ "relate(`(a,b,c), `(a,b));", "1" ],
+    [ "relate(1, `(a,b,c));", "1" ],
+    [ "relate(`(a,b,c), 1);", "-1" ],
+
     //
     // mangled
     //

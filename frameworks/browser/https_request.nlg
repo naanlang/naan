@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2022 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
@@ -29,7 +29,9 @@
  */
 
 closure HttpsApiRequest(url, options,
-    local urlq, fetchOptions, putdata, error, response, contentType, content) {
+    local urlq, fetchOptions, putdata, item, error, response, 
+        contentType, content, headers) {
+    global(window)
     if !options
         options = { }
     if options.query
@@ -98,7 +100,14 @@ closure HttpsApiRequest(url, options,
         `(error, content) = await(response.arrayBuffer())
     else
         `(error, content) = await(response.text())
-    list(error, content)
+    headers = { }
+    response.headers.forEach(function(value, key) {
+        headers[key.toLowerCase()] = value
+    })
+    list(error, content, {
+        headers: headers
+        status: response.status
+    })
 };
 
 

@@ -29,6 +29,7 @@
  *      `text                                   -- block of text
  *      `name                                   -- proper name, first-last-middle-etc.
  *      `integer                                -- integer
+ *      `number                                 -- float or integer
  *      `url                                    -- URL
  *
  * Current options are:
@@ -50,6 +51,42 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
         indexName = indexName.tostring()
     osin.analyzers = {                                                      // map names, language to analyzer
         english: "english"
+        hashtag: "hashtag"
+    }
+    
+    // hashtagAnalyzer
+    //
+    // An OpenSearch analyzer that preserves #hashtags and @mentions.
+    //
+    // See https://www.pixlee.com/blog/finding-hashtags-in-elasticsearch-1-7
+    //
+    function hashtagAnalyzer() {
+        {
+            settings: {
+                analysis: {
+                    char_filter: {
+                        space_hashtags: {
+                            type: mapping
+                            mappings: ["#=>|#"]
+                        }
+                    }
+                    filter: {
+                        hashtag_as_alphanum: {
+                            type: "word_delimiter",
+                            type_table: ["# => ALPHANUM", "@ => ALPHANUM"]
+                        }
+                    }
+                    analyzer: {
+                        hashtag: {
+                            type: "custom"
+                            char_filter: "space_hashtags"
+                            tokenizer: "whitespace"
+                            filter: ["lowercase", "hashtag_as_alphanum"]
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // langKeywords
@@ -67,6 +104,7 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
         params = {
             settings: {
                 analysis: {
+                    char_filter: { }
                     filter: { }
                     analyzer: { }
                 }
@@ -96,7 +134,7 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
     //
     // Return a text+raw multifield in the languages configured for our client.
     //
-    function textRawMF(local fieldspec, language) {
+    function textRawMF(local fieldspec, analyzer) {
         fieldspec = {
             type: "text"
             fields: {
@@ -105,10 +143,10 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
                 }
             }
         }
-        for language in osin.analyzers
-            fieldspec.fields[language] = {                                  // add languages
+        for analyzer in osin.analyzers
+            fieldspec.fields[analyzer] = {                                  // add analyzers
                 type: "text"
-                analyzer: osin.analyzers[language]
+                analyzer: osin.analyzers[analyzer]
             }
         fieldspec
     }
@@ -179,6 +217,12 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
                     textRawMF()
                 )
                 //
+                // number
+                //
+                number: quote(
+                    textRawMF()
+                )
+                //
                 // url
                 //
                 url: quote(
@@ -246,14 +290,15 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
     //
     osin.createIndex = closure createIndex(fields, local params, language, opts) {
         params = { }
+        params = opseMergeParams(params, hashtagAnalyzer())                           // always do #/@ word joining
         if ioptions.languages {
             for `(language, opts) in ioptions.languages
                 if opts.keywords
-                    params = merge(params, langKeywords(language, opts.keywords))
+                    params = opseMergeParams(params, langKeywords(language, opts.keywords))
                 else
                     osin.analyzers[language] = language
         }
-        params = merge(params, {
+        params = opseMergeParams(params, {
             mappings: {
                 properties: makeMapping(fields)
             }
@@ -346,8 +391,7 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
             }
         }
         if dictionary(soptions.qopts)
-            params.query.multi_match = merge(params.query.multi_match, soptions.qopts)
-        // printline("OpenSearchClient.search:\n${Dialect.print(params)}")
+            params.query.multi_match = opseMergeParams(params.query.multi_match, soptions.qopts)
         prosc.request(indexName.concat("/_search"), {
             method: "POST"
             putdata: params
@@ -417,8 +461,10 @@ closure OpenSearchClient(goptions, local oscl, prosc) {
     //
     // Return an object for the named index, which may not exist yet.
     //
-    oscl.index = closure index(indexName) {
-        openSearchIndex(prosc, indexName, goptions)
+    oscl.index = closure index(indexName, local index) {
+        index = openSearchIndex(prosc, indexName, goptions)
+        oscl.indexes.push(index)
+        index
     }
 
     // search
@@ -429,7 +475,12 @@ closure OpenSearchClient(goptions, local oscl, prosc) {
     //      size:       <integer>                   -- results to return, default 10
     //      query:      <dictionary>                -- OpenSearch query, default multi_match
     //      qopts:      <dictionary>                -- OpenSearch query options for multi_match
-    //      filter:     <dictionary>                - OpenSearch query filter
+    //      filter:     <dictionary>                -- OpenSearch query filter
+    //      boost: {
+    //          fields: [<name>, <name>...]         -- fields to boost
+    //          level:: <integer>                   -- amount to boost
+    //      }
+    //      debug:      <boolean>                   -- output the query parameters
     //  }
     //
     oscl.search = closure search(what, soptions, local params, query, path) {
@@ -444,7 +495,12 @@ closure OpenSearchClient(goptions, local oscl, prosc) {
         if soptions.size
             params.size = soptions.size                                     // results to return
         if soptions.query
-            query = soptions.query
+            query = new(soptions.query)
+        else if soptions.boost
+            query.multi_match.fields = ["*"].concat(soptions.boost.fields.map(function (item) {
+                item.concat("^${soptions.boost.level}")
+            }))
+        printline(Dialect.print(soptions.boost))
         if dictionary(soptions.qopts)
             query.multi_match = merge(query.multi_match, soptions.qopts)
         if dictionary(soptions.filter) {
@@ -459,6 +515,10 @@ closure OpenSearchClient(goptions, local oscl, prosc) {
         path = "_search"
         if soptions.indexes
             path = soptions.indexes.join(",").concat("/", path)
+        if soptions.debug {
+            printline("POST ${path}:")
+            printline(Dialect.print(params))
+        }
         prosc.request(path, {
             method: "POST"
             putdata: params
@@ -472,6 +532,28 @@ closure OpenSearchClient(goptions, local oscl, prosc) {
 
 
 /*
+ * opseMergeParams
+ *
+ * column positioning:                          //                          //                      !
+ *     Recursively merge OpenSearch parameter dictionaries into a new dictionary. While this could be
+ * a library function, we have our own because there are many ways to do a recursive merge and we
+ * want this one.
+ *
+ */
+
+function opseMergeParams(dest, source) {
+    function recur(dd, ss, key, data) {
+        if !dictionary(dd) || !dictionary(ss)
+            return (ss)
+        for `(key, data) in ss
+            dd[key] = recur(dd[key], data)
+        dd
+    }
+    recur(new(dest), source)
+};
+
+
+/*
  * opseInit
  *
  *     Initialize the module.
@@ -479,7 +561,7 @@ closure OpenSearchClient(goptions, local oscl, prosc) {
  */
 
 function opseInit(local manifest) {
-    manifest = `(openSearchIndex, OpenSearchClient, opseInit)
+    manifest = `(openSearchIndex, OpenSearchClient, opseMergeParams, opseInit)
 
     Naan.module.build(module.id, "openSearch", function(modobj, compobj) {
         compobj.manifest = manifest

@@ -31,6 +31,28 @@ function EncodeQuery(prefix, items, local result, item) {
 
 
 /*
+ * DecodeQuery
+ *
+ *     Decode a dictionary of query terms from a query string for a URL.
+ *
+ */
+
+function DecodeQuery(text, local output, rpreg, qarr, item, pair) {
+    output = {}
+    rpreg = RegExp("\\+", "g")
+    qarr = text.split("&")
+    for item in qarr {
+        pair = item.split("=")
+        if pair.length == 1
+            output[pair.0] = ""
+        else
+            output[pair.0] = DecodeURIComponent(pair.1.replace(rpreg, " "))
+    }
+    output
+};
+
+
+/*
  * ContentTypeFromFileExt
  *
  *     Given a filename with extension, return a tuple of the recommended contentType and encoding
@@ -324,12 +346,13 @@ JSONparse = false;
 Uint8ArrayFromString = false;
 
 function comrInit(local manifest) {
-    manifest = `(EncodeQuery, ContentTypeFromFileExt, UUID, VersionCheck, JsonParse, JsonStringify,
-        JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
+    manifest = `(EncodeQuery, DecodeQuery, ContentTypeFromFileExt, UUID, VersionCheck, JsonParse,
+        JsonStringify, JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
 
     Naan.module.build(module.id, "common", closure(modobj, compobj) {
         compobj.manifest = manifest
         modobj.exports.EncodeQuery = EncodeQuery
+        modobj.exports.DecodeQuery = DecodeQuery
         modobj.exports.ContentTypeFromFileExt = ContentTypeFromFileExt
         modobj.exports.UUID = UUID
         modobj.exports.JsLoadScript = JsLoadScript

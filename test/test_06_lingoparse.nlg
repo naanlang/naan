@@ -507,7 +507,7 @@ RegisterTestCategory("Lingo parse", [
     [ "function(x x) { x * x };",
         { errors: "duplicate parameter at (1, 12) found x" } ],
     [ "function(3) { 33 };",
-        { errors: "invalid parameter at (1, 11) found 3" } ],
+        { errors: "invalid parameter at (1, 10) found 3" } ],
     [ "global(test);",
         { errors: "global forbidden outside of a procedure at (1, 1)" } ],
     [ "function(a) { b * a };",

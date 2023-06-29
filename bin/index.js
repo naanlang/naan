@@ -7,7 +7,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2022 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
@@ -20,7 +20,7 @@
 
 var path = require("path");
 var fs = require("fs");
-var naanOptions;
+var naanOptions = {};
 
 /*
  * Process command-line arguments
@@ -58,11 +58,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.0.11");
+        console.log("1.0.12");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.0.11+1");
+        console.log("1.0.12+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {
@@ -94,15 +94,17 @@ if (cmd_file) {
     eval_text = eval_text.replace(/^#!.*\n/, "");
 }
 if (eval_text) {
+    naanOptions.noWelcome = true;
     if (!do_interactive)
-        naanOptions = { replDisable: true };
+        naanOptions.replDisable = true;
     cmd_text =
         "closure NodeREPL(local input, error, expr) {\n" +
-        (do_interactive ?
-        ""
-        :
+
+        (do_interactive ?  "" :
         "   sudo(putproc(`exception, false))\n") +
+
         "   input = new(textstream, js.expr)\n" +
+        "   Naan.runtimelib.driver.setOptions({prompt:false})\n" +
         "   try {\n" +
         "       loop {\n" +
         "           `(error, expr) = Dialect.parse(input)\n" +
@@ -110,9 +112,10 @@ if (eval_text) {
         "               printline(' ==> parse error: ', Dialect.parseErrorString(error.0))\n" +
         "               break\n" +
         "           } else\n" +
+
         (cmd_file && !do_interactive ?
-        "               eval(expr)\n"
-        :
+	    "		        eval(expr)\n" :
+
         "           {\n" +
         "               if input.tokenlast().atom == `;;\n" +
         "                   eval(expr)\n" +
@@ -121,6 +124,7 @@ if (eval_text) {
         "               else\n" +
         "                   printline(Dialect.print(eval(expr)))\n" +
         "           }\n") +
+
         "       }\n" +
         "   } catch {\n" +
         "       if true {\n" +
@@ -128,8 +132,11 @@ if (eval_text) {
         "               printline(' ==> exception: ', error = exception)\n" +
         "       }\n" +
         "   } finally {\n" +
+
+	    (do_interactive ? "Naan.runtimelib.driver.setOptions({prompt:true})\n" :
         "       sleep(1)\n" +
-        "       exec(quote(js.g.process.exit(if error 1 else 0)))\n" +
+        "       exec(quote(js.g.process.exit(if error 1 else 0)))\n") +
+
         "   }\n" +
         "}();;\n";
 }
