@@ -63,6 +63,15 @@ RegisterTestCategory("JSinterop", [
 
     [ "xnew(js.g.Promise, function() {});", "[object Promise]" ],
     
+    //
+    // Arrays
+    //
+    
+    ["Array(3,4,5);", "[Array 3,4,5]"],
+    ["Array([3]);", "[Array [3]]"],
+    ["Array([3]).0;", "[Array 3]"],
+    ["Array([3]).0.0;", "3"],
+
     
     //
     // child processes

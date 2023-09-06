@@ -1,5 +1,5 @@
 /*
- * https_node.nlg
+ * https_request.nlg
  *
  *     Https operations for NodeJS.
  *
@@ -24,9 +24,24 @@
  *      range:          <string>                // sets range header
  *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
  *      auth:           <string>                // username:password string
- *      cacert:         <data>                  // ca for verifying peer
+ *      cacert:         <data>                  // deprecated: ca for verifying peer
+ *      ssl: {
+ *          ca:         <data>                  // replacemenet certificate authority or self-signed cert
+ *          cert:       <data>
+ *          key:        <data>
+ *          passphrase: <data>                  // optional
+ *      }
+ *      allowSelfSigned: <boolean>              // allow a self-signed certificate at the servera
  *      debug:          <boolean>               // log errors and status results
  *  }
+ *
+ * The return is a result tuple comprising:
+ *      (<error>,                               -- false on success
+ *      <content>,                              -- returned data
+ *      {
+ *          status:     <integer>               -- http response status
+ *          headers:    <array>                 -- headers if available
+ *      })
  *
  */
 
@@ -63,8 +78,6 @@ closure HttpsApiRequest(url, options,
             reqOptions.headers[item.0] = item.1
     if options.auth
         reqOptions.auth = options.auth
-    if options.cacert
-        reqOptions.ca = options.cacert
     if options.allowSelfSigned {
         xurl = nodeUrl.parse(url)
         reqOptions.agent = xnew(nodeHttps.Agent({
@@ -72,8 +85,17 @@ closure HttpsApiRequest(url, options,
             port: xurl.port
             path: xurl.path
             rejectUnauthorized: false
-            ca: [ selfSignedRootCaPemCrtBuffer ]
+            // keepAlive: false
+            ca: options.ssl.ca || options.cacert || [ selfSignedRootCaPemCrtBuffer ]
+            cert: options.ssl.cert || undefined
+            key: options.ssl.key || undefined
+            passphrase: options.ssl.passphrase || undefined
         }))
+    } else {
+        reqOptions.ca = options.ssl.ca || options.cacert || undefined
+        reqOptions.cert = options.ssl.cert || undefined
+        reqOptions.key = options.ssl.key || undefined
+        reqOptions.passphrase = options.ssl.passphrase || undefined
     }
     pending = new(nonce)
     chunks = []
@@ -88,7 +110,7 @@ closure HttpsApiRequest(url, options,
                     debuglog("HttpsApiRequest status:", url, response.statusCode, "message:", content)
                 pending.signal(list(Error("HttpsApiRequest statusCode:", url, response.statusCode, {
                     status: response.statusCode
-                })))
+                }), false, { status: response.statusCode }))
                 return
             }
             if response.complete {

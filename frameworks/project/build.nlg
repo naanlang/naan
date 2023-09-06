@@ -994,7 +994,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                         `(error, content) = parseAndPack(content, entry.readpath, { jspack: true })
                     else if entry.syntax
                         `(error) = parseAndPack(content, entry.readpath, { syntax: true })
-                    if entry.minimize {
+                    if !error && entry.minimize {
                         `(error, content) = build.uglify.minify(
                             new(dictionary, list(cons(entry.readpath, content))), {
                             mangle: { eval: true }
@@ -1005,25 +1005,26 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                         else if entry.minprefix
                             content = entry.minprefix.concat(content)
                     }
-                    if !error {
-                        if entry.catcount {
-                            if !catenates[entry.writepath]
-                                catenates[entry.writepath] = new(Array(entry.catcount))
+                    if entry.catcount {
+                        if !catenates[entry.writepath]
+                            catenates[entry.writepath] = new(Array(entry.catcount))
+                        if error
+                            entry.error = error
+                        else
                             entry.content = content
-                            catenates[entry.writepath][entry.catindex] = entry
-                            if catReady(entry.writepath) {
-                                `(error, result) = writeCatenate(entry.writepath)
-                                if error
-                                    build.errorlist.push(error)
-                                catenates[entry.writepath].0.done.signal(error)
-                            }
+                        catenates[entry.writepath][entry.catindex] = entry
+                        if catReady(entry.writepath) {
+                            `(error, result) = writeCatenate(entry.writepath)
+                            if error
+                                build.errorlist.push(error)
+                            catenates[entry.writepath].0.done.signal(error)
                         }
-                        else {
+                    }
+                    else {
+                        if !error
                             `(error, result) = fs.writeFile(entry.writepath, content)
-                            entry.done.signal(error)
-                        }
-                    } else
                         entry.done.signal(error)
+                    }
                 }
                 if error
                     build.errorlist.push(error)
@@ -1050,7 +1051,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         //
         function catReady(writepath, local entry) {
             for entry in catenates[writepath]
-                if !entry.content
+                if !entry.content && !entry.error
                     return (false)
             true
         }

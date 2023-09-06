@@ -159,15 +159,25 @@ RegisterTestCategory("Lingo", [
 //      "        map           : [(0, 23), 0, 9, 2, 7],\n" -- maps currently omitted
         "        comments      : [] } }" ],
     [ "testat@jim(true);", "\"you are annotated with true!\"" ],
+    [ "copyann(testat, a);", "testat" ],
+    [ "testat@*;", '("joe", "jim", ".sourcemap")' ],
+    [ "copyann(testat, a, true);", "testat" ],
+    [ "testat@*;", '("joe")' ],
+    [ "copyann(3, a);", { errors: "attempt to modify constant 3" } ],
+    [ "copyann(a, 3);", "false" ],
 
 
     //
-    // lists, objects & arrays
+    // lists, dictionaries, objects, and arrays
     //
     
     [ "divide(71, 3);", "(23 . 2)" ],
     [ "[3,4+5];", "[3, 9]" ],
     [ "{a:3,b:4+5};", "{ a: 3, b: 9 }" ],
+    [ "function(g) { { a: 3+g } }(5);", "{ a: 8 }" ],
+    [ "function(g) { { a: false || undefined } }(6);", "{ }" ],
+    [ "function(g) { { a: false && g || undefined } }(7);", "{ }" ],
+    [ "function(g) { { a: true && g || undefined } }(8);", "{ a: 8 }" ],
 
     [ "`(1, 2, {a:3,b:4}, 5);", "(1, 2, { a: 3, b: 4 }, 5)" ],
     [ "`(1, 2, {a:3,b:4}, 5);>", "(1 2 Dictionary{2} 5)" ],

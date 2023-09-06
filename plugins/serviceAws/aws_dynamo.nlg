@@ -357,7 +357,7 @@ closure DynaConverter(local conv) {
     //
     // condition dictionary:
     //  {
-    //      key:        <keyname, e.g. partition key name>                  // required
+    //      key:        <keyname, e.g. partition key name or path tuple>    // required
     //      "=":        <expression>                                        // exclusive of other comparisons
     //      ">":        <expression>                                        // exclusive of other comparisons
     //      "<":        <expression>                                        // exclusive of other comparisons
@@ -365,11 +365,12 @@ closure DynaConverter(local conv) {
     //      beginsWith: <string-expression>                                 // exclusive of other comparisons
     //      ">=":       <expression>                                        // with <= or alone
     //      "<=":       <expression>                                        // with >= or alone
+    //      exists:     <boolean>                                           // keyname existence matches boolean
     //  }
     //
 
     conv.createKeyExpression = function createKeyExpression(params, conds
-        local attval, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
+        local attval, attname, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
 
         // dupeop
         //
@@ -382,14 +383,24 @@ closure DynaConverter(local conv) {
         // build the expression
         //
         attval = genAttributeValueAdder(params)
+        attname = genAttributeNameAdder(params)
         for `(rangename, ranges) in conds {
             if !array(ranges)
                 ranges = [ranges]
             for range in ranges {
                 rangex = false
-                keyname = tostring(range.key)
+                if tuple(range.key) {
+                    keyname = []
+                    expr = range.key
+                    while expr
+                        keyname.push(attname(pop(expr)))
+                    keyname = keyname.join(".")
+                }
+                else
+                    keyname = tostring(range.key)
                 if !keyname
                     return (list(Error("key expression requires key name")))
+                keyname = attname(keyname)
                 for `(op, expr) in range {
                     if op == "key"
                         continue
@@ -417,10 +428,16 @@ closure DynaConverter(local conv) {
                     arg1 = rangex.1
                     if rangex.0 == "between" {
                         arg2 = rangex.2
-                        expr = keyname.concat(" between ", arg1, " and ", arg2)
+                        expr = "${keyname} between ${arg1} and ${arg2}"
                     }
                     else if rangex.0 == "beginsWith"
-                        expr = "begins_with(".concat(keyname, ", ", arg1, ")")
+                        expr = "begins_with(${keyname}, ${arg1})"
+                    else if rangex.0 == "exists" {
+                        if arg1
+                            expr = "attribute_exists(${keyname})"
+                        else
+                            expr = "attribute_not_exists(${keyname})"
+                    }
                     else
                         expr = keyname.concat(space, rangex.0, space, arg1)
                     if params[rangename]
@@ -674,14 +691,26 @@ closure DynaTable(dyna, tablename, local table) {
 
     // getRecord
     //
-    // Get a record from the table with the specified hash value, and optional range value.
+    // Get a record from the table with the specified hash value. The optional second argument can be
+    // the rangeValue of the item, or an options dictionary. Dictionary options include:
+    //  {
+    //      rangeValue:     <range-key>         // record's range key
+    //      consistentRead: <boolean>           // true to use consistent read
+    //  }
+    // The result is a standard result tuple `(error, record).
+
     //
-    table.getRecord = closure getRecord(hashValue, rangeValue, local params, pending) {
+    table.getRecord = closure getRecord(hashValue, options, local params, rangeValue, pending) {
         if preflightError(this)
             return
         params = {
             TableName: tablename
         }
+        if dictionary(options) {
+            rangeValue = options.rangeValue
+            params.ConsistentRead = options.consistentRead
+        } else
+            rangeValue = options
         params.Key = makeDynKey(list(hashValue, rangeValue))
         pending = new(nonce)
         dyna.aws.getItem(params, function(error, data) {
@@ -856,6 +885,7 @@ closure DynaTable(dyna, tablename, local table) {
     //      reverse:        <boolean>                                       // reverse order
     //      project:        <array>                                         // project only specified attributes
     //      paging:         <exclusive start key>                           // for paging; updated each call
+    //      consistentRead: <boolean>                                       // true to use consistent read
     //      limit:          <number>                                        // maximum count of results
     //  }
     //
@@ -902,6 +932,8 @@ closure DynaTable(dyna, tablename, local table) {
             params.ProjectionExpression = options.project.join(", ")
         if options.paging
             params.ExclusiveStartKey = options.paging
+        if options.consistentRead
+            params.ConsistentRead = options.consistentRead
         output = []
         `(error) = dynQueryPager(`query, params, options.limit, function(data) {
             if data.Count > 0
@@ -921,12 +953,13 @@ closure DynaTable(dyna, tablename, local table) {
     //
     // Options:
     //  {
-    //      index:      <string>                                            // index name in table
-    //      filter:     <key-expression>                                    // conditions for items to return
-    //      attmap:     <dictionary>                                        // map attribute names to #shortcuts
-    //      project:    <array>                                             // project only specified attributes
-    //      paging:     <exclusive start key>                               // for paging; updated each call
-    //      limit:      <number>                                            // maximum count of results
+    //      index:          <string>                                        // index name in table
+    //      filter:         <key-expression>                                // conditions for items to return
+    //      attmap:         <dictionary>                                    // map attribute names to #shortcuts
+    //      project:        <array>                                         // project only specified attributes
+    //      paging:         <exclusive start key>                           // for paging; updated each call
+    //      consistentRead: <boolean>                                       // true to use consistent read
+    //      limit:          <number>                                        // maximum count of results
     //  }
     //
 
@@ -953,6 +986,8 @@ closure DynaTable(dyna, tablename, local table) {
             params.ProjectionExpression = options.project.join(", ")
         if options.paging
             params.ExclusiveStartKey = options.paging
+        if options.consistentRead
+            params.ConsistentRead = options.consistentRead
         output = []
         `(error) = dynQueryPager(`scan, params, options.limit, function(data) {
             if data.Count >= 0

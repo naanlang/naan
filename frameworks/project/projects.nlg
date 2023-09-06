@@ -296,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.13+1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.0.14+1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info

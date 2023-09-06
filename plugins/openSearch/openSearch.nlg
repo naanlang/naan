@@ -32,6 +32,10 @@
  *      `number                                 -- float or integer
  *      `url                                    -- URL
  *
+ * Although the currency type is only treated as a text field for now, the intent is that these will
+ * match the RegEx /([A-Z]{3})(-?[0-9]+(?:[,.][0-9]+)?)/ so that the currency type and amount can be
+ * differentiated. Please see ISO 4217 for valid currency types.
+ *
  * Current options are:
  *  {
  *      languages: [
@@ -183,15 +187,15 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
                 //
                 // date
                 //
-                date: quote(
-                    textRawMF()
-                )
+                date: quote({
+                    type: "date"
+                })
                 //
                 // boolean
                 //
-                boolean: quote(
-                    textRawMF()
-                )
+                boolean: quote({
+                    type: "boolean"
+                })
                 //
                 // currency
                 //
@@ -213,15 +217,15 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
                 //
                 // integer
                 //
-                integer: quote(
-                    textRawMF()
-                )
+                integer: quote({
+                    type: "long"
+                })
                 //
                 // number
                 //
-                number: quote(
-                    textRawMF()
-                )
+                number: quote({
+                    type: "float"
+                })
                 //
                 // url
                 //
@@ -303,7 +307,6 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
                 properties: makeMapping(fields)
             }
         })
-        // printline("OpenSearchClient.create:\n${Dialect.print(params)}")
         prosc.request(indexName, {
             method: "PUT"
             putdata: params
@@ -500,7 +503,6 @@ closure OpenSearchClient(goptions, local oscl, prosc) {
             query.multi_match.fields = ["*"].concat(soptions.boost.fields.map(function (item) {
                 item.concat("^${soptions.boost.level}")
             }))
-        printline(Dialect.print(soptions.boost))
         if dictionary(soptions.qopts)
             query.multi_match = merge(query.multi_match, soptions.qopts)
         if dictionary(soptions.filter) {

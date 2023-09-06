@@ -71,6 +71,6 @@ RegisterTestCategory("strings", [
     [ "\"abc\".toString();", "\"abc\"" ],
     [ "xapply(String, toString, list(\"abc\"));", "\"abc\"" ],
     [ "xcall(String, toString, \"abc\");", "\"abc\"" ],
-    [ "function(local match) { \"abc\".match(RegExp(\"abc\")) }();", "[Array abc]" ]
+    [ "function(local match) { \"abc\".match(RegExp(\"abc\")) }();", '[Array "abc"]' ]
 
 ]);

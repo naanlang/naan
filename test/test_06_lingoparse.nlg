@@ -61,7 +61,7 @@ RegisterTestCategory("Lingo parse", [
     //
     
     [ "4&&3;", { exprs: "(&& 4 3)" } ],
-    [ "4\n&&3;", { exprs: "(&& 4 3)" } ],
+    [ "4\\\n&&3;", { exprs: "(&& 4 3)" } ],
     [ "4&&\n3;", { exprs: "(&& 4 3)" } ],
     [ "function test0(x, y) { \n y = 3\n x  \n };", { exprs: "(defproc function test0 (x y) (= y 3) x)" } ],
 
@@ -468,7 +468,7 @@ RegisterTestCategory("Lingo parse", [
     //
     
     [ "function() {test()[3]};>", "(function lambda false (deref (test) 3))"],
-    [ "function() {test()\n[3]};>", "(function lambda false (deref (test) 3))"],
+    [ "function() {test()\\\n[3]};>", "(function lambda false (deref (test) 3))"],
     [ "function() {test(),\n[3]};>", "(function lambda false (test) Array[1])"],
     [ "function() {test(),\n[3]};", "function () {\n"
         "    test(),\n"                                                     // need comma before array
@@ -497,6 +497,28 @@ RegisterTestCategory("Lingo parse", [
         "    else {\n"
         "        { a: 3 } }\n"                                              // need braces around dictionary
         "}" ],
+    [ "function() {if 1, -2 };", "function () {\n"
+        "    if 1\n"
+        "        -2\n"
+        "}" ],
+    [ "function() {if 1,\n"
+                    "-2 };", "function () {\n"
+        "    if 1\n"
+        "        -2\n"
+        "}" ],
+    [ "function() {if 1\n"
+                    "-2 };",
+        { errors: "ambiguous newline (use \\ or ,) at (2, 1) found -" } ],
+    [ "function() {if 1\\\n"
+                    "-2 3 };", "function () {\n"
+        "    if 1 - 2\n"
+        "        3\n"
+        "}" ],
+    [ "function() { else };",
+        { errors: "stray keyword at (1, 14) found else" } ],
+    [ "function() { if 1 else 3 };",
+        { errors: "stray keyword at (1, 19) found else"
+            "|mismatched delimiter at (1, 24) found 3 expected } starting with { at (1, 12)" } ],
 
     //
     // semantic validity

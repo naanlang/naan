@@ -26,6 +26,14 @@
  *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
  *  }
  *
+ * The return is a result tuple comprising:
+ *      (<error>,                               -- false on success
+ *      <content>,                              -- returned data
+ *      {
+ *          status:     <integer>               -- http response status
+ *          headers:    <array>                 -- headers if available
+ *      })
+ *
  */
 
 closure HttpsApiRequest(url, options,
@@ -81,7 +89,7 @@ closure HttpsApiRequest(url, options,
     if response.status < 200 || response.status >= 300
         return (list(Error("HttpsApiRequest status:", url, response.status, {
             status: response.status
-        })))
+        }), false, { status: response.status }))
     if contentType.startsWith("application/json") {
         `(error, content) = await(response.text())
         if !error
