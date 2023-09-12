@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2018-2021 by Richard C. Zulch
+ * Copyright (c) 2018-2023 by Richard C. Zulch
  *
  */
 
@@ -295,6 +295,27 @@ RegisterTestCategory("Lingo", [
     [ "aa[1] -= 2;", "3" ],
     [ "aa[1] *= 2;", "6" ],
     [ "aa[1] /= 2;", "3" ],
+
+
+    //
+    // catch
+    //
+    
+    [ "try { throw(green) } catch { printline(4) };", "4|4" ],
+    [ "try { throw(blue) } catch { false(),printline(5) };", "5|5" ],
+    [ "try { 1/0 } catch {};", "false"],
+    [ "try { 1/0 } catch { 0 };", "0"],
+    [ "try { 1/0 } catch { exception };", '(internal, "divide by zero")'],
+    [ "try { 1/0 } catch { if exception == 3 4, printline(5) };",
+        { errors: "if expression required at (1, 42) found printline"} ],
+    [ "try { throw(blue) } catch { if exception == blue printline(blue) };", "blue|blue"],
+    [ "try { throw(green) } catch { if exception == blue printline(blue) };", 
+        { errors: "exception: green" } ],
+    [ "try { throw(green) } catch { if exception == blue printline(blue),"
+        "if exception == green printline(green) };", "green|green"],
+    [ "try { throw(red) } catch { if exception == blue printline(blue),"
+        "if exception == green printline(green) };", 
+        { errors: "exception: red" } ],
 
 
     //

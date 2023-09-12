@@ -393,7 +393,10 @@ closure TermLocal(track, name, workerID, options,
     
     listener.addEventListener("message", function(e, msg) {
         msg = new(e.data)
-        if msg.id != "targetout" && msg.id != "loaded" {
+        if msg.id == "termination" {
+            destroy()
+            return }
+        else if msg.id != "targetout" && msg.id != "loaded" {
             if msg.id == "status"
                 target.lastStatus = milliseconds()
             if target.msgQueue {

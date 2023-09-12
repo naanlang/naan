@@ -61,7 +61,7 @@ RegisterTestCategory("Lingo parse", [
     //
     
     [ "4&&3;", { exprs: "(&& 4 3)" } ],
-    [ "4\\\n&&3;", { exprs: "(&& 4 3)" } ],
+    [ "4\n&&3;", { exprs: "(&& 4 3)" } ],
     [ "4&&\n3;", { exprs: "(&& 4 3)" } ],
     [ "function test0(x, y) { \n y = 3\n x  \n };", { exprs: "(defproc function test0 (x y) (= y 3) x)" } ],
 
@@ -438,15 +438,18 @@ RegisterTestCategory("Lingo parse", [
     [ "try{nest()}finally{};",
         { exprs: "(catch ((nest)) false false)" } ],
     [ "try{nest()}catch{}finally{};",
-        { exprs: "(catch ((nest)) (((identity true))) false)" } ],
+        { exprs: "(catch ((nest)) (((identity true) false)) false)" } ],
     [ "function test1() { try { nest() } finally { } };",
         { exprs: "(defproc function test1 false (catch ((nest)) false false))",
         text: "==> redefined: test1" } ],
     [ "function(){try{nest()}catch{},if(1)2};",
-        { exprs: "(function lambda false (catch ((nest)) (((identity true))) false) ((identity 1) 2))" } ],
+        { exprs: "(function lambda false (catch ((nest)) (((identity true) false)) false) ((identity 1) 2))" } ],
     [ "function(x) { try {} catch { if true { 4 } } };",
         { exprs: "(function lambda (x) (catch false (((identity true) 4)) false))" } ],
-    
+    [ "try { throw(green) } catch { printline(4) };",
+        { exprs: "(catch ((throw green)) (((identity true) (printline 4))) false)",
+        text: "4" } ],
+
     //
     // cond
     //
@@ -514,11 +517,25 @@ RegisterTestCategory("Lingo parse", [
         "    if 1 - 2\n"
         "        3\n"
         "}" ],
+    [ "function(x) {if x\n[2]\n3 };",
+        { errors: "ambiguous newline (use \\ or ,) at (2, 1) found [" } ],
+    [ "function(x) {if x,\n[2]\n3 };",
+        "function (x) {\n"
+        "    if x\n"
+        "        [2]\n"
+        "    3\n"
+        "}" ],
+    [ "function(x) {if x\\\n[2]\n3 };",
+        "function (x) {\n"
+        "    if x[2]\n"
+        "        3\n"
+        "}" ],
+    [ "function(x) {if x\n(2)\n3 };",
+        { errors: "ambiguous newline (use \\ or ,) at (2, 1) found (" } ],
     [ "function() { else };",
         { errors: "stray keyword at (1, 14) found else" } ],
     [ "function() { if 1 else 3 };",
-        { errors: "stray keyword at (1, 19) found else"
-            "|mismatched delimiter at (1, 24) found 3 expected } starting with { at (1, 12)" } ],
+        { errors: "stray keyword at (1, 19) found else" } ],
 
     //
     // semantic validity
