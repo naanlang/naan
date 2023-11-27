@@ -58,7 +58,7 @@
  *      @           - the @ character stands in for a persistent, temporary directory within the
  *                    build folder that replaces srcpath or destpath. It can be used in fields that
  *                    are otherwise absolute: group.input, group.output, and template paths. Build
- *                    detects piplines formed from temporary files and processes them in order from
+ *                    detects pipelines formed from temporary files and processes them in order from
  *                    beginning to end.
  *
  * Templates:
@@ -83,7 +83,7 @@
  *      jspack      - convert to Naan JavaScript format
  *      syntax      - syntax check and copy
  *      catenate    - copy multiple input files into a single output file
- *      zip         - compressed catenate
+ *      zip         - compressed catenate (binary if only task, otherwise text mode)
  *
  * Dictionary structure:
  *      {
@@ -159,7 +159,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     }
     build.solotasks = {                                                     // solo-only tasks
         copy: true,
-        unzip: true
+        unzip: true,
     }
 
     if rules.licfile
@@ -725,6 +725,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                     return
                 }
                 entry = {
+                    tasks: group.tasks
                     readpath: infile,
                     writepath: outfile
                 }
@@ -960,10 +961,12 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
 
         closure processOneFile(entry, local result, content, error) {
             ++pending.active
-            future(function build1(local dirpath) {
+            future(function build1(local dirpath, readOptions) {
                 if entry.depends
                     entry.depends.done.wait()                               // wait for our precursor
                 dirpath = JSpath.dirname(entry.writepath)
+                if entry.zip && entry.tasks.length == 1
+                    readOptions = { encoding: "binary" }                    // just zip--no text processing
                 if baddestpaths[dirpath]
                     { }                                                     // error already reported
                 else if ((`(error, result) = fs.mkdir(dirpath)) && error) {
@@ -983,7 +986,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
                     if error                                                // deepcopy returns a list of errors
                         error = error.0                                     // but we're only doing one item
                 }
-                else if ((`(error, content) = fs.readFile(entry.readpath)) && !error) {
+                else if ((`(error, content) = fs.readFile(entry.readpath, readOptions)) && !error) {
                     if entry.license
                         `(content) = applySubstitutions(content, licFileDefs)
                     if entry.version

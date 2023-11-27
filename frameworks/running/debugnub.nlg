@@ -62,7 +62,7 @@ closure DebugNub(local nub, debug, paused) {
             paused.wait = false                                             // false: go back to ndb
         }
         else if msg.op == "pause"
-            future(function(){ debugger() }, 1)                             // enter at convenient time
+            debugger()
         else if msg.op == "resume" || msg.op == "stop"
             || msg.op == "stepover" || msg.op == "stepinto" || msg.op == "stepout"
             paused.wait = msg.op

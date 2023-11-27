@@ -71,6 +71,12 @@ RegisterTestCategory("JSinterop", [
     ["Array([3]);", "[Array [3]]"],
     ["Array([3]).0;", "[Array 3]"],
     ["Array([3]).0.0;", "3"],
+    ["[].concat([])", "[]"],
+    ["[].concat(3)", "[3]"],
+    ["[].concat([3])", "[3]"],
+    ["[].concat(Array())", "[]"],
+    ["[].concat(Array(a))", '["a"]'],
+    ["[].concat(xnew())", "[[object Object]]"],
 
     
     //

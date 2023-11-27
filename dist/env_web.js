@@ -201,7 +201,7 @@ exports.NaanControllerWeb = function() {
     this.Interrupt = function Interrupt(terminal) {
         window.setTimeout(function () {
             naanlib.escape();
-        }, 1);
+        }, 0);
     };
 
     //
