@@ -6,9 +6,64 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2024 by Richard C. Zulch
  *
  */
+
+
+/*
+ * NaanlangDir
+ *
+ *     Ensure the naanlang directory exists, returning a result tuple.
+ *
+ */
+
+closure NaanlangDir(local path, errmkdir, errstat, stat) {
+    global(JSpath, os, App, fs)
+    path = JSpath.join(os.homedir(), ".naanlang/")
+    `(errmkdir) = await(fs.promises.mkdir(path))
+    if errmkdir.code == "EEXIST" {
+        `(errstat, stat) = await(fs.promises.stat(path))
+        if errstat || !stat.isDirectory()
+            return (list(Error("mkdir conflict:", errmkdir)))               // file in the way
+    }
+    else if errmkdir
+        return (list(Error("mkdir failed:", errmkdir)))
+    await(fs.promises.mkdir(JSpath.join(path, "nidecom")))                  // ignore errors here
+    App.config = merge({
+        prefsdir: path
+    })
+    list(false, path)
+};
+
+
+/*
+ * NaanlangRC
+ *
+ *     Return the naanlang RC file if found, or an empty dictionary otherwise.
+ *
+ */
+
+closure NaanlangRC(local path, error, config) {
+    global(JSpath, fs, App)
+    `(error, path) = NaanlangDir()
+    if path {
+        path = JSpath.join(path, "naanlangrc")
+        `(error, config) = await(fs.promises.readFile(path, {
+            encoding: "utf8"
+        }))
+        if !error
+            `(error, config) = JsonParse(config)
+    }
+    if config
+        App.config = merge({
+            rcpath: path
+            config: config
+        })
+    else
+        config = { }
+    config
+};
 
 
 /*
@@ -63,7 +118,7 @@ closure NodeStreamLiner(endings, local liner) {
  */
 
 function nodrInit(local manifest) {
-    manifest = `(NodeStreamLiner, nodrInit)
+    manifest = `(NaanlangDir, NaanlangRC, NodeStreamLiner, nodrInit)
 
     if !js.g
         throw("module frameworks/node cannot be used from a browser")
@@ -77,7 +132,10 @@ function nodrInit(local manifest) {
             stream = js.r("stream")
             nodeHttps = js.r("https")
             nodeUrl= js.r("url")
+            threads = js.r("worker_threads")
         }()
         module.reload = nodrReload
+        module.exports.NaanlangDir = NaanlangDir
+        module.exports.NaanlangRC = NaanlangRC
     })
 } ();

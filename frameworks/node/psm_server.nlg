@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2022 by Richard C. Zulch
+ * Copyright (c) 2019-2023 by Richard C. Zulch
  *
  */
 
@@ -517,13 +517,17 @@ closure psmsFsConnector(psm, api, local connClassID, connector, watch) {
  *
  */
 
-function MakeServerPSM(api, local importPSM) {
+function MakeServerPSM(api, name, local importPSM, error, path, psm) {
     importPSM = require("../storage/psm.nlg")
-    App.psm = importPSM.MakePSM(JSpath.resolve(js.d, "NideDB")).1
-    if App.psm {
+    `(error, path) = NaanlangDir()                                          // put database in ~/.naanlang/
+    if !error
+        `(error, psm) = importPSM.MakePSM(JSpath.join(path, "${name}DB_${api.port.tostring}")) 
+    if !error {
+        App.psm = psm
         psmsFsConnector(App.psm, api)
         require("frameworks/storage/dbt_pouch.nlg").DbConnector(App.psm)    // Pouch databases as filesystems
-    }
+    } else
+        ErrorDebuglog("Cannot create PSM", error)
     App.psm
 };
 

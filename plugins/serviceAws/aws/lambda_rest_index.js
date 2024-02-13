@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2021 by Richard C. Zulch
+ * Copyright (c) 2019-2023 by Richard C. Zulch
  *
  */
 
@@ -69,6 +69,10 @@ exports.handler = function awsHandler(event, context, callback) {
 
     this.setRequire = function setRequire(req) {                            // override require function
         naanlib.js.r = req;
+    };
+
+    this.setImport = function setImport(imp) {                              // override import function
+        naanlib.js.i = imp;
     };
 
     this.setDirectory = function setDirectory(path) {                       // override base directory

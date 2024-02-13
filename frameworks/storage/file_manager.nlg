@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2022 by Richard C. Zulch
+ * Copyright (c) 2020-2024 by Richard C. Zulch
  *
  */
 
@@ -22,6 +22,7 @@
  */
 
 closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
+    global(commonWatching)
     files = new(object, this)
     files.fs = fs
     files.nodes = []                                                        // array of nodes, one per file or folder
@@ -159,7 +160,7 @@ closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
     //
     // Return the parent path of the specified node, or "" for the root.
     //
-    function parentPath(node) {
+    function parentPath(node, local path) {
         path = node.path
         if path.slice(-1) == files.pathsep
             path = path.slice(0,-1)
@@ -415,7 +416,8 @@ closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
             return                                                          // no git checking available
         opBeginOrReschedule(closure(callback) {
             willgit = true
-            files.fs.gitStatus(false, function (error, statlist, local changed, delgit, unknownFiles, unknownFileStatus, changes, classID) {
+            files.fs.gitStatus(false, function (error, statlist,
+                local changed, delgit, unknownFiles, unknownFileStatus, changes, classID, item) {
                 if error {
                     files.gitvalid = false
                     return (callback(error))
@@ -649,6 +651,7 @@ closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
  */
 
 closure fimaStore(fm, node, local store) {
+    global()
     store = new(object, this)
     store.fm = fm
     store.fs = fm.fs

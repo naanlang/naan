@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2022 by Richard C. Zulch
+ * Copyright (c) 2019-2024 by Richard C. Zulch
  *
  */
 
@@ -56,7 +56,8 @@ closure MakePSMutil(fs, local util) {
     //
     // Update a directory within an existing tree data structure. The result is a standard tuple with
     // (error, changes) where the changes are added/deleted/changed. This assumes that children changed
-    // if their info is different
+    // if their info is different. If a child directory is found that does not yet have children, then
+    // the 
     
     util.treeDirUpdate = closure treeDirUpdate(treepath, dirpath, tree, callback, local error, inpath, treedir, files) {
         if !callback

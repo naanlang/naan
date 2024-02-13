@@ -5,13 +5,13 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2023 by Richard C. Zulch
  *
  */
 
 
 /*
- * taskDispatcher
+ * TaskDispatcher
  *
  *     Create a dispatcher for remote evaluation. The replier argument is a function that accepts
  * outgoing messages. The return value is a closure that processes incomming messages. This code is
@@ -19,7 +19,7 @@
  *
  */
 
-closure taskDispatcher(replier, local contexts, gohome, util) {
+closure TaskDispatcher(replier, local contexts, gohome, util) {
     contexts = { }
     gohome = makeActivator()
     util = modlist().Util.exports
@@ -68,24 +68,22 @@ closure taskDispatcher(replier, local contexts, gohome, util) {
                     })
                     expr = caar(expr)
                     reply.error = undefined
-                    if expr {
-                        expr = evalactive(expr)
-                        if data.get
-                            roots = new(data.get).map(function(sym){        // new() to get symbol from compress
-                                compress(sym)
-                            })
-                        if roots
-                            roots = cons(`expr, totuple(roots))
-                        else
-                            roots = `(expr)
-                        reply.result = util.pkgSave(`expr, roots, {
-                            nsignore: true                                  // don't report namespace errors
-                            comments: true })                               // include comments
-                        if context.namespace !== nsactive().0
-                        {                                                   // evaluation changed namespace
-                            context.namespace = nsactive().0
-                            context.activator = makeActivator()
-                        }
+                    expr = evalactive(expr)
+                    if data.get
+                        roots = new(data.get).map(function(sym){            // new() to get symbol from compress
+                            compress(sym)
+                        })
+                    if roots
+                        roots = cons(`expr, totuple(roots))
+                    else
+                        roots = `(expr)
+                    reply.result = util.pkgSave(`expr, roots, {
+                        nsignore: true                                      // don't report namespace errors
+                        comments: true })                                   // include comments
+                    if context.namespace !== nsactive().0
+                    {                                                       // evaluation changed namespace
+                        context.namespace = nsactive().0
+                        context.activator = makeActivator()
                     }
                 }
             }
@@ -148,12 +146,12 @@ closure taskDispatcher(replier, local contexts, gohome, util) {
 closure TaskExecutor() {
 
     // taskInstall
-    // Install the taskDispatcher, and reload on state load.
+    // Install the TaskDispatcher, and reload on state load.
     //
     function taskInstall() {
         if !js.t.OnMessage
             return (false)                                                  // false if not a worker
-        js.t.OnMessage(taskDispatcher(js.t.ReplyMessage))
+        js.t.OnMessage(TaskDispatcher(js.t.ReplyMessage))
     }()
     LoadNotify(taskInstall)
 
@@ -185,11 +183,12 @@ function TaskOnMessageHook(hook) {
 
 function taxInit(local manifest) {
 
-    manifest = `(taskDispatcher, TaskExecutor, TaskOnMessageHook, taxInit)
+    manifest = `(TaskDispatcher, TaskExecutor, TaskOnMessageHook, taxInit)
 
     Naan.module.build(module.id, "taskexec", function(modobj, compobj) {
         require("./running.nlg").LiveImport()
         compobj.manifest = manifest
+        modobj.exports.TaskDispatcher = TaskDispatcher
         modobj.exports.TaskExecutor = TaskExecutor
         modobj.exports.TaskOnMessageHook = TaskOnMessageHook
     })

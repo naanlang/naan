@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2023 by Richard C. Zulch
  *
  */
 
@@ -36,7 +36,7 @@ closure ExecutorBase(track, type, name, local exec) {
     // Send a message to the running instance and return a nonce to wait on. If data is not a
     // dictionary then it is ignored.
     
-    exec.execSend = closure execSend(msg, data, local pending) {
+    exec.execSend = closure execSend(msg, data, local pending, error) {
         if !dictionary(data)
             data = { }
         data.xmsg = msg
@@ -44,7 +44,9 @@ closure ExecutorBase(track, type, name, local exec) {
         pending = new(nonce)
         pending.msgout = data
         exec.pending[data.xid] = pending
-        exec.PostMessage(data)
+        `(error) = exec.PostMessage(data)
+        if error
+            pending.signal(Error("execSend failed", error))
         pending
     }
     
@@ -62,6 +64,15 @@ closure ExecutorBase(track, type, name, local exec) {
         pending.signal(list(false, data))
     }
     
+    // execFailed
+    // Communication has failed.
+    
+    exec.execFailed = closure execFailed(error, local xid, pending) {
+        exec.pending.error = error
+        for `(xid, pending) in exec.pending
+            pending.signal(list(error))
+    }
+    
     // execClosed
     // Note that the connection has closed, so signal all the waiters.
     
@@ -76,18 +87,25 @@ closure ExecutorBase(track, type, name, local exec) {
     // Return a context object for the instance, or an error, in a result tuple. Currently this does
     // not ever reclaim old contexts on the instance end of things, but it should. ###
 
-    exec.context = closure context(local context, retries, ms) {
+    exec.context = closure context(local error, retries, ms, delta, excon) {
         retries = 0
         ms = milliseconds()
+        delta = 1
         while !exec.pending.ready {
-            exec.PostMessage({
+            `(error) = exec.PostMessage({
                 xmsg: "xstart"
             })
+            if error
+                return (Error("exec.context failed", error))
             if ++retries > 100
-                return (list(Error("timeout creating remote worker context", type, name)))
-            sleep(100) }
-        context = ExecutorContext(exec, exec.nextContextID++)
-        context.register()
+                return (list(Error("timeout creating remote context", type, name)))
+            if exec.pending.error
+                return (list(Error("cannot create remote context", exec.pending.error)))
+            sleep(delta)
+            if delta < 100
+                delta *= 2 }
+        excon = ExecutorContext(exec, exec.nextContextID++)
+        excon.register()
     }
 
     // attention
@@ -172,7 +190,28 @@ closure ExecutorContext(exec, contextID, local context, util) {
     context.evalq = macro evalq(expr, put, get) {
         evalf(expr, eval(put), eval(get))
     }
+                
+    // apply
+    // Apply list of arguments to the specified procure evaluated remotely. If the procedure is a
+    // not a tuple then this uses the tuple definition if there is one.
     
+    context.apply = closure applyf(proc, args, put, get) {
+        if !tuple(proc) && tuple(proc.proc)
+            proc = proc.proc
+        evalf(list(apply, proc, args), eval(put), eval(get))
+    }
+
+    // call
+    // Call the specified function remotely using local arguments:
+    //      context.call(proc, args...)
+    
+    context.call = macro callf args {
+        closure (proc, arglist, local eargs) {
+            while arglist
+                push(eval(pop(arglist)), eargs)
+            applyf(eval(proc), eargs)
+        } (pop(args), reverse(args))
+    }
     // rpc
     // Execute a remote procedure call without package translation, to reduce overhead. This will not
     // properly transfer Naan-specific types like symbols, and the results will be native JavaScript.
@@ -187,8 +226,12 @@ closure ExecutorContext(exec, contextID, local context, util) {
         result = pending.wait()
         if result.1.error
             list(Error(result.1.error))
-        else
-            list(false, totuple(result.1.result))
+        else {
+            result = result.1.result
+            if Array.isArray(result)
+                result = totuple(result)
+            list(false, result)
+        }
     }
 
     // finis
@@ -670,11 +713,15 @@ closure execLambda(track, url, name, workerID, local target, nlregex, clientID, 
     //     Post a message to the target.
     //
 
-    target.PostMessage = function PostMessage(data) {
+    target.PostMessage = function PostMessage(data, local result) {
+        result = connect()
+        if result.0
+            return (result)
         target.ws.send({                                                    // send user-entered text to worker
             id: "msgin",
             data: data
         })
+        list(false, { posted: true })
     }
     
     //

@@ -2,11 +2,11 @@
  * apiclient.nlg
  * Naanlib/frameworks/client
  *
- *     Access to Nide API with HTTP client.
+ *     Access to Nide API with browser HTTP client.
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2022 by Richard C. Zulch
+ * Copyright (c) 2017-2023 by Richard C. Zulch
  *
  */
 
@@ -25,6 +25,7 @@ closure MakeNideAPIclient(url, guid, local client) {
     client.url = url
     client.guid = guid
     client.notifyAfter = 0
+    client.instanceID = UUID()                                              // our client's unique ID
 
     // clientRequest() - general request routine
 

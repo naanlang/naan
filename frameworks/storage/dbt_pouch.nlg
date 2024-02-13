@@ -7,7 +7,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2023 by Richard C. Zulch
+ * Copyright (c) 2017-2024 by Richard C. Zulch
  *
  */
 
@@ -35,6 +35,7 @@
  */
 
 closure dapoTable(database, path, local table, prefix) {
+    global()
     table = new(object, this)
     table.type = database.type
     table.db = database
@@ -277,13 +278,11 @@ closure dapoTable(database, path, local table, prefix) {
     //  rows : [
     //      {
     //          key         :   "john",
-    //          _modified   :   [Date Sat Apr 04 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
     //          _md5        :   "55ff07fb005494c4bd42322d4845e858"
     //          _length     :   156043
     //         [ doc | error:  <document from "get" or "head"> | <error from get|head> ] },
     //      {
     //          key         :   "jill",
-    //          _modified   :   [Date Sat Apr 22 2020 17:05:38 GMT-0700 (Pacific Daylight Time)]
     //          _md5        :   "f53f07fb00d42322dc4bd42322d4845e"
     //          _length     :   155
     //         [ doc         :  <document from "get" or "head"> ] } ] }
@@ -335,7 +334,7 @@ closure dapoTable(database, path, local table, prefix) {
                         _id:        obj.id
                         _rev:       obj.value.rev
                     }
-                    if obj.doc {
+                    if obj.doc {                                            // docs were requested
                         if obj.doc.content {
                             item._md5 = HashMD5(obj.doc.content)
                             item._length = length(obj.doc.content) }
@@ -373,6 +372,7 @@ closure dapoTable(database, path, local table, prefix) {
  */
 
 closure PouchDB(urlname, local database, options) {
+    global(jspath, pouchdb)
     options = {
         revs_limit: 1                                                       // number of revs to maintain for replication
         auto_compaction: false }                                            // don't compcat on every change
@@ -480,7 +480,8 @@ closure PouchDB(urlname, local database, options) {
  *
  */
 
-closure ListBrowserDBs(local pending, output) {
+closure ListBrowserDBs(local pending, output, item) {
+    global(indexedDB)
     if !indexedDB
         return (list(Error("browser database unavailable")))
     if !indexedDB.databases
@@ -507,6 +508,7 @@ closure ListBrowserDBs(local pending, output) {
  */
 
 closure DbConnector(psm, local connClassID, connector, watch) {
+    global()
     connClassID = "PouchDB"
     connector = new(object, this)
     connector.psm = psm
@@ -572,7 +574,7 @@ closure DbConnector(psm, local connClassID, connector, watch) {
     // The return value is an (error, resID) tuple. Error, if non-false, is a dictionary of field
     // keys and error diagnostic strings.
     connector.writeResource = function writeResource(resource, resID, 
-        local errors, creds, original, error, data) {
+        local errors, creds, original, error, data, change) {
         // badField - test for a bad string
         function badField(str) { !string(str) || str.trim().length == 0 }
 

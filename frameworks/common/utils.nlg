@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023 by Richard C. Zulch
+ * Copyright (c) 2023-2024 by Richard C. Zulch
  *
  */
 
@@ -59,6 +59,43 @@ function DictCompare(aa, bb, local output, keysa, keysb, ka, kb, comp) {
 
 
 /*
+ * ExbackFactory
+ *
+ * A factory returning an exponential backoff function based on the specified backoff and deadline
+ * values. Each time you call this it returns a new delay value until the deadline is reached, when
+ * it returns false. Backoff is the "maximum" backoff interval in seconds. Deadline is the maximum
+ * total time in seconds. The return value is integer milliseconds.
+ *
+ * For example, with a backoff of 12 seconds and a deadline of 60 seconds, the return delays for
+ * multiple iterations are:
+ *  1571
+ *  2660
+ *  4883
+ *  8579
+ * 12139
+ * 12650
+ * 12434
+ *
+ * https://en.wikipedia.org/wiki/Exponential_backoff
+ *
+ */
+
+closure ExbackFactory(backoff, deadline, local expon, total)
+{
+    expon = 0
+    total = 0
+    function delayms(local wait) {
+        wait = Math.min(Math.pow(2, expon++), backoff)
+        total += wait
+        if total > deadline
+            return (false)
+        wait += Math.random()
+        Math.ceil(wait * 1000)
+    }
+};
+
+
+/*
  * utilsInit
  *
  *     Initialize the component.
@@ -66,12 +103,13 @@ function DictCompare(aa, bb, local output, keysa, keysb, ka, kb, comp) {
  */
 
 function utilsInit(local manifest) {
-    manifest = `(DictCompare, utilsInit)
+    manifest = `(DictCompare, ExbackFactory, utilsInit)
 
     Naan.module.build(module.id, "utils", function(modobj, compobj) {
         require("./common.nlg")
         compobj.manifest = manifest
         module.exports.DictCompare = DictCompare
+        module.exports.ExbackFactory = ExbackFactory
         updateExports()
     })
 } ();

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2022 by Richard C. Zulch
+ * Copyright (c) 2019-2024 by Richard C. Zulch
  *
  */
 
@@ -21,6 +21,7 @@
 closure TermHost(track, api, name, workerID, options,
     local target, nlregex, clientID, serverID)
 {
+    global(window)
     target = require("../running/executors.nlg").ExecutorBase(track, "Host", name)
     clientID = "DebugWorkers"
     serverID = "Workers"
@@ -29,22 +30,33 @@ closure TermHost(track, api, name, workerID, options,
         workerID = "myDebugWorker"
     target.workerID = workerID
     target.msgQueue = []
+    target.dispatcher = call(options.dispatcher, function(reply) { reply })
     
     // connect
     // Connect with the host if not already connected.
     closure connect(local pending) {
         if target.ws
             return
-        target.ws = xnew(window.WebSocket,"ws://".concat(window.location.host)) // ### use api parameter
+        target.ws = xnew(window.WebSocket,"ws://${window.location.host}")
         pending = new(nonce)
-    
+
         // onopen
         // The WebSocket connection is now open.
-        target.ws.onopen = function onopen(e, local spawner) {
-            pending.signal(list(false, { ok: true }))
-            spawner = new(options.startup)
+        target.ws.onopen = function onopen(e, local info, spawner) {
+            info = {
+                name: name
+                workerID: workerID
+            }
+            if options.dispatcher
+                info.destID = api.instanceID                                // valid destination for relay
+            target.ws.send(window.JSON.stringify({
+                guid: api.guid
+                init: info
+            }))
+            spawner = new(options.startup) || { }
             spawner.name = name
             sendControl("spawn", spawner)
+            pending.signal(list(false, { ok: true }))
         }
 
         // onmessage
@@ -77,10 +89,29 @@ closure TermHost(track, api, name, workerID, options,
                     if !target.written
                         target.term.WriteLn("(reconnected)")
                 }, 1000).run()
-            else if message.respOp
-                debuglog("unknown host response message:", message.respOp)
+            else if message.workerOp == "msgin" && message.payload.id == "targetin"
+                dispatcher(message)                                         // request from Host
+            else if message.respOp || message.id
+                debuglog("unknown host response message:", message.respOp || message.id)
         }
-        
+
+        // dispatcher
+        // Respond to a host request while preserving context to permit reply routing
+        closure dispatcher(message, local reply) {
+            reply = target.dispatcher(message.payload.data)
+            target.ws.send(window.JSON.stringify({
+                guid: api.guid
+                clientID: message.clientID
+                serverID: message.serverID
+                workerID: message.workerID
+                respOp: "msgout"
+                payload: {
+                    id: "targetout",
+                    data: reply
+                }
+            }))
+        }
+
         // onerror
         // An error occurred on the WebSocket connection.
         target.ws.onerror = function onerror(e) {
@@ -91,7 +122,8 @@ closure TermHost(track, api, name, workerID, options,
         // onclose
         // The WebSocket connection was closed.
         target.ws.onclose = function onclose(e) {
-            debuglog("ws close:", e.code, e.reason)
+            if e.code != 1000 && e.code != 1001 && e.code != 1005 && e.code != 1006
+                debuglog("ws close:", e.code, e.reason)
             target.execClosed(Error("socket closed", e.code, e.reason))
             target.ws = false
         }
@@ -104,7 +136,7 @@ closure TermHost(track, api, name, workerID, options,
     //
     //     New workers created/discovered on this host.
     //
-    function hostWorkerUpdate(msg, local localID) {
+    function hostWorkerUpdate(msg, local localID, worker) {
     
         // findWorker
         //
@@ -123,9 +155,9 @@ closure TermHost(track, api, name, workerID, options,
         else if msg.id == "termination"
             track.delete(findWorker(msg.workerID))
         else {
-            for localID in msg.workerIDs
+            for `(localID, worker) in msg.workers
                 if !findWorker(localID)
-                    TermHost(track, api, localID, localID)
+                    TermHost(track, api, worker.name, localID)
         }
     }
         
@@ -243,12 +275,15 @@ closure TermHost(track, api, name, workerID, options,
     //     Post a message to the target.
     //
 
-    target.PostMessage = function PostMessage(data) {
-        connect()
+    target.PostMessage = function PostMessage(data, local result) {
+        result = connect()
+        if result.0
+            return (result)
         send({                                                              // send data to worker
             id: "targetin",
             data: data
         })
+        list(false, { posted: true })
     }
     
     //
@@ -358,6 +393,7 @@ closure TermHost(track, api, name, workerID, options,
 closure TermLocal(track, name, workerID, options,
     local target, nlregex, listener)
 {
+    global(js, window)
     if workerID == "NaanIDE" {
         if !js.t
             return (list(Error("Cannot access Local IDE executor")))
@@ -500,6 +536,7 @@ closure TermLocal(track, name, workerID, options,
             id: "targetin",
             data: data
         })
+        list(false, { posted: true })
     }
     
     //
@@ -591,6 +628,7 @@ closure TermLocal(track, name, workerID, options,
  */
 
 closure findIDEtarget(track, name, workerID, naancont, local target) {
+    global()
     for target in track.enumlist()
         if target.name == name && target.workerID == workerID && (!target.naancont || target.naancont === naancont)
             return (target)
@@ -608,6 +646,7 @@ closure findIDEtarget(track, name, workerID, naancont, local target) {
  */
 
 closure termIDE(track, name, workerID, naancont, title, local target, connected) {
+    global()
     target = findIDEtarget(track, name, workerID, naancont)
     if target {                                                             // new naancont on existing target
         target.updateController(naancont)
@@ -640,6 +679,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
 
     target.PostMessage = function PostMessage(data) {
         naancont.DispatchMessage(data)
+        list(false, { posted: true })
     }
 
     // termAttach
@@ -770,6 +810,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
  */
 
 closure termInstallVirtualWatcher(track, naancont) {
+    global()
 
     function watchVsites(msg, local error, target) {
         if msg.op == "VsiteOpen" {

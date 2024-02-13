@@ -185,7 +185,7 @@ function JsonStringify(data) {
 
 jsScripts = { };                                                            // script values become false on reload
  
-function JsLoadScript(libpath, globalID, local scriptTag, fpath) {
+closure JsLoadScript(libpath, globalID, local scriptTag, fpath) {
     if jsScripts[libpath]
         return                                                              // already loaded
     if libpath.startsWith("/")

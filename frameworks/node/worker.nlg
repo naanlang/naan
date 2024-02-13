@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2021 by Richard C. Zulch
+ * Copyright (c) 2019-2024 by Richard C. Zulch
  *
  */
 
@@ -18,9 +18,11 @@
  *
  */
 
-closure workCurrent(workerID, local current) {
+closure workCurrent(workerID, startup, local current) {
+    global()
     current = new(object, this)
     current.workerID = workerID
+    current.name = startup.name
     current.links = []
     current.termif = xnew({
         textout:    ONtextOut.proc
@@ -177,14 +179,17 @@ closure workCurrent(workerID, local current) {
  *
  */
 
-closure workThread(workerID, startup, local worker, subChannel, deathWatcher) {
+closure workThread(workerID, startup, local worker, options, subChannel, deathWatcher) {
+    global(threads, JSpath)
     worker = new(object, this)
+    worker.name = startup.name
     worker.workerID = workerID
     worker.links = []
 
     // create our worker thread
 
-    worker.thread = xnew(threads.Worker, JSpath.resolve(js.d, "node_worker.js"))
+    // options = { execArgv: ["--inspect-brk"] }                            // uncomment for NodeJS debugging
+    worker.thread = xnew(threads.Worker, JSpath.resolve(js.d, "node_worker.js"), options)
     subChannel = xnew(threads.MessageChannel)
     worker.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
     worker.msgport = subChannel.port2
@@ -224,7 +229,7 @@ closure workThread(workerID, startup, local worker, subChannel, deathWatcher) {
 
     worker.thread.on("error", function onerror(error) {
         debuglog("worker terminated with error", workerID, error)
-        exitNotify(exitCode)
+        exitNotify(-1)
     })
     
     //
@@ -341,6 +346,7 @@ closure workThread(workerID, startup, local worker, subChannel, deathWatcher) {
  */
 
 closure workLink(workco, conn, worker, sender, local link) {
+    global()
     link = new(object, this)
 
     //
@@ -393,6 +399,7 @@ closure workLink(workco, conn, worker, sender, local link) {
  */
 
 closure workController(api, local workco) {
+    global()
     workco = new(object, this)
     workco.serverID = "Workers"                                             // our serverID, used for communications
     workco.workers = { }                                                    // dictionary of workers by workerID
@@ -480,7 +487,7 @@ closure workController(api, local workco) {
             else if message.workerOp == "spawn" {
                 if !worker {                                                // create worker if needed
                     if message.workerID == "NideServer"
-                        worker = workco.current = workCurrent(message.workerID)
+                        worker = workco.current = workCurrent(message.workerID, message.payload)
                     else
                         worker = workThread(message.workerID, message.payload)
                     workco.workers[message.workerID] = worker }
@@ -489,7 +496,14 @@ closure workController(api, local workco) {
                 if message.workerID == "NideServer"
                     workco.current.vitalUpdate({
                         id: "workerlist",                                   // send the initial list of workers
-                        workerIDs: workco.workers.*
+                        workers: let(workers, workerID, worker) {
+                            workers = { }
+                            for `(workerID, worker) in workco.workers
+                                workers[workerID] = {
+                                    name: worker.name
+                                }
+                            workers
+                        }()
                     })
                 else {
                     worker.vitalWatch(termination)
@@ -516,7 +530,7 @@ closure workController(api, local workco) {
     //     Note that the connection with the client was closed.
     //
     
-    workco.wsClose = function wsClose(conn, local workerID) {
+    workco.wsClose = function wsClose(conn, local workerID, link) {
         for workerID in workco.workers {
             link = workco.links[conn][workerID]
             if link
@@ -553,7 +567,6 @@ function workInit(local manifest) {
 
     Naan.module.build(module.id, "worker", function(modobj, compobj) {
         require("./node.nlg")
-        threads = js.r("worker_threads")                                    // ### should be on reload
         compobj.manifest = manifest
         modobj.exports.WorkerController = workController
     })

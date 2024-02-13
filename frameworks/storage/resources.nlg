@@ -11,7 +11,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2022 by Richard C. Zulch
+ * Copyright (c) 2019-2024 by Richard C. Zulch
  *
  */
 
@@ -28,6 +28,7 @@
  */
 
 closure rsrcVault(db, tablename, local vault) {
+    global()
     vault = new(object, this)
 
     // addResource
@@ -72,7 +73,7 @@ closure rsrcVault(db, tablename, local vault) {
     //
     // Return credentials for access to the resource.
 
-    vault.accessResource = function accessResource(resID) {
+    vault.accessResource = function accessResource(resID, local error, data) {
         `(error, data) = vault.table.get(resID)
         if error
             list(error)
@@ -134,6 +135,7 @@ closure rsrcVault(db, tablename, local vault) {
  */
 
 closure ResourceManager(dbname, prefix, local reman, watch, result) {
+    global(commonWatching)
     reman = new(object, this)
     watch = commonWatching.Watchable()
     reman.watch = watch.watch

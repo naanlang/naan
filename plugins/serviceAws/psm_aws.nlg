@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2024 by Richard C. Zulch
  *
  */
 
@@ -202,7 +202,7 @@ closure psmaConnector(psm, local connClassID, connector, watch) {
         info = {
             classID: "AWS S3"
             type: "AWS S3 bucket"
-            services: ["DBT", "FS"]
+            services: ["NideDB", "NideFS"]
         }
         `(error, creds) = connector.vault.accessResource(resID)
         if creds {

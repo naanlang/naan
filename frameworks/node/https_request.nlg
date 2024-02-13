@@ -5,15 +5,15 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2023 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
 
 /*
- * HttpsApiRequest
+ * httpsApiReqOnce
  *
- * Perform an API request from in NodeJS. This operates the same as HttpsApiRequest for browsers.
+ * Perform an API request from NodeJS. This operates the same as HttpsApiRequest for browsers.
  *
  * Options:
  *  {
@@ -45,7 +45,7 @@
  *
  */
 
-closure HttpsApiRequest(url, options,
+closure httpsApiReqOnce(url, options,
     local urlq, reqOptions, putdata, item, xurl, pending, chunks, request) {
     if options.query
         urlq = url.concat(EncodeQuery("?", options.query))
@@ -149,6 +149,31 @@ closure HttpsApiRequest(url, options,
 
 
 /*
+ * HttpsApiRequest
+ *
+ * Make the request with optional retry logic.
+ *
+ * Options:
+ *  {
+ *      retrier: function(error) { error.status == 502 }                    // retry 502 errors
+ *  }
+ *
+ */
+
+closure HttpsApiRequest(url, options, local result) {
+    loop {
+        result = httpsApiReqOnce(url, options)
+        if result.0 && result.0.status {                                    // check for retries
+            if !options.retrier(result.0)
+                break
+        } else
+            break
+    }
+    result
+};
+
+
+/*
  * https_nodeInit
  *
  * Initialize HTTPS request operations for NodeJS.
@@ -156,7 +181,7 @@ closure HttpsApiRequest(url, options,
  */
 
 function https_nodeInit(local manifest) {
-    manifest = `(HttpsApiRequest, https_nodeInit)
+    manifest = `(httpsApiReqOnce, HttpsApiRequest, https_nodeInit)
 
     Naan.module.build(module.id, "https_request", function(modobj, compobj) {
         require("./node.nlg")

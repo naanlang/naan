@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
@@ -480,7 +480,7 @@ closure DebugNub(local nub, debug, paused) {
             locals = localist(frame)
             ns = frame.3.1.namespace
             if ns !== nsactive().0 {
-                mod = module.owner.findModule(ns)
+                mod = module.owner.find(function(mod){ mod.namespace === ns })
                 if mod {
                     gohome = makeActivator(nsactive())
                     chns(mod.id)

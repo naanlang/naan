@@ -6,49 +6,107 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2022 by Richard C. Zulch
+ * Copyright (c) 2017-2024 by Richard C. Zulch
  *
  */
 
 
 /*
- * MakeAPI
+ * APIServer
  *
  *     Make an API server object.
  *
  */
 
-closure MakeAPI(port, options, callback, local chroot, server) {
-    if !options
-        options = { }
-    else
-        options = new(options)
-    if !options.relpath
-        options.relpath = ""
-        
-    chroot = JSpath.join(js.d, options.relpath)
-    if not string(chroot) || chroot.length < 2 {
-        debuglog("APIserver: invalid path", chroot)
-        return (false)
-    }
-
+closure APIServer(options, local server, chroot) {
+    global(JSpath, js, bodyParser, express, psmServerMod, workerMod)
+    apisLoadLibs()
     server = new(object, this)
-    server.psm = require("./psm_server.nlg").MakeServerPSM(server)
-    server.root = chroot
     server.app = express()
     server.guid = options.guid
     server.notifyq = []
     server.responseq = []
-    server.projects = { }
+    options = merge({
+        relpath: ""
+        name: "NaanServer"
+    }, options)
+    chroot = JSpath.join(js.d, options.relpath)
+    server.root = chroot
+
+    // updatePort
+    // Update our state based on the specified port number.
+    function updatePort(port) {
+        server.host = "localhost:${tostring(port)}"
+        server.oururl = "http://${server.host}/nide.html"
+        server.port = port
+    }
+
+    // open
+    //
+    // Open the server, returning a result tuple. A fixed port may be specified.
+    //
+    server.open = closure open(port, local error, pending, result, hostfs) {
+        if server.http
+            return (list(false, { open: true }))                            // already open
+        if !string(chroot) || chroot.length < 2 {
+            error = Error("APIserver: invalid path", chroot)                // invalid option
+            return (list(error))
+        }
+        if port
+            options.fixedPort = port                                        // override fixed port from argument
+        else if options.fixedPort
+            port = options.fixedPort                                        // use fixed port option
+        else
+            port = options.basePort                                         // search for port from base
+        if options.fixedPort
+            updatePort(port)                                                // need this to access in-use server
+        pending = new(nonce)
+        while !result {
+            server.http = server.app.listen(port, function() {
+                pending.signal(list(false, port))                           // success
+            }).on("error", function (err) {
+                if err.code == "EADDRINUSE" && !options.fixedPort {
+                    ++port                                                  // try next port
+                    pending.signal(false)
+                }
+                else
+                    pending.signal(list(Error("server listen error", err, { code: err.code })))
+            })
+            result = pending.wait()
+            pending.reset()
+        }
+        if result.0 {                                                       // open failed
+            server.http = false
+            return (result)
+        }
+        updatePort(port)
+        if server.guid
+            server.oururl = server.oururl.concat("?guid=", server.guid)
+        App.api = server                                                    // used remotely by client/relaycon.nlg
+        server.ws = WebSocketServer(server)
+        WesRelay(server)                                                    // registers as subsystem
+        server.psm = psmServerMod.MakeServerPSM(server, options.name)
+        `(error, hostfs) = server.psm.conns.NodeFS.connect("Host", "NideFS", list(""))
+        if error {
+            error = Error("APIServer: can't access HostFS", error)
+            ErrorDebuglog(error)
+            return (list(error))
+        }
+        server.hostfs = hostfs
+        workerMod.WorkerController(server)
+        list(false, port)
+    }
 
     // close
     //
     // Close the server.
-
+    //
     server.close = function close() {
         if server.ws
             server.ws.close()
         server.http.close(function(){debuglog("API Server closed")})
+        server.ws = false
+        server.http = false
     }
     
     // Register
@@ -57,9 +115,17 @@ closure MakeAPI(port, options, callback, local chroot, server) {
     // have the wsReceive method invoked:
     //     wsReceive(message, conn)
     // And can send a reply on the specified connection.
-    
+    //
     server.Register = function Register(serverID, subsystem) {
         server.ws.subsystems[serverID] = subsystem
+    }
+    
+    // Relays
+    //
+    // Report our relay destIDs.
+    //
+    server.Relays = function Relays() {
+        server.ws.subsystems.Relay.destList()
     }
 
     //
@@ -182,7 +248,7 @@ closure MakeAPI(port, options, callback, local chroot, server) {
                 if responder.active {
                     queued = server.notifyq.filter(function(item,index,array) { item.stamp > after })
                     if queued.length > 0
-                        res.send(js.g.JSON.stringify(queued))
+                        res.send(JSONstringify(queued))
                     else if timeout
                         res.status(200).end()
                     else
@@ -209,47 +275,8 @@ closure MakeAPI(port, options, callback, local chroot, server) {
             server.hostfs.api(req, res)
     })
 
-    //
-    // initialize the server
-    //
+    // finis
 
-    let(local pending, result) {
-        pending = new(nonce)
-
-        // find our port
-
-        loop {
-            server.http = server.app.listen(port, function(){
-                pending.signal({})                                              // success
-            }).on("error", function (err) {
-                if err.code == "EADDRINUSE"
-                    ++port                                                      // try next port
-                else {
-                    pending.result = Error("server listen error", err)          // permanent failure
-                    callback(err, false)
-                }
-                pending.signal(pending.result)
-            })
-            if pending.wait()
-                break
-            pending.reset()
-        }
-        if pending.result
-            return (false)                                                      // failed to open
-    
-        // start the services
-    
-        server.ws = WebSocketServer(server)
-        server.port = port
-        callback(false, port, server)                                           // notify of success
-        result = server.psm.conns.NodeFS.connect("Host", "NideFS", list(""))    // ### this should go through resource tracker
-        if result.0
-            ErrorDebuglog(Error("can't access HostFS", result.0))
-        else
-            server.hostfs = result.1
-    }()
-
-    // return new API server object
     server
 };
 
@@ -262,6 +289,7 @@ closure MakeAPI(port, options, callback, local chroot, server) {
  */
 
 closure WebSocketServer(server, local websocks) {
+    global(ws)
     websocks = new(object, this)
     websocks.conns = []                                                     // our connections
     websocks.subsystems = { }                                               // registered subsystems
@@ -277,26 +305,31 @@ closure WebSocketServer(server, local websocks) {
 
     // Event handlers
 
-    websocks.wss.on("connection", function(socket, request) {
-        websocks.conns.push(WesCon(server, websocks, socket, request))
+    websocks.wss.on("connection", function(socket, request, local conn, serverID) {
+        conn = WesCon(server, websocks, socket, request)
+        websocks.conns.push(conn)
+        for serverID in websocks.subsystems
+            websocks.subsystems[serverID].wsOpen(conn)                      // notify of our openings
     })
-                
+
     server.wss.on("error", function(error) {
-        ErrorDebuglog(Error("ws server error:", error))
+        ErrorDebuglog(Error("WebSocketServer: connection error", error))
     })
 
     server.wss.on("close", function() {
         debuglog("WebSocketServer has closed")
         websocks.closed = true                                              // note that we are closed
     })
-    
+
     // closeConn
     // respond to connection closing
-    
-    websocks.closeConn = function closeConn(conn) {
+
+    websocks.closeConn = function closeConn(conn, local serverID) {
         websocks.conns = websocks.conns.filter(function(item) {
-            !(item eq conn)
+            item !== conn
         })
+        for serverID in websocks.subsystems
+            websocks.subsystems[serverID].wsClose(conn)                     // notify of our closures
     }
 
     // finis
@@ -318,23 +351,34 @@ closure WebSocketServer(server, local websocks) {
  */
 
 closure WesCon(server, websocks, socket, request, local wescon) {
+    global()
     wescon = new(object, this)
     wescon.socket = socket
-    wescon.serverIDs = []
+    wescon.info = {
+        destID: UUID()
+        address: new(socket._socket.address())
+    }
 
     // on message
     //
     // Incoming data.
-    
-    socket.on("message", function onmessage(text, local message, error) {
+    //
+    socket.on("message", closure onmessage(text, local message, error) {
         try {
             message = new(js.g.JSON.parse(text))
             if server.guid && message.guid != server.guid
                 error = Error("unauthorized")
-            else if message.clientID && websocks.subsystems[message.serverID] {
-                wescon.serverIDs.push(message.serverID)                     // ### track subsystems for closing
-                websocks.subsystems[message.serverID].wsReceive(message, wescon)
+            else if message.init {
+                if message.init.destID {
+                    wescon.relay = true
+                    websocks.subsystems.Relay.wsChangeDestID(wescon, wescon.info.destID, message.init.destID)
+                }
+                wescon.info = merge(wescon.info, message.init)
             }
+            else if message.respOp && websocks.subsystems.Relay
+                websocks.subsystems.Relay.wsReceive(message, wescon)        // with respOp, must be a relay
+            else if message.clientID && websocks.subsystems[message.serverID]
+                websocks.subsystems[message.serverID].wsReceive(message, wescon)
             else
                 error = Error("can't route message")
         } catch {
@@ -342,48 +386,241 @@ closure WesCon(server, websocks, socket, request, local wescon) {
                 error = Error("can't decode message JSON", exception)
         }
         if error
-            socket.send(js.g.JSON.stringify([error]))
+            socket.send(JSONstringify([error]))
     })
         
     // on error
     //
     // Error has occurred on this connection.
-    
-    socket.on("error", function onerror(error) {
-        debuglog("connection error", error)
+    //
+    socket.on("error", closure onerror(error) {
+        debuglog("Wescon: connection error", error)
     })
 
     // on close
     //
     // Connection has closed.
-    
-    socket.on("close", function onclose(code, reason, local serverID) {
-        if code != 1000 && code != 1001 && code != 1005
-            debuglog("connection has closed:", code, reason)
-        websocks.closeConn(wescon)
-        wecson.closed = {
+    //
+    socket.on("close", closure onclose(code, reason) {
+        if code != 1000 && code != 1001 && code != 1005 && code != 1006
+            debuglog("Wescon: connection has closed:", code, reason, JSONstringify(wescon.info))
+        wescon.closed = {
             code: code
             reason: reason
         }
-        for serverID in wescon.serverIDs
-            websocks.subsystems[message.serverID].wsClose(wescon)           // notify of our closures
+        websocks.closeConn(wescon)
     })
     
     // send
     //
     // Send a dictionary, which must have a clientID defined.
-
+    //
     wescon.send = function send(message) {
         if !message.clientID || !message.serverID
             throw("Wescon.send: client and server IDs required")
         if wescon.closed
             list(Error("Socket connection closed", wescon.closed))
-        socket.send(js.g.JSON.stringify(message)),
+        socket.send(JSONstringify(message)),
         [false, {ok: true}]
     }
 
     // finis
     wescon
+};
+
+
+/*
+ * WesRelay
+ *
+ *     Web socket relay controller. This allows apiserver clients to discover each other and connect
+ * for remote evaluation, etc. A source connection makes a request of a destination connection, and
+ * the response is routed back to the original connection.
+ *
+ * This uses the following message fields for the requesting source:
+ *     guid:            security token
+ *     clientID:        defined by the source, this string defines where replies should be sent
+ *     serverID:        "Relay"
+ *     destID:          the destination connection
+ *     endServerID:     the serverID to use at the destination
+ * The message is modified with a virtual clientID to send to the destination, and then changed back
+ * for return to the requester.
+ *
+ * To discover the available destination connections a source should use:
+ *     clientID:        requester
+ *     serverID:        "Relay"
+ *     relayOp:         "getdests"
+ * which returns:
+ *     relayOp:         "destlist"
+ *     destinations: [
+ *          destID:     guid for the connection
+ *          address:    socket port / family / ip address
+ *          name:       <string>
+ *          workerID:   id of destination worker
+ *     ]
+ * New and closed destinations are sent asynchronously to each source:
+ *     relayOp:         "opened" / "closed"
+ *     info: {
+ *          destID:     guid for the connection
+ *          address:    socket port / family / ip address
+ *          name:       <string>
+ *          workerID:   id of destination worker
+ *      }
+ *
+ */
+
+closure WesRelay(server, local welay) {
+    global()
+    welay = new(object, this)
+    welay.serverID = "Relay"                                                // our serverID as a subsystem
+    welay.destIDs = { }                                                     // destination conns index
+    welay.virtualIDs = { }                                                  // virtual clientID index
+    welay.links = new(weakmap)                                              // source and dest connections
+    server.Register(welay.serverID, welay)
+    
+    // getVirtualID
+    // Return the virtual clientID for a requesting source/clientID and destination.
+    function getVirtualID(sconn, clientID, dconn, local sdict, ddict, vid) {
+        sdict = welay.links[sconn]
+        if !sdict
+            welay.links[sconn] = sdict = {
+                virtualIDs: { }
+            }
+        ddict = welay.links[dconn]
+        if !ddict
+            welay.links[dconn] = ddict = {
+                virtualIDs: { }
+            }
+        vid = ddict.virtualIDs[clientID]
+        if !vid {
+            sdict.virtualIDs[clientID] = vid = UUID()
+            welay.virtualIDs[vid] = {
+                sconn: sconn
+                dconn: dconn
+                clientID: clientID
+            }
+        }
+        vid
+    }
+
+    // addConnection
+    // Record a new connection as a possible destination.
+    function addConnection(conn) {
+        welay.destIDs[conn.info.destID] = conn
+    }
+
+    // removeConnection
+    // Cleanup for a closed connection, be it source or destination or both.
+    function removeConnection(conn, local vid, cdict, did, dconn) {
+        welay.links[conn] = undefined
+        for `(vid, cdict) in welay.virtualIDs
+            if cdict.sconn === conn || cdict.dconn === conn
+                welay.virtualIDs[vid] = undefined
+        for `(did, dconn) in welay.destIDs
+            if dconn === conn
+                welay.destIDs[did] = undefined
+    }
+    
+    // destList
+    // Make an array of destination connections, excluding the specified one.
+    //
+    welay.destList = function destList(conn, local output, did, dconn) {
+        output = []
+        for `(did, dconn) in welay.destIDs
+            if dconn !== conn && dconn.relay
+                output.push(dconn.info)
+        output
+    }
+
+    // wsReceive
+    //
+    //     Process a message from the websocket API.
+    //
+    welay.wsReceive = function wsReceive(message, sconn, local dconn, error, cdict) {
+        if message.relayOp == "getdests" {                                  // get destination list
+            message.relayOp = "destlist"
+            message.destinations = destList(sconn)
+            sconn.send(message)
+            return
+        }
+        else if message.destID && message.endServerID {                     // request from a source 
+            dconn = welay.destIDs[message.destID]
+            if !dconn
+                error = Error("destID or endServerID invalid", message.relayOp)
+            else {
+                message.serverID = message.endServerID
+                message.clientID = getVirtualID(sconn, message.clientID, dconn)
+                message.endServerID = undefined
+                message.destID = undefined
+                dconn.send(message)
+                return
+            }
+        }
+        else {                                                              // response from a destination
+            cdict = welay.virtualIDs[message.clientID]
+            dconn = cdict.sconn                                             // this is original source
+            if !cdict || !dconn
+                error = Error("cannot route reply", message.relayOp)
+            else {
+                message.endServerID = message.serverID
+                message.serverID = welay.serverID
+                message.clientID = cdict.clientID
+                message.destID = dconn.info.destID
+                dconn.send(message)
+                return
+            }
+        }
+        sconn.send({
+            serverID: message.serverID
+            clientID: message.clientID
+            respOp: "error"
+            payload: [error]
+        })
+    }
+
+    // wsOpen
+    //
+    //     Note that a new connection was opened.
+    //
+    welay.wsOpen = function wsOpen(conn) {
+        addConnection(conn)
+    }
+
+    // wsClose
+    //
+    //     Note that an existing connection was closed.
+    //
+    welay.wsClose = function wsClose(conn, local destID, sconn) {
+        removeConnection(conn)
+        if conn.relay
+            for `(destID, sconn) in welay.destIDs
+                sconn.send({
+                    serverID: welay.serverID
+                    clientID: "*"
+                    relayOp: "closed"
+                    info: conn.info
+                })
+    }
+
+    // wsChangeDestID
+    //
+    //     The destID has changed (via the client init message.)
+    //
+    welay.wsChangeDestID = function wsChangeDestID(conn, prevID, newID, local destID, sconn) {
+        welay.destIDs[prevID] = undefined
+        welay.destIDs[newID] = conn
+        conn.info.destID = newID
+        for `(destID, sconn) in welay.destIDs
+            if destID != newID
+                sconn.send({
+                    serverID: welay.serverID
+                    clientID: "*"
+                    relayOp: "opened"
+                    info: conn.info
+                })
+    }
+
+    // finis
+    welay
 };
 
 
@@ -394,22 +631,24 @@ closure WesCon(server, websocks, socket, request, local wescon) {
  *
  */
 
+function apisLoadLibs() {
+    if typeof(express) === xobject
+        return
+    express = js.r("express")
+    bodyParser = js.r("body-parser")
+    textParser = bodyParser.text()
+    ws = js.r("ws")
+};
+
 function ApisInit(local manifest) {
+    manifest = `(APIServer, WebSocketServer, WesCon, WesRelay, apisLoadLibs, ApisInit)
 
-    manifest = `(MakeAPI, WebSocketServer, WesCon, ApisInit)
-
-    Naan.module.build(module.id, "API", function(modobj, compobj) {
+    Naan.module.build(module.id, "apiserver", function(modobj, compobj) {
         require("./node.nlg")
         compobj.manifest = manifest
-        modobj.exports.MakeAPI = MakeAPI
-
-        express = js.r("express")
-        bodyParser = js.r("body-parser")
-        textParser = bodyParser.text()
-        ws = js.r("ws")
-    
-        require("./filesystem.nlg")
-        require("./psm_server.nlg")
-        require("./worker.nlg")
+        modobj.exports.APIServer = APIServer
     })
+    require("./filesystem.nlg")
+    psmServerMod = require("./psm_server.nlg")
+    workerMod = require("./worker.nlg")
 }();

@@ -1,0 +1,124 @@
+/*
+ * ws_client.nlg
+ *
+ *     WebSocket client operations for the browser.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2023 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * WebSocket
+ *
+ * Create a WebSocket client connection object using the existing HTTPS connection.
+ *
+ * Options:
+ *  {
+ *      host:       <string>                    // host:port
+ *      onopen:     <proc>(e)                   // connection has opened
+ *      onmessage:  <proc>(e, message)          // message received
+ *      onerror:    <proc>(e)                   // error occurred
+ *      onclose:    <proc>(e)                   // connection has closed
+ *  }
+ *
+ */
+
+closure WebSocket(options, local wsock) {
+    global(window)
+    wsock = new(object, this)
+    options = new(options) || { }
+    if !options.host
+        options.host = window.location.host
+
+    // connect
+    //
+    // Connect with the host if not already connected, returning a result tuple.
+    //
+    wsock.connect = closure connect(local pending) {
+        if wsock.ws
+            return (list(false, { open: true }))
+        wsock.ws = xnew(window.WebSocket, "ws://${options.host}")
+        pending = new(nonce)
+    
+        // onopen
+        // The WebSocket connection is now open.
+        wsock.ws.onopen = closure onopen(e, local spawner) {
+            pending.signal(list(false, { ok: true }))
+            options.onopen(e)
+        }
+
+        // onmessage
+        // A message was received from the worker via WebSockets.
+        wsock.ws.onmessage = closure onmessage(e, message) {
+            try {
+                message = new(JSONparse(e.data))
+            } catch {
+                debuglog("can't decode incoming ws message:", exception)
+                options.onerror(Error("can't decode incoming message:", exception))
+                return
+            }
+            options.onmessage(e, message)
+        }
+        
+        // onerror
+        // An error occurred on the WebSocket connection.
+        wsock.ws.onerror = closure onerror(e, local error) {
+            error = Error("websocket failed", e)
+            options.onerror(e, error)
+            pending.signal(list(error))                                     // ensure connect completes
+        }
+        
+        // onclose
+        // The WebSocket connection was closed.
+        wsock.ws.onclose = closure onclose(e) {
+            options.onclose(e, e.code, e.reason)
+            pending.signal(list(Error("connection closed")))                // ensure connect completes
+            wsock.ws = false
+        }
+        
+        pending.wait()
+    }
+  
+    // send
+    //
+    //     Send a message dictionary.
+    //
+    wsock.send = function send(message) {
+        wsock.ws.send(JSONstringify(message))
+    }
+        
+    // close
+    //
+    //     Close the connection.
+    //
+    wsock.close = function close(reason) {
+        if !reason
+            reason = 1000                                                   // normal close
+        wsock.ws.close(reason)
+    }
+
+    // finis
+
+    wsock
+};
+
+
+/*
+ * ws_clientInit
+ *
+ *     Initialize WebSocket client operations for browsers.
+ *
+ */
+
+function ws_clientInit(local manifest) {
+    manifest = `(WebSocket, ws_clientInit)
+
+    Naan.module.build(module.id, "ws_client", function(modobj, compobj) {
+        require("browser.nlg")
+        compobj.manifest = manifest
+        modobj.exports.WebSocket = WebSocket
+    })
+}();

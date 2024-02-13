@@ -1,11 +1,11 @@
 /*
- * https_browser.nlg
+ * https_request.nlg
  *
  *     Https operations for the browser.
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2023 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
@@ -24,6 +24,7 @@
  *      encoding:       <string>                // "binary" to receive binary data as arrayBuffer
  *      range:          <string>                // sets range header
  *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
+ *      debug:          <boolean>               // log errors and status results
  *  }
  *
  * The return is a result tuple comprising:
@@ -82,14 +83,27 @@ closure HttpsApiRequest(url, options,
     //
     // perform the fetch and return when complete
     //
-    `(error, response) = await(window.fetch(urlq, fetchOptions))
-    if error
-        return (list(Error("HttpsApiRequest fetch failed:", error, url)))
+    loop {                                                                  // loop for retries
+        `(error, response) = await(window.fetch(urlq, fetchOptions))
+        if error {
+            if options.debug
+                debuglog("HttpsApiRequest error:", url, "error:", error)
+            return (list(Error("HttpsApiRequest fetch failed:", error, url)))
+        }
+        if response.status < 200 || response.status >= 300 {
+            if options.debug
+                debuglog("HttpsApiRequest status:", url, response.statusCode)
+            error = Error("HttpsApiRequest status:", url, response.status, {
+                status: response.status
+            })
+            if options.retrier(error)
+                continue                                                    // optional retry/delay logic
+            else
+                return (list(error, false, { status: response.status }))
+        } else
+            break
+    }
     contentType = response.headers.get("content-type")
-    if response.status < 200 || response.status >= 300
-        return (list(Error("HttpsApiRequest status:", url, response.status, {
-            status: response.status
-        }), false, { status: response.status }))
     if contentType.startsWith("application/json") {
         `(error, content) = await(response.text())
         if !error

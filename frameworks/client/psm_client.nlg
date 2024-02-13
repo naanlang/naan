@@ -114,7 +114,7 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // that a transient error will give a bad path, but that will be detected downstream.
 
     view.path = new(object, this)
-    view.path[".undefined"] = function path args {
+    view.path@[".undefined"] = function path args {
         if !pathmod
             pathInit()
         xapply(pathmod, args.0, args.-1)

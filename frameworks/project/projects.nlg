@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2016-2022 by Richard C. Zulch
+ * Copyright (c) 2016-2024 by Richard C. Zulch
  *
  */
 
@@ -296,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.0.16+1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.1.0+1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -602,6 +602,8 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
     //
     procon.run = closure run(stage, buildonly, 
         local error, rules, builder, buildpath, buildnum) {
+        if procon.builder
+            return (list(Error("build in progress")))
         `(error, rules) = buildrules(stage)
         if error
             return (list(error))
@@ -615,6 +617,7 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
         `(error, builder) = Builder(rules, rules.operation, fs, "", buildpath)
         if error
             return (list(error))
+        procon.builder = builder
         `(error, buildnum) = builder.increment()
         if error {
             ErrorDebuglog("build number increment failed", error)
@@ -631,6 +634,7 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
                 `(error) = builder.run(projman.track)
         }
         builder.destroy()
+        procon.builder = false
         if error
             list(error)
         else
@@ -650,6 +654,8 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
     //
     procon.publish = closure publish(stage, 
         local error, rules, where, publish, outOptions, outfs, inpath) {
+        if procon.builder
+            return (list(Error("cannot publish while building")))
         `(error, rules) = buildrules(stage)
         if error
             return (list(error))

@@ -458,7 +458,7 @@ closure DebugRemote(commander, local remoter, here, there, library) {
     // .undefined
     // Execute methods remotely, returning a standard `(error, data) tuple.
     
-    remoter[".undefined"] = closure remoter args {
+    remoter@[".undefined"] = closure remoter args {
         closure (selector, arglist, local error, context, result) {
             if !there[selector] {                                           // not over there yet
                 proc = here[selector]

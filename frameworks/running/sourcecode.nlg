@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
@@ -59,7 +59,7 @@ closure CodeManager(options,  local coman, cache)
     coman.procComponent = function procComponent(procdef, local sym, mod, modname, compname, component) {
         procdef = baseproc(rootproc(procdef))                               // only work with the bases, not instances
         sym = procdef.1
-        mod = module.owner.findModule(sym.namespace)
+        mod = module.owner.find(function(mod){ mod.namespace === sym.namespace })
         for `(compname, component) in mod.components
             if member(sym, component.manifest)
                 return (CodeComposite(coman, component.manifest, mod.id, compname))

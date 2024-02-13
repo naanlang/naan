@@ -1,0 +1,308 @@
+/*
+ * relaycon.nlg
+ * Naanlib/frameworks/client
+ *
+ * Control NaanIDE Server and browser clients from the command line.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2023 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * globals
+ *
+ */
+
+execsMod;;                                      // running/executors module
+wsMod;;                                         // websocket module
+
+
+/*
+ * RelayCon
+ *
+ *     A host controller for NaanIDE Server.
+ *
+ * Options:
+ *  {
+ *      destID: <string>                        // client UUID or "server"
+ *      name: <string>                          // internal identification
+ *      config: {
+ *          clientID: <string>                  // distinguishes clients
+ *          serverID: <string>                  // subsystem on server (server destinations only)
+ *          workerID: <string>                  // worker on server (server destinations only)
+ *      }
+ *      startup: <dictionary>                   // worker spawn init (server destinations only)
+ *      debug: <boolean>                        // debug logging
+ *  }
+ *
+ */
+
+closure RelayCon(host, secret, options, local relay, nlregex)
+{
+    global(execsMod, wsMod)
+    relay = new(object, this)
+    options = merge({
+        name: "NaanIDE Server"
+    }, options)
+    relay.config = merge({
+        clientID: "relaycon"
+        serverID: "Workers"
+        workerID: "NideServer"
+    }, options.config)
+    if options.destID != "server" {
+        relay.config.endServerID = relay.config.serverID
+        relay.config.serverID = "Relay"
+        relay.config.destID = options.destID
+        relay.config.workerID = undefined
+    }
+    relay.exec = execsMod.ExecutorBase(false, "Host", options.name)
+    nlregex = RegExp("\\n", "g")
+
+    // connect
+    //
+    // Connect with the host if not already connected, returning a result tuple. When this connects
+    // it sends a "spawn" message, which establishes the connection with the server's "worker" which
+    // in the case of NideServer is just the main NodeJS process itself. It could also spawn a new
+    // worker thread, but we don't expose that functionality for the time being.
+    //
+    closure connect(local result) {
+        if relay.wscon
+            return (list(false, { connected: true }))
+        relay.guid = secret
+        relay.host = host                                                   // e.g. "localhost:8009"
+        relay.wscon = wsMod.WebSocket(host, {
+            onopen: onopen
+            onmessage: onmessage
+            onerror: onerror
+            onclose: onclose
+        })
+        result = relay.wscon.connect()
+        if !result.0
+            sendControl("spawn", { name: "NaanIDE Server" })                // ensure worker is connected
+        else if options.debug
+            ErrorDebuglog("WebSocket connect failed:", result.0)
+        result
+    }
+
+    // onopen
+    //
+    // The WebSocket connection has opened.
+    //
+    closure onopen(e, target, type, local spawner) {
+        if options.debug
+            debuglog("WebSocket onopen", relay.host, target, type, e.*)
+        spawner = new(options.startup)
+        spawner.name = options.name
+        if spawner
+            sendControl("spawn", spawner)
+    }
+
+    // onclose
+    //
+    // The WebSocket connection has closed.
+    //
+    closure onclose(e, code, reason) {
+        if options.debug && code != 1000 && code != 1001 && code != 1005
+            debuglog("WebSocket onclose", relay.host, code, reason, e.*)
+        relay.wscon = false
+        relay.exec.execClosed(Error("socket closed", e.code, e.reason))
+    }
+
+    // onerror
+    //
+    // The WebSocket connection has failed.
+    //
+    closure onerror(e) {
+        if options.debug
+            debuglog("WebSocket onerror", relay.host, e.*)
+        relay.exec.execFailed(Error("WebSocket onerror"))
+    }
+
+    // onmessage
+    //
+    // A WebSocket message was received.
+    //
+    closure onmessage(e, message, local msg) {
+        if options.debug && (message.relayOp || Array.isArray(message))
+            printline("Relay response:", Dialect.print(message))
+        if Array.isArray(message)
+            relay.exec.execFailed(message.0)                                // must be an error
+        else if message.respOp == "msgout" {
+            msg = message.payload
+            if msg.id == "spawned" || msg.id == "workerlist" || msg.id == "termination"
+                return (hostWorkerUpdate(msg))
+            if msg.id != "targetout" {
+                if msg.id == "status"
+                    relay.lastStatus = milliseconds() }
+            doMessage(msg) }
+        else if options.debug {
+            if message.respOp == "error"
+                debuglog("worker controller error:", ErrorString(message.payload[0]))
+            else if message.respOp == "linked"
+                debuglog("terminal linked")
+            else if message.respOp
+                debuglog("unknown host response message:", message.respOp)
+        }
+    }
+
+    // hostWorkerUpdate
+    //
+    //     New workers created/discovered on this host.
+    //
+    closure hostWorkerUpdate(msg) {
+        if options.debug {
+            if msg.id == "spawned"
+                debuglog("host worker spawned", msg.name, "(${msg.workerID})")
+            else if msg.id == "termination"
+                debuglog("host worker terminated", msg.workerID)
+            else if msg.id == "workerlist"
+                printline("host workers:", Dialect.print(msg.workers))
+        }
+    }
+
+    // doMessage
+    //
+    //     Process the specified undecoded message.
+    //
+    closure doMessage(msg) {
+        if msg.id == "targetout"
+            relay.exec.execReceived(msg.data)
+        else if msg.id == "debugout"
+            relay.exec.debugger.debugData(relay, msg.data)
+        else if false {                                                     // below cause feedback loops
+            if msg.id == "textout"
+                printline(msg.text.replace(nlregex, "\r\n"))
+            else if msg.id == "debugtext"
+                debuglog(msg.text)
+            else if msg.id == "started"
+                { debuglog("doMessage: started") }
+            else if options.debug && msg.id == "typed"
+                printline(msg.text.replace(nlregex, "\r\n"))
+            else if msg.id == "status"
+                { }
+            else
+                debuglog("unknown host worker message:", msg.id)
+        }
+    }
+    
+    // sendControl
+    //
+    //     Send a message to the worker controller.
+    //
+    relay.sendControl = function sendControl(workerOp, payload) {
+        relay.wscon.send(merge({
+            guid: relay.guid
+            workerOp: workerOp
+            payload: payload
+        }, relay.config))
+    }
+    
+    // send
+    //
+    //     Send a message to the worker.
+    //
+    relay.send = function send(msg) {
+        sendControl("msgin", msg)
+    }
+
+    // exec.PostMessage
+    //
+    //     Post a message to the target, returning a result tuple with an error if the connection
+    // has closed.
+    //
+    relay.exec.PostMessage = function PostMessage(data, local result) {
+        result = connect()
+        if result.0
+            return (result)
+        send({                                                              // send data to worker
+            id: "targetin",
+            data: data
+        })
+        list(false, { posted: true })
+    }
+
+    // clients
+    //
+    // Return an array of available clients (destination browsers) with which we can communicate, as
+    // a result tuple like the following array:
+    //
+    //  [
+    //      {
+    //          destID  : "52733f52-869b-4758-b553-611df95eb5fe",
+    //          address : { address: "::1", family: "IPv6", port: 8009 },
+    //          name    : "NaanIDE Server",
+    //          workerID: "NideServer" },
+    //      {
+    //          destID  : "ba4b7e69-abe5-4d13-b091-7abe833fd029",
+    //          address : { address: "::1", family: "IPv6", port: 8009 },
+    //          name    : "NaanIDE Server",
+    //          workerID: "NideServer" }
+    //  ]
+    //
+    relay.clients = closure clients(excon, local error) {
+        if !excon
+            `(error, excon) = context()
+        if excon
+            excon.evalq(App.api.Relays())
+    }
+    
+    // context
+    //
+    //     Return a remote evaluation context.
+    //
+    // Examples:
+    //  1. Define a remote function
+    //      context.evalq(function test3(x) { debuglog("test3", x), x}, `(test3))
+    //      (the test3 definition is uninterned without the put symbol argument)
+    //  2. Call the remote function
+    //      context.evalq(test3(Date().toString()))
+    //      (evalq cannot send xobjects, objects, or namespaces across the link)
+    //  3. Call via RPC
+    //      context.rpc(test3, `(45))
+    //      (rpc does JSON serialization)
+    //  4. Call via RPC showing Date object conversion
+    //      context.rpc(test3)
+    //      (JSON serializationn converts the date to an ISO string)
+    //
+    relay.context = closure context() {
+        relay.exec.context()
+    }
+    
+    // close
+    //
+    //     Close the connection, though it can be reopened
+    //
+    relay.close = closure close() {
+        relay.wscon.close()
+        relay.wscon = false
+    }
+
+    // finis
+    
+    relay
+};
+
+
+/*
+ * hocoInit
+ *
+ *     Orchestrate using CsvJson in the console.
+ *
+ */
+
+function hocoInit(local manifest) {
+    manifest = `(RelayCon, hocoInit)
+
+    Naan.module.build(module.id, "relaycon", function(modobj, compobj) {
+        execsMod = require("../running/executors.nlg")
+        if js.w
+            wsMod = require("../browser/ws_client.nlg")
+        else
+            wsMod = require("../node/ws_client.nlg")
+        compobj.manifest = manifest
+        module.exports.RelayCon = RelayCon
+    })
+} ();

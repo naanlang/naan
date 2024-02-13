@@ -616,12 +616,12 @@ RegisterTestCategory("core", [
     ["oo;", "{ true: a, 0.3333333333333333: b }"],
 
     //
-    // object getters
+    // object getters/setters
     //
     
     [ "oo=new(object);", "Object{0}" ],
-    [ "oo['..prop'] = function(value) { oo.value };>", "(function lambda (value) (`. oo value))" ],
-    [ "oo['.=prop'] = function(value) { oo.value = value };>", "(function lambda (value) (Lib::set\\. oo (`` value) value))" ],
+    [ "oo@['..prop'] = function() { oo.value };>", "(function lambda false (`. oo value))" ],
+    [ "oo@['.=prop'] = function(value) { oo.value = value };>", "(function lambda (value) (Lib::set\\. oo (`` value) value))" ],
     [ "oo.prop = 8;", "8" ],
     [ "oo.prop;", "8" ],
     [ "oo['prop'] = 9;", "9" ],
@@ -633,8 +633,34 @@ RegisterTestCategory("core", [
     [ "xset(oo, 'prop', 11);", "11" ],
     [ "oo.prop;", "11" ],
     [ "oo.value;", "10" ],
-    [ "oo.*;", '("..prop", ".=prop", "value", "prop")' ],
+    [ "oo.*;", '("value", "prop")' ],
 
+    //
+    // object hierarchy
+    //
+
+    [ "oo=new(object);", "Object{0}" ],
+    [ "op=new(object);", "Object{0}" ],
+    [ "oc=new(object);", "Object{0}" ],
+    [ "oo@['.class'] = oc;", "Object{0}" ],
+    [ "oc@['.parent'] = op;", "Object{0}" ],
+    [ "op.print = function (x) { print(self.id) };>", "(function lambda (x) (print (`. self id)))" ],
+    [ "oo.id = `oo;", "oo" ],
+    [ "oc.id = `oc;", "oc" ],
+    [ "op.id = `op;", "op" ],
+    [ "oo.*", '("id")' ],
+    [ "oc.*", '("id")' ],
+    [ "op.*", '("print", "id")' ],
+    [ "oo.print()", "oo|oo" ],
+
+    [ "op@['..prop'] = function() { self.value };>", "(function lambda false (`. self value))" ],
+    [ "oc@['.=prop'] = function(value) { self.value = value };>", "(function lambda (value) (Lib::set\\. self (`` value) value))" ],
+    [ "op.prop = op55;", "op55" ],
+    [ "oo.prop;", "false" ],
+    [ "op.prop;", "op55" ],
+    [ "oo.prop = oo11;", "oo11" ],
+    [ "oo.prop;", "oo11" ],
+    [ "oc.prop;", "false" ],
 
     //
     // object hooks

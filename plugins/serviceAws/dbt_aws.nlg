@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2023 by Richard C. Zulch
+ * Copyright (c) 2020-2024 by Richard C. Zulch
  *
  */
 
@@ -318,7 +318,7 @@ closure dawsTable(database, path, tableOptions, local table) {
     //
     // For browsers, convert a ReadableStream to an array buffer.
     //
-    function readableStreamToArrayBuffer(stream, local result, reader, error, data, chunk) {
+    closure readableStreamToArrayBuffer(stream, local result, reader, error, data, chunk) {
         result = xnew(js.w.Uint8Array, 0)
         reader = stream.getReader()
         loop {

@@ -58,11 +58,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.0.16");
+        console.log("1.1.0");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.0.16+1");
+        console.log("1.1.0+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {
@@ -104,7 +104,7 @@ if (eval_text) {
         "   sudo(putproc(`exception, false))\n") +
 
         "   input = new(textstream, js.expr)\n" +
-        "   Naan.runtimelib.driver.setOptions({prompt:false})\n" +
+        "   Naan.runtimelib.curdriver().setOptions({prompt:false})\n" +
         "   try {\n" +
         "       loop {\n" +
         "           `(error, expr) = Dialect.parse(input)\n" +
@@ -133,7 +133,7 @@ if (eval_text) {
         "       }\n" +
         "   } finally {\n" +
 
-	    (do_interactive ? "Naan.runtimelib.driver.setOptions({prompt:true})\n" :
+	    (do_interactive ? "Naan.runtimelib.curdriver().setOptions({prompt:true})\n" :
         "       sleep(1)\n" +
         "       exec(quote(js.g.process.exit(if error 1 else 0)))\n") +
 
