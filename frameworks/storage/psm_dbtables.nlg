@@ -45,6 +45,14 @@ closure FSview(table, rootpath, local view) {
     view.rootpath = rootpath
     view.path = JSpath.posix                                                // for view.path.join(), etc.
 
+    // dirPath
+    //
+    // True iff the path is a dirpath. If the path is empty this checks the rootpath.
+    
+    function dirPath(path) {
+        path.slice(-1) == "/" || path == "" && rootpath.slice(-1) == "/"
+    }
+
     // dirName
     //
     // Return the directory portion of the specified path.
@@ -163,7 +171,7 @@ closure FSview(table, rootpath, local view) {
         else
             proc = view.table.get
         `(error, data) = proc(path)
-        if error && error.status == 404 && path.slice(-1) != "/"
+        if error && error.status == 404 && !dirPath(path)
             `(error, data) = proc(path.concat("/"))
         callback(error, data)
     }
@@ -200,7 +208,7 @@ closure FSview(table, rootpath, local view) {
                         birthtime: nowstr
                     }
                 }
-                if path.slice(-1) == "/"
+                if dirPath(path)
                     metadata.finfo.type = "directory"
                 else
                     metadata.finfo.type = "file"
@@ -268,7 +276,7 @@ closure FSview(table, rootpath, local view) {
             return (asyncResult(callback, false, { created: false }))       // root always already exists
         if checkPath(path, callback)
             return
-        if path.slice(-1) != "/"
+        if !dirPath(path)
             path = path.concat("/")
         view.table.get(path, function(error, data, local pathdirs, buildpath, item) {
             if !error
@@ -286,7 +294,7 @@ closure FSview(table, rootpath, local view) {
                                 name: "conflict"
                                 path: buildpath
                             })))
-                    if buildpath.slice(-1) != "/"
+                    if !dirPath(buildpath)
                         buildpath = buildpath.concat("/")
                     `(error, data) = view.table.head(buildpath)             // get desired directory
                     if error.status == 404
@@ -311,7 +319,7 @@ closure FSview(table, rootpath, local view) {
         if dest.indexOf("/") < 0
             newpath = dirName(srcpath).concat(dest)                         // renaming within same directory
         else {
-            if dest.slice(-1) == "/"                                        // moving to new directory location:
+            if dirPath(dest)                                                // moving to new directory location:
                 newpath = dest.concat(baseName(srcpath))                    //      new path is new pathname
             else {                                                          // moving and renaming:
                 newpath = dest                                              //      new path is new pathname
@@ -361,7 +369,7 @@ closure FSview(table, rootpath, local view) {
     //
     closure copyDirectory(srcpath, dest, options,
         local error, nodes, data, destpath, errors, docpath, newpath, srcroot, item) {
-        if srcpath.slice(-1) != "/"
+        if !dirPath(srcpath)
             srcpath = srcpath.concat("/")                                   // normalize source as directory
         `(error, nodes) = view.table.records({ prefix: srcpath })           // each item has key/_id/_rev, not doc
         if error
@@ -380,13 +388,13 @@ closure FSview(table, rootpath, local view) {
             destpath = dirName(srcpath).concat(dest)                        // new directory name in same parent directory
             dest = dirName(srcpath) }                                       // dest is new parent pathname
         else {
-            if dest.slice(-1) == "/"
+            if dirPath(dest)
                 destpath = dest.concat(baseName(srcpath))                   // same name; new location
             else {
                 destpath = dest                                             // new full pathname
                 dest = dirName(dest) }                                      // dest is new parent pathname
         }
-        if destpath != "" && destpath.slice(-1) != "/"
+        if destpath != "" && !dirPath(destpath)
             destpath = destpath.concat("/")                                 // get actual path of new directory
         //
         // Change srcpath to destpath for all records. Note that dest is the name of our new parent
@@ -489,13 +497,13 @@ closure FSview(table, rootpath, local view) {
                     finfo.length = data.length
                 else if data._length
                     finfo.length = data._length
-                if finfo.length
+                if dirPath(path)
+                    finfo.type = "directory"
+                else if finfo.length
                     finfo.type = "file" }
             else if path == "" {
                 error = false                                               // we were asked for info on superoot
                 finfo = {
-                    md5: HashMD5("")
-                    length: 0
                     type: "directory"
                 } }
             callback(error, finfo)
@@ -553,7 +561,7 @@ closure FSview(table, rootpath, local view) {
             return
         if !content
             return (asyncResult(callback, Error("content required")))
-        if path.slice(-1) == "/"
+        if dirPath(path)
             return (asyncResult(callback, Error("cannot write to a directory", { path: path })))
         if !validName(path, true)
             return (asyncResult(callback, Error("invalid filename", { path: path })))
@@ -631,7 +639,7 @@ closure FSview(table, rootpath, local view) {
                     name: "forbidden"
                     path: path
                 })))
-            if path.slice(-1) != "/"
+            if !dirPath(path)
                 path = path.concat("/")                                     // avoid deleting longer filenames with same parent and prefix
             `(error, data) = dbDirRecords(path, true)
             if error
@@ -739,6 +747,8 @@ closure FSview(table, rootpath, local view) {
             prefix: path
             deep: true
         }
+        if name == "" && rootpath != ""
+            name = rootpath.split("/").slice(0,-1).pop() || ""
         treedict = {
             name: name
             data: {

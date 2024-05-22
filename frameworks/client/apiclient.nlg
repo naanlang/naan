@@ -6,171 +6,136 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2023 by Richard C. Zulch
+ * Copyright (c) 2017-2024 by Richard C. Zulch
  *
  */
 
 
 /*
- * MakeNideAPIclient
+ * NideAPIclient
  *
- *     Make a DAS API client object for browsers. This client API handles a single project at a
- * time, from load() to close().
- *
+ *     Make an API client object for browsers.
  *
  */
 
-closure MakeNideAPIclient(url, guid, local client) {
+closure NideAPIclient(url, guid, apiRequester, local client) {
+    global()
     client = new(object, this)
+    if !url.match(RegExp("^https?:\/\/", "i"))
+        url = "http://${url}"
     client.url = url
     client.guid = guid
     client.notifyAfter = 0
     client.instanceID = UUID()                                              // our client's unique ID
 
-    // clientRequest() - general request routine
+    // clientRequest() - append our guid to the headers
 
-    closure clientRequest(method, path, options, cbReq, local request) {
-        request = xnew(js.w.XMLHttpRequest)
-        request.addEventListener("load", function (event) {
-            cbReq(false, request, event)
-        })
-
-        request.addEventListener("error", function reqFailed(event, local errtext) {
-            if request.status == 0
-                errtext = "connectivity"
-            else
-                errtext = "request failed"
-            error = Error(errtext, {
-                status: request.status
-                method: method
-                path: path
-            })
-            cbReq(error, request, event)
-        })
-
-        request.open(method, path)
-        if options.responseType
-            request.responseType = options.responseType
-        if options.contentType
-            request.setRequestHeader("Content-Type", options.contentType)
+    closure clientRequest(url, options) {
+        options = merge(options)
         if guid
-            request.setRequestHeader("x-naanlang-api-guid", guid)
-        request.send(options.putdata)
+            options.headers = [list("x-naanlang-api-guid", guid)]
+        apiRequester(url, options)
     }
 
     //
     // docs()
     //
 
-    client.docs = closure docs() {
-        clientRequest("GET", url.concat("/"), false, function (error, req, event) {
-            printline(req.responseText)
-        })
+    client.docs = closure docs(local error, content, extra) {
+        `(error, content, extra) = clientRequest(url.concat("/"))
+        printline(content)
     }
 
     //
     // status(callback, timeoutMS)
     //
 
-    client.status = closure status(cbStatus, timeoutms, local query, options, queued) {
-        options = new(dictionary)
-        options.timeout = timeoutms
-        options.after = client.notifyAfter
-        query = EncodeQuery("/status/?", options)
-        clientRequest("GET", url.concat(query), false, function (error, req, event) {
-            if (error || req.status != 200)
-                cbStatus()
-            else if (length(req.responseText) == 0)
-                cbStatus([])
-            else {
-                queued = new(JSONparse(req.responseText))
-                queued.forEach(function(item,index,array) {
-                    if client.notifyAfter < item.stamp
-                        client.notifyAfter = item.stamp
-                })
-                cbStatus(queued)
-            }
+    client.status = closure status(cbStatus, timeoutms, local query, error, content, extra, queued) {
+        query = EncodeQuery("/status/?", {
+            timeout: timeoutms
+            after: client.notifyAfter
         })
+        `(error, content, extra) = clientRequest(url.concat(query))
+        if (error || extra.status != 200)
+            cbStatus()
+        else if (length(content) == 0)
+            cbStatus([])
+        else {
+            queued = new(content)
+            queued.forEach(function(item, index, array) {
+                if client.notifyAfter < item.stamp
+                    client.notifyAfter = item.stamp
+            })
+            cbStatus(queued)
+        }
     }
 
     //
     // get
     //
 
-    client.get = closure get(path, cbRead) {
-        options.path = filepath
-        clientRequest("GET", url.concat("/", path), false, cbRead)
+    client.get = closure get(path, options, local error, content, extra) {
+        `(error, content, extra) = clientRequest(url.concat("/", path))
+        if !error && extra.status != 200
+            error = Error("readFile failed: ".concat(extra.status), {
+                    status: extra.status
+                })
+        if error
+            list(error)
+        else
+            list(error, content, extra)
     }
 
     //
-    // readFile(filepath, cbRead)
+    // readFile(filepath, options)
     //
 
-    client.readFile = closure readFile(filepath, cbRead, local query, options) {
-        options = new(dictionary)
-        options.path = filepath
-        query = EncodeQuery("/readfile/?", options)
-        clientRequest("GET", url.concat(query), false, cbRead)
+    client.readFile = closure readFile(filepath, options, local query, error, content, extra) {
+        query = EncodeQuery("/readfile/?", {
+            path: filepath
+        })
+        `(error, content, extra) = clientRequest(url.concat(query), options)
+        if !error && extra.status != 200
+            error = Error("readFile failed: ".concat(extra.status), {
+                    status: extra.status
+                })
+        if error
+            list(error)
+        else
+            list(error, content, extra)
     }
 
     //
     // psmRemote(options, data, callback)
     //
-    // Perform an operation and call back when done. If the communication works then the result is:
-    //      callback(false, (remote_error, remote_data)).
-    // Otherwise if communication failed then the result is:
-    //      callback(<error>).
+    // Perform an operation and call back when done.
 
-    client.psmRemote = closure psmRemote(options, data, callback, local query, method, reqOptions, error) {
+    client.psmRemote = closure psmRemote(options, data, callback, 
+        local query, reqOptions, error, content, extra) {
         query = EncodeQuery("/psm/?", options)
-        if data
-            method = "PUT"
-        else
-            method = "GET"
         reqOptions = {
             putdata: data
         }
-        if options.encoding == "binary" {
-            if data
-                reqOptions.contentType = "application/octet-stream"         // we are sending binary data
-            else
-                reqOptions.responseType = "arraybuffer"                     // we are requesting binary data
-        } else if options.encoding == "json" {
-            if data {
-                reqOptions.contentType = "application/json;charset=UTF-8"   // we are sending JSON
-                `(error, data) = JsonStringify(data)
-                if error
-                    return (callback(Error("psmRemote failed:", error)))
-                reqOptions.putdata = data
-            }
-            else
-                reqOptions.responseType = "application/json"                // we are requesting JSON
-        }
-        clientRequest(method, url.concat(query), reqOptions, function (error, req, event, local data) {
-            if !error && req.status != 200
-                error = Error("NodeFS request failed: ".concat(req.status), {
-                    status: req.status
-                    method: method
-                    query: query
-                    })
+        if !data
+            reqOptions.encoding = options.encoding                          // expected response format
+        else if options.encoding == "binary"
+            reqOptions.contentType = "application/octet-stream"             // we are sending binary data
+        else if options.encoding == "json" {
+            reqOptions.contentType = "application/json;charset=UTF-8"       // we are sending JSON
+            `(error, data) = JsonStringify(data)
             if error
-                callback(error)
-            else {
-                if req.getResponseHeader("content-type").startsWith("application/json")
-                    try {                                                   // attempt to decode JSON response
-                        data = new(JSONparse(req.responseText))
-                        if array(data) {
-                            data = totuple(data)
-                            error = data.0
-                            data = data.1 }
-                    } catch {
-                        if true
-                            data = req.responseText                         // just return text on failure
-                    }
-                else
-                    data = req.response                                     // e.g. when reading binary content
-                callback(error, data) }
-        })
+                return (callback(Error("psmRemote encoding failed:", error)))
+            reqOptions.putdata = data
+        }
+        `(error, content, extra) = clientRequest(url.concat(query), reqOptions)
+        if !error && extra.status != 200
+            error = Error("NodeFS request failed: ".concat(extra.status), {
+                    status: extra.status
+                })
+        if error
+            callback(error)
+        else
+            callback(error, content)
     }
 
     client
@@ -186,12 +151,12 @@ closure MakeNideAPIclient(url, guid, local client) {
 
 function apicInit(local manifest) {
 
-    manifest = `(MakeNideAPIclient, apicInit)
+    manifest = `(NideAPIclient, apicInit)
 
     Naan.module.build(module.id, "apiclient", function(modobj, compobj) {
         Naan.module.require("./client.nlg")
         compobj.manifest = manifest
-        modobj.exports.MakeNideAPIclient = MakeNideAPIclient
+        modobj.exports.NideAPIclient = NideAPIclient
     })
 
 } ();

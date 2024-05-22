@@ -480,7 +480,7 @@ closure dawsTable(database, path, tableOptions, local table) {
     table.delete = closure delete(doc, callback) {
         if !callback
             return (syncAdapter(delete, doc))
-        if !doc._id || !doc._id.startsWith(table.s3prefix) || !(doc._md5 || doc._id.slice(-1) == "/")
+        if !doc._id || !doc._id.startsWith(table.s3prefix) || !(doc.md5 || doc._md5 || doc._id.slice(-1) == "/")
             return (asyncResult(callback, Error("invalid argument")))
         database.bucket.delete(doc._id, function(error, resp) {
             if error
@@ -537,8 +537,8 @@ closure dawsTable(database, path, tableOptions, local table) {
         database.bucket.get(id, true, function(error, resp) {
             if error
                 error = Error("md5 failed", error, id, { status: error.status })
-            else if resp._md5
-                resp = resp._md5
+            else if resp.md5
+                resp = resp.md5
             else
                 resp = ""
             callback(error, resp)

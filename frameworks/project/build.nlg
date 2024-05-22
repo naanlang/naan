@@ -1195,7 +1195,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
         if error
             error = Error("Builder: cannot read main file", error)
         else {
-            `(error, executor) = track.spawn(build.runway.spawn.0, "${rules.name} ${build.version}", "Run-${build.buildnum}", {
+            `(error, executor) = track.spawn(build.runway.spawn.0, "${rules.name} ${build.version}", {
+                workerID: "Run-${build.buildnum}"
                 startup: {
                     initcmds: maintext
                     dirpath: fs.path.resolve(fs.path.sep, fs.rootpath, build.destpath)

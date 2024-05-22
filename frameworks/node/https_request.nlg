@@ -105,7 +105,7 @@ closure httpsApiReqOnce(url, options,
         })
         response.on("end", function (local content, error, headers) {
             content = js.g.Buffer.concat(chunks)
-            if response.statusCode < 200 || response.statusCode >= 300 {
+            if response.statusCode < 200 || response.statusCode >= 299 {    // 299 is "cancelled"
                 if options.debug
                     debuglog("HttpsApiRequest status:", url, response.statusCode, "message:", content)
                 pending.signal(list(Error("HttpsApiRequest statusCode:", url, response.statusCode, {
@@ -132,6 +132,7 @@ closure httpsApiReqOnce(url, options,
             pending.signal(list(error, content, {
                 headers: response.headers
                 status: response.statusCode
+                contentType: response.headers["content-type"]
             }))
         })
     })

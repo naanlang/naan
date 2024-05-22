@@ -20,6 +20,7 @@
  */
 
 closure MakePSMutil(fs, local util) {
+    global()
     util = new(object, this)
     util.fs = fs
 
@@ -310,7 +311,7 @@ closure MakePSMutil(fs, local util) {
         //
         if options.erase {
             asyncArray(keys(folders).toarray, 10, closure eraser(destpath
-                local error, outfolder, folder, namesin, removes, delopt) {
+                local error, outfolder, folder, namesin, node, removes, delopt) {
                 `(error, outfolder) = outfs.dirList(destpath)               // existing files in our destination
                 if error
                     return

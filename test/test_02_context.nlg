@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2023 by Richard C. Zulch
+ * Copyright (c) 2017-2024 by Richard C. Zulch
  *
  */
 
@@ -38,7 +38,7 @@ RegisterTestCategory("context", [
     [ "function setNS(ns) { ns=reverse(ns),sudo(nsactive(reverse(ns, defNS))) };", "setNS" ],
     [ "x;", "x" ],
     [ "y;", "y" ],
-    [ "length(symlist(nsactive(true).0));", "171"],
+    [ "length(symlist(nsactive(true).0));", "172"],
     [ "testvar;", "testvar" ],
     [ "function setTestvar(v) { testvar=v };", "setTestvar" ],
     [ "naanvar;", "naanvar" ],

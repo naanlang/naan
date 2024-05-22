@@ -14,30 +14,54 @@
 /*
  * TermHost
  *
- *     Make a host debugger target.
+ *     Make an Nide API Server debugger target.
+ *
+ * Options:
+ *  {
+ *      type: <string>                          // target category, e.g. "Host", "api.yyy.com"
+ *      workerID: <string>                      // kind of worker in server subsystem
+ *      dispatcher: <tuple>                     // dispatcher function for incoming messages
+ *      startup: <dictionary>                   // startup options
+ *      clientID: <string>                      // (rare) our identification on client
+ *      serverID: <string>                      // (rare) server subsystem for us
+ *  }
  *
  */
 
-closure TermHost(track, api, name, workerID, options,
-    local target, nlregex, clientID, serverID)
+closure TermHost(track, api, name, options, local target, nlregex, xtarg)
 {
     global(window)
-    target = require("../running/executors.nlg").ExecutorBase(track, "Host", name)
-    clientID = "DebugWorkers"
-    serverID = "Workers"
+    options = merge({
+        type: "Host"
+        workerID: "myDebugWorker"
+        clientID: "DebugWorkers"
+        serverID: "Workers"
+    }, options)
+    target = require("../running/executors.nlg").ExecutorBase(track, options.type, name)
     nlregex = RegExp("\\n", "g")
-    if !workerID
-        workerID = "myDebugWorker"
-    target.workerID = workerID
+    target.workerID = options.workerID
     target.msgQueue = []
     target.dispatcher = call(options.dispatcher, function(reply) { reply })
-    
+        
+    // findWorker
+    //
+    function findWorker(testID, local instance) {
+        for instance in track.instances {
+            if instance.executor.hostWorkerMatch(api, testID)
+                return (instance.executor)
+        }
+        false
+    }
+
     // connect
     // Connect with the host if not already connected.
-    closure connect(local pending) {
+    closure connect(local host, pending) {
         if target.ws
-            return
-        target.ws = xnew(window.WebSocket,"ws://${window.location.host}")
+            return(list(false, { connected: true }))
+        host = xnew(window.URL, api.url).host
+        if !host || host == ""
+            return(list(Error("invalid URL ${api.url}")))
+        target.ws = xnew(window.WebSocket,"ws://${host}")
         pending = new(nonce)
 
         // onopen
@@ -45,7 +69,7 @@ closure TermHost(track, api, name, workerID, options,
         target.ws.onopen = function onopen(e, local info, spawner) {
             info = {
                 name: name
-                workerID: workerID
+                workerID: target.workerID
             }
             if options.dispatcher
                 info.destID = api.instanceID                                // valid destination for relay
@@ -61,7 +85,6 @@ closure TermHost(track, api, name, workerID, options,
 
         // onmessage
         // A message was received from the worker via WebSockets.
-        
         target.ws.onmessage = function onmessage(e, message, local msg) {
             try {
                 message = new(window.JSON.parse(e.data))
@@ -137,27 +160,16 @@ closure TermHost(track, api, name, workerID, options,
     //     New workers created/discovered on this host.
     //
     function hostWorkerUpdate(msg, local localID, worker) {
-    
-        // findWorker
-        //
-        function findWorker(testID, local instance) {
-            for instance in track.instances {
-                if instance.executor.hostWorkerMatch(api, testID)
-                    return (instance.executor)
-            }
-            false
-        }
-
         if msg.id == "spawned" {
             if !findWorker(msg.workerID)
-                TermHost(track, api, msg.name, msg.workerID)
+                TermHost(track, api, msg.name, { type: options.type, workerID: msg.workerID })
         }
         else if msg.id == "termination"
             track.delete(findWorker(msg.workerID))
-        else {
+        else if msg.id == "workerlist" {
             for `(localID, worker) in msg.workers
                 if !findWorker(localID)
-                    TermHost(track, api, worker.name, localID)
+                    TermHost(track, api, worker.name, { type: options.type, workerID: localID })
         }
     }
         
@@ -167,7 +179,7 @@ closure TermHost(track, api, name, workerID, options,
     //     True iff the specified information matches us.
     //
     target.hostWorkerMatch = function hostWorkerMatch(testApi, testID) {
-        testApi === api && testID == workerID
+        testApi === api && testID == target.workerID
     }
 
     //
@@ -203,8 +215,8 @@ closure TermHost(track, api, name, workerID, options,
     target.sendControl = function sendControl(workerOp, payload) {
         target.ws.send(window.JSON.stringify({
             guid: api.guid
-            clientID: clientID
-            serverID: serverID
+            clientID: options.clientID
+            serverID: options.serverID
             workerID: target.workerID
             workerOp: workerOp
             payload: payload
@@ -374,6 +386,9 @@ closure TermHost(track, api, name, workerID, options,
         target.ws.close(1000)                                               // 1000: normal close
     }
 
+    xtarg = findWorker(target.workerID)
+    if xtarg
+        return (list(false, xtarg))                                         // already exists
     track.add(target)
     connect()                                                               // connect right away to start receiving messages
 
@@ -388,27 +403,34 @@ closure TermHost(track, api, name, workerID, options,
  *
  *     Make a local debugger target, returning a standard (error, object) tuple.
  *
+ * Options:
+ *  {
+ *      workerID: <string>                      // kind of worker in server subsystem
+ *                                              // "NaanIDE" for local IDE
+ *                                              // "NaanIDE-Debug" for browser debug target
+ *      startup: <dictionary>                   // startup options
+ *      type: <string>                          // (rare) target category, e.g. "Local"
+ *  }
+ *
  */
 
-closure TermLocal(track, name, workerID, options,
-    local target, nlregex, listener)
+closure TermLocal(track, name, options, local target, nlregex, listener)
 {
     global(js, window)
-    if workerID == "NaanIDE" {
+    options = merge({
+        type: "Local"
+    }, options)
+    if options.workerID == "NaanIDE" {
         if !js.t
             return (list(Error("Cannot access Local IDE executor")))
         termInstallVirtualWatcher(track, js.t)
-        return (termIDE(track, name, workerID, js.t))                       // connect to IDE execution instance itself
+        return (termIDE(track, name, options.workerID, js.t))               // connect to IDE execution instance itself
     }
-    if dictionary(options)
-        options = new(options)
-    else
-        options = { }
-    target = require("../running/executors.nlg").ExecutorBase(track, "Local", name)
+    target = require("../running/executors.nlg").ExecutorBase(track, options.type, name)
     nlregex = RegExp("\\n", "g")
-    target.workerID = workerID
+    target.workerID = options.workerID
     target.msgQueue = []
-    if workerID == "NaanIDE-Debug" {
+    if options.workerID == "NaanIDE-Debug" {
         target.worker = window.open(window.location.href, "_blank")
         target.worker.addEventListener("beforeunload", function(e) {        // our target is closing
             destroy()

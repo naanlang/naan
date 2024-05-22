@@ -4,7 +4,7 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     **Naan for NPM** version **1.1.0+1**
+     **Naan for NPM** version **1.2.0+1**  
      Copyright (c) 2017-2024 Zulch Laboratories, Inc.
 
 #### Features
@@ -37,7 +37,7 @@ For use as a library in the current project:
 
     naan [options] [source file] [arguments]
 
-With no arguments Naan runs as an interactive REPL using the node.js terminal.
+With no arguments Naan runs as an interactive REPL using the node.js terminal.  
 It can also evaluate an expression or execute a source file.
 
 ##### Command line usage
@@ -65,7 +65,7 @@ Define a function, call it, and return the length of the base-10 result. First r
 Fetch your public IP from a website (NodeJS version 18 or later):
 
 ```
-% naan -e "new(await(await(js.g.fetch('http://ip.jsontest.com/')).1.json()).1)"
+% naan -e "new(await(await((js.g||js.w).fetch('https://api.ipify.org/?format=json')).1.json()).1)"
 { ip: "64.205.147.202" }
 ```
 
@@ -84,12 +84,14 @@ Now make it executable with chmod:
 
 #### For More Information
 
-[NaanIDE](https://www.npmjs.com/package/@naanlang/naanide) -- the Naan IDE -- includes more detailed documentation on Naan.
+[www.naanlang.org](https://www.naanlang.org) has tutorials, explanations, and how-to articles.  
+The [NaanIDE](https://www.npmjs.com/package/@naanlang/naanide) installation includes reference documentation.  
+Please email [Richard Zulch](mailto:naanlang@zulchlabs.com) with questions and comments.
 
 #### Dependencies:
-We gratefully acknowledge these software packages used with Naan:
-- [jszip.js](http://stuartk.com/jszip) - read and write zip files
-- [NodeJS-path](https://nodejs.org/) - NodeJS path utilities
-- [PouchDB](https://pouchdb.com/) - synchronizing database
-- [SparkMD5](https://github.com/satazor/js-spark-md5) - browser MD5 library
-- [UglifyJS](https://github.com/mishoo/UglifyJS) - JavaScript code minifier
+We gratefully acknowledge these software packages used with Naan:  
+- [jszip.js](http://stuartk.com/jszip) - read and write zip files  
+- [NodeJS-path](https://nodejs.org/) - NodeJS path utilities  
+- [PouchDB](https://pouchdb.com/) - synchronizing database  
+- [SparkMD5](https://github.com/satazor/js-spark-md5) - browser MD5 library  
+- [UglifyJS](https://github.com/mishoo/UglifyJS) - JavaScript code minifier  

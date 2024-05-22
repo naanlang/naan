@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2023 by Richard C. Zulch
+ * Copyright (c) 2020-2024 by Richard C. Zulch
  *
  */
 
@@ -18,6 +18,7 @@
  */
 
 closure ExecutorBase(track, type, name, local exec) {
+    global()
     exec = new(object, this)
     exec.type = type
     exec.name = name
@@ -76,7 +77,7 @@ closure ExecutorBase(track, type, name, local exec) {
     // execClosed
     // Note that the connection has closed, so signal all the waiters.
     
-    exec.execClosed = closure execClosed(error, local xid) {
+    exec.execClosed = closure execClosed(error, local xid, pending) {
         for `(xid, pending) in exec.pending {
             pending.signal(list(error))
             pending[xid] = undefined
@@ -135,6 +136,7 @@ closure ExecutorBase(track, type, name, local exec) {
  */
 
 closure ExecutorContext(exec, contextID, local context, util) {
+    global(apply)
     context = new(object, this)
     util = modlist().Util.exports
 
@@ -212,12 +214,13 @@ closure ExecutorContext(exec, contextID, local context, util) {
             applyf(eval(proc), eargs)
         } (pop(args), reverse(args))
     }
+
     // rpc
     // Execute a remote procedure call without package translation, to reduce overhead. This will not
     // properly transfer Naan-specific types like symbols, and the results will be native JavaScript.
     // The procedure must be specified as a symbol or string.
     
-    context.rpc = closure rpc(proc, args, local data, result) {
+    context.rpc = closure rpc(proc, args, local data, pending, result) {
         data = {
             contextID: contextID
             proc: proc
@@ -268,6 +271,7 @@ closure ExecutorContext(exec, contextID, local context, util) {
  */
 
 closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, crValue) {
+    global()
     maxcount = options.maxcount
     if !maxcount
         maxcount = 4                                                        // default is 4 workers
@@ -294,7 +298,7 @@ closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, c
             return (false)
         parallel.workers[workdex] = false                                   // reserve our spot
         name = basename.concat("-", workdex+1)
-        worker = App.nide.track.spawn("Local", name, "ExecutorParallel")
+        worker = App.nide.track.spawn("Local", name, "ExecutorParallel")    // ### App.nide.track.spawn may not exist
         if worker.0 {                                                       // ### wasting space on workers list
             debuglog("execParallel: cannot spawn worker:", ErrorString(worker.0))
             return (false)
@@ -444,6 +448,7 @@ closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, c
  */
 
 closure ExecutorTracker(local xtrak) {
+    global()
     xtrak = new(object, this)
     xtrak.instances = []
     xtrak.watchers = []
@@ -494,7 +499,7 @@ closure ExecutorTracker(local xtrak) {
     // enumlist
     // Enumerate the list of executors.
     
-    xtrak.enumlist = function enumlist(local results) {
+    xtrak.enumlist = function enumlist(local results, instance) {
         results = []
         for instance in xtrak.instances
             results.push(instance.executor)
@@ -552,6 +557,7 @@ closure ExecutorTracker(local xtrak) {
  */
 
 closure execLambda(track, url, name, workerID, local target, nlregex, clientID, serverID) {
+    global()
     target = ExecutorBase(track, "Lambda", name)
     clientID = "DebugWorkers"
     serverID = "Workers"
@@ -800,7 +806,6 @@ closure execLambda(track, url, name, workerID, local target, nlregex, clientID, 
  */
 
 function execInit(local manifest) {
-
     manifest = `(ExecutorBase, ExecutorContext, ExecutorParallel, ExecutorTracker, execLambda, execInit)
 
     Naan.module.build(module.id, "executors", function(modobj, compobj) {

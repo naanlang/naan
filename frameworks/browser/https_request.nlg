@@ -90,7 +90,7 @@ closure HttpsApiRequest(url, options,
                 debuglog("HttpsApiRequest error:", url, "error:", error)
             return (list(Error("HttpsApiRequest fetch failed:", error, url)))
         }
-        if response.status < 200 || response.status >= 300 {
+        if response.status < 200 || response.status >= 299 {                // 299 is "cancelled"
             if options.debug
                 debuglog("HttpsApiRequest status:", url, response.statusCode)
             error = Error("HttpsApiRequest status:", url, response.status, {
@@ -104,7 +104,8 @@ closure HttpsApiRequest(url, options,
             break
     }
     contentType = response.headers.get("content-type")
-    if contentType.startsWith("application/json") {
+    if contentType.startsWith("application/json")
+        || contentType.startsWith("application/octet-stream") && options.encoding == "json" {
         `(error, content) = await(response.text())
         if !error
             `(error, content) = JsonParse(content)
@@ -129,6 +130,7 @@ closure HttpsApiRequest(url, options,
     list(error, content, {
         headers: headers
         status: response.status
+        contentType: contentType
     })
 };
 

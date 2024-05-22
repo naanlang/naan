@@ -450,8 +450,8 @@ closure psmsFsConnector(psm, api, local connClassID, connector, watch) {
     connector.info = function info(resID, local info, error, creds) {
         info = {
             classID: connClassID
-            type: "remote filesystem"
-            services: ["NideFS", "NideHostAPI"]
+            type: "remote server"
+            services: ["NideFS", "NideHostAPI", "NideTerminal"]
         }
         if resID == "Host" {
             info.name = "Host"

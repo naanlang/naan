@@ -18,7 +18,7 @@
  */
 
 loglevel(2);;
-Naan.module.chns("Play");;
+Naan.module.chns("Start");;
 
 
 /*

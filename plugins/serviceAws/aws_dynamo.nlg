@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2023 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
@@ -36,6 +36,7 @@
  */
 
 closure TimeKeys(prefix, baseMS, local timekeys, prelen) {
+    global(UUID)
     if !UUID.proc
         throw("TimeKeys requires UUID()")
     timekeys = new(object, this)
@@ -158,6 +159,7 @@ closure TimeKeys(prefix, baseMS, local timekeys, prelen) {
  */
 
 closure DynaConverter(local conv) {
+    global()
     conv = new(object, this)
     
     // fieldTypeDynToNaan
@@ -250,7 +252,7 @@ closure DynaConverter(local conv) {
         if dtype == "BS" || dtype == "SS"
             dvalue
         else if dtype == "NS"
-            new(dvalue).map(Number.parseFloat(item))
+            new(dvalue).map(function(item) { Number.parseFloat(item) })
         else if dtype == "M"
             recordDynToNaan(dvalue)
         else if dtype == "L"
@@ -294,12 +296,24 @@ closure DynaConverter(local conv) {
     // genAttributeNameAdder
     //
     //     Return a function that, when called repeatedly, adds attribute name definitions to the
-    // specified parameter block.
+    // specified parameter block. You can specify an attribute name that is a nested key expression
+    // resulting from makePath() below. This adds the individual components to the
+    // ExpressionAttributeNames list, but generates a return string that references nested elements.
     //
     closure genAttributeNameAdder(params, local adex) {
         function attrib(name, local key, data) {
-            if !string(name)
-                name = tostring(name)                                       // try to make it a string
+            if numeric(name) || name && symbol(name)
+                name = tostring(name)
+            else if !string(name) || string.trim().length == 0 {            // compound or invalid
+                if tuple(name) && name.length == 3 {
+                    if name.0 == `.                                         // quote(a.b) => (`. a b)
+                        return (strcat(attrib(name.1), ".", attrib(name.2)))
+                    else if name.0 == `deref && integer(name.2)             // quote(a[99]) => (`deref a 99)
+                        return (strcat(attrib(name.1), "[", attrib(name.2), "]"))
+                }
+                debuglog("DynaConverter.genAttributeNameAdder: can't make expression from", typeof(name), name)
+                name = tostring(name)
+            }
             if !params.ExpressionAttributeNames
                 params.ExpressionAttributeNames = { }
             if !adex
@@ -311,6 +325,33 @@ closure DynaConverter(local conv) {
             params.ExpressionAttributeNames[key] = name
             key
         }
+    }
+
+
+    // makePath
+    //
+    //     Make an attribute path expression that genAttributeNameAdder can use to make an evaluated
+    // attribute path. Specify a path expression and then list the symbols that should be evaluated,
+    // if any. For example:
+    //      >   b=4
+    //      >   makePath(a.b.c, b)
+    //      $:  a.4.c
+    //
+    conv.makePath = macro makePath args {
+        function mkatpa(path, local exp) {
+            exp = path.map(function(el) {
+                if tuple(el)
+                    exp = mkatpa(el)
+                else if member(el, args)
+                    car(el)
+                else
+                    el
+            })
+            if !tuple(exp) || exp.0 != `deref || integer(exp.2)
+                exp
+            else
+                cons(`., cdr(exp))                                          // use `. for dictionary lookup
+        } (pop(args))
     }
 
     // genAttributeValueAdder
@@ -357,7 +398,7 @@ closure DynaConverter(local conv) {
     //
     // condition dictionary:
     //  {
-    //      key:        <keyname, e.g. partition key name or path tuple>    // required
+    //      key:        <keyname, e.g. partition key name or path>          // required
     //      "=":        <expression>                                        // exclusive of other comparisons
     //      ">":        <expression>                                        // exclusive of other comparisons
     //      "<":        <expression>                                        // exclusive of other comparisons
@@ -368,9 +409,12 @@ closure DynaConverter(local conv) {
     //      exists:     <boolean>                                           // keyname existence matches boolean
     //  }
     //
+    // The key entry above can be a keyname or a path expression resulting from a call to makePath().
+    // Please note that array subscripts, which index into lists, must be integers.
+    //
 
     conv.createKeyExpression = function createKeyExpression(params, conds
-        local attval, attname, rangename, range, keyname, op, expr, rangex, arg1, arg2) {
+        local attval, attname, rangename, ranges, range, keyname, op, expr, rangex, arg1, arg2) {
 
         // dupeop
         //
@@ -389,18 +433,9 @@ closure DynaConverter(local conv) {
                 ranges = [ranges]
             for range in ranges {
                 rangex = false
-                if tuple(range.key) {
-                    keyname = []
-                    expr = range.key
-                    while expr
-                        keyname.push(attname(pop(expr)))
-                    keyname = keyname.join(".")
-                }
-                else
-                    keyname = tostring(range.key)
-                if !keyname
+                if !range.key
                     return (list(Error("key expression requires key name")))
-                keyname = attname(keyname)
+                keyname = attname(range.key)
                 for `(op, expr) in range {
                     if op == "key"
                         continue
@@ -465,7 +500,7 @@ closure DynaConverter(local conv) {
     // value is a standard (error, data) tuple where the data is just { ok: true } if no error.
     //
     conv.createUpdateExpression = function createUpdateExpression(params, updates,
-        local attval, attname, output, item) {
+        local attval, attname, output, item, key, value) {
 
         if params.UpdateExpression
             return (list(Error("conv.createUpdateExpression: UpdateExpression already exists")))
@@ -519,13 +554,28 @@ closure DynaConverter(local conv) {
  *
  *     DynamoDB table.
  *
+ * options:
+ *  {
+ *      hashKey:    <symbol>                    // hash key symbol
+ *      rangeKey:   <symbol>                    // range key symbol (requres hash key)
+ *  }
+ *
  */
 
-closure DynaTable(dyna, tablename, local table) {
+closure DynaTable(dyna, tablename, options, local table) {
+    global()
     table = new(object, this)
     table.name = tablename
     if dyna.ycdb
         table.ycdb = true                                                   // Yandex Cloud version of DynamoDB
+    if options.hashKey || options.rangeKey {
+        if options.hashKey && symbol(options.hashKey) && symbol(options.rangeKey) { // NB: false is a symbol
+            table.hashKey = options.hashKey
+            if options.rangeKey
+                table.rangeKey = options.rangeKey
+        } else
+            debuglog("DynaTable: invalid (hashKey/rangeKey) option:", tablename, list(options.hashKey, options.rangeKey))
+    }
 
     // info
     //
@@ -544,13 +594,25 @@ closure DynaTable(dyna, tablename, local table) {
     //      rangeType:  <name>                  // string | numeric (if exists)
     //  }
     //
-    table.info = closure info(local params, pending) {
+    // 20240313: Note that the YCDB / AWS DynamoDB SDK combination has been found to occasionally
+    // fail to execute the callback within 30 seconds with multiple overlapping info() calls. In the
+    // current example three calls to a single table are made from inside asyncArray(), and all of
+    // them get hung up here lacking a callback. Unclear whether the cause is the SDK, the lack of
+    // using the newer promises API, or the underlying YDB service. The main reason this is called
+    // is to discover the hash and range keys, which can be statically specified. The pragmatic
+    // resolution is to allow the caller to specify the keys, which is faster and should avoid this
+    // particular challenge. But also info() now combines overlapping calls.
+    //
+    table.info = closure info(local params, pending, result) {
         if !dyna.aws
             return (list(Error("DynaTable.info: not logged into AWS")))
         params = {
             TableName: tablename
         }
+        if (pending = table.info_pending)
+            return (pending.wait())                                         // use the first call's results
         pending = new(nonce)
+        table.info_pending = pending                                        // combine overlapping info() calls
         dyna.aws.describeTable(params, function(error, data, local output, key) {
             if error {
                 dynaTableError = error
@@ -581,7 +643,9 @@ closure DynaTable(dyna, tablename, local table) {
             }
             pending.signal(list(error, output))
         })
-        pending.wait()
+        result = pending.wait()
+        table.info_pending = false
+        result
     }
 
     // create
@@ -817,7 +881,7 @@ closure DynaTable(dyna, tablename, local table) {
  
         
     table.deleteRecord = closure deleteRecord(hashValue, rangeValue, options,
-        local params, pending) {
+        local params, error, pending) {
         if preflightError(this)
             return
         params = {
@@ -881,7 +945,6 @@ closure DynaTable(dyna, tablename, local table) {
     //      indexHashKey:   <string>                                        // name of index hashKey
     //      range:          <key-expression>                                // range of keys to retrieve
     //      filter:         <key-expression>                                // conditions for items to return
-    //      attmap:         <dictionary>                                    // map attribute names to #shortcuts
     //      reverse:        <boolean>                                       // reverse order
     //      project:        <array>                                         // project only specified attributes
     //      paging:         <exclusive start key>                           // for paging; updated each call
@@ -924,8 +987,6 @@ closure DynaTable(dyna, tablename, local table) {
             if error
                 return (list(Error("table.queryRecords filter:", error)))
         }
-        if options.attmap
-            params.ExpressionAttributeNames = options.attmap
         if options.reverse
             params.ScanIndexForward = false
         if options.project
@@ -955,7 +1016,6 @@ closure DynaTable(dyna, tablename, local table) {
     //  {
     //      index:          <string>                                        // index name in table
     //      filter:         <key-expression>                                // conditions for items to return
-    //      attmap:         <dictionary>                                    // map attribute names to #shortcuts
     //      project:        <array>                                         // project only specified attributes
     //      paging:         <exclusive start key>                           // for paging; updated each call
     //      consistentRead: <boolean>                                       // true to use consistent read
@@ -980,8 +1040,6 @@ closure DynaTable(dyna, tablename, local table) {
             if error
                 return (list(Error("table.scanRecords filter:", error)))
         }
-        if options.attmap
-            params.ExpressionAttributeNames = attmap
         if options.project
             params.ProjectionExpression = options.project.join(", ")
         if options.paging
@@ -1016,6 +1074,7 @@ closure DynaTable(dyna, tablename, local table) {
  */
 
 closure DynamoDB(local dyna) {
+    global(awsSDK)
     dyna = new(object, this)
     dyna.timeout = 20000                                                    // default 20-second timeout
     dyna.conv = DynaConverter()
@@ -1045,12 +1104,12 @@ closure DynamoDB(local dyna) {
     // table
     //
     //     Return a new table access object for the table of the specified name. The table may not 
-    // yet exist; see DynaTable for methods.
+    // yet exist; see DynaTable for options and methods.
     //
-    dyna.table = function table(name) {
+    dyna.table = function table(name, options) {
         if !dyna.aws
             debuglog("DynamoDB.table: database not open:", name)
-        DynaTable(dyna, name)
+        DynaTable(dyna, name, options)
     }
     
     // timekeys

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2022 by Richard C. Zulch
+ * Copyright (c) 2019-2024 by Richard C. Zulch
  *
  */
 
@@ -19,6 +19,7 @@
  */
 
 closure psmcFsView(api, rootpath, local view, pathmod) {
+    global(JSpath)
     view = new(object, this)
     view.api = api
     view.rootpath = rootpath
@@ -154,6 +155,8 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // Read a file at the specified path
     
     view.readFile = function readFile(path, options, callback) {
+        if !path
+            throw("psmcFsView.readFile: path is false")
         psmRemote(path, "readFile", options, false, callback)
     }
 
@@ -354,7 +357,9 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
     // Tell the shell to open the specified file.
     
     view.shellOpen = function shellOpen(path, args, callback) {
-        psmRemote(path, "shellOpen", { args: args }, false, callback)
+        if args
+            args = { args: args }
+        psmRemote(path, "shellOpen", args, false, callback)
     }
 
     // grepLines
@@ -424,11 +429,14 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
  *
  */
 
-closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
+closure psmcFsConnector(psm, api, local connClassID, connector, watch) {
+    global()
     connClassID = "NodeFS"
     connector = new(object, this)
     connector.psm = psm
-    connector.api = nicc.api
+    connector.apis = {
+        HostFS: api
+    }
     connector.vault = psm.vault(connClassID)
     connector.label = "Naan-Server"
     watch = psm.watchable(connector)
@@ -563,7 +571,7 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
     // listResources
     //
     // List saved resources in our database
-    connector.listResources = function listResources(local error, original) {
+    connector.listResources = function listResources(local error, output, original) {
         `(error, output) = connector.vault.listResources()
         if error
             return (list(error))                                            // can't access our saved resources
@@ -579,14 +587,14 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
     connector.info = function info(resID, local info, error, creds) {
         info = {
             classID: connClassID
-            type: "remote filesystem"
-            services: ["NideFS", "NideHostAPI"]
+            type: "remote server"
+            services: ["NideFS", "NideHostAPI", "NideTerminal"]
         }
         if resID == "Host" {
             info.name = "Host"
             info.type = "host filesystem"
             info.locked = true
-            info.where = nicc.api.url
+            info.where = api.url
             info.access = "HostFS"
         } else {
             `(error, creds) = connector.vault.accessResource(resID)
@@ -620,14 +628,26 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
         `(error, creds) = connector.access(resID)
         if !error {
             if creds == "HostFS"
-                api = connector.api
-            else
-                api = MakeNideAPIclient(creds.urlName, creds.authSecret)    // API to remote NodeJS filesystem
+                api = connector.apis[creds]
+            else {
+                api = connector.apis[creds.urlName]
+                if !api                                                     // get API to remote server
+                    connector.apis[creds.urlName] = api = NideAPIclient(creds.urlName, creds.authSecret)
+            }
         }
         if error
             list(error)
-        else if service == "NideExecutor"
-            require("../browser/terminals.nlg").TermHost(nicc.track, api, args.0, args.1)                       // host executor, args: (name, workerID)
+        else if service == "NideTerminal" {
+            if !App.nide.track
+                return (list(Error("NideTerminal not supported in this environment")))
+            list(false, App.nide.track.spawn(App.nide.registerRemote(api),
+                args.0,                                                     // terminal display name
+                args.1))                                                    // options:
+                    // {
+                    //      workerID: "NideServer"  -- for main thread; other strings for worker threads
+                    //      type: "My Remotes"      -- display name of terminal group; e.g. URL
+                    // }
+        }
         else if service == "NideHostAPI"
             list(false, api)                                                // connect to the Host API
         else if service == "NideFS" {
@@ -653,11 +673,12 @@ closure psmcFsConnector(psm, nicc, local connClassID, connector, watch) {
  *
  */
 
-function psmcMakeClientPSM(nicc, dbname, local importPSM) {
+function psmcMakeClientPSM(api, dbname, local importPSM) {
+    global(App)
     importPSM = require("../storage/psm.nlg")
     App.psm = importPSM.MakePSM(dbname).1
     if App.psm {
-        psmcFsConnector(App.psm, nicc)                                      // HostFS access
+        psmcFsConnector(App.psm, api)                                       // HostFS access
         require("../storage/dbt_pouch.nlg").DbConnector(App.psm)            // Pouch databases as filesystems
     }
     App.psm
