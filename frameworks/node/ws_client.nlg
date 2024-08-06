@@ -20,6 +20,7 @@
  *
  * Options:
  *  {
+ *      wss:        <boolean>                   // true to use secure connection
  *      onopen:     <proc>(e)                   // connection has opened
  *      onmessage:  <proc>(e, message)          // message received
  *      onerror:    <proc>(e)                   // error occurred
@@ -37,13 +38,17 @@ closure WebSocket(host, options, local wsock) {
     //
     // Connect with the host if not already connected, returning a result tuple.
     //
-    wsock.connect = closure connect(local pending, error, ws) {
+    wsock.connect = closure connect(local error, ws, url, pending) {
         if wsock.ws
             return (list(false, { open: true }))
         `(error, ws) = await(js.i("ws"))
         if error
             return (list(error))
-        wsock.ws = xnew(ws.default, "ws://${host}")
+        if options.wss
+            url = "wss://${host}"
+        else
+            url = "ws://${host}"
+        wsock.ws = xnew(ws.default, url)
         pending = new(nonce)
 
         // onopen

@@ -296,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.2.0+1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.2.1+1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -614,7 +614,7 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
         rules.typeID = procon.where_typeID
         if !rules.operation
             rules.operation = "debug"
-        `(error, builder) = Builder(rules, rules.operation, fs, "", buildpath)
+        `(error, builder) = Builder(rules, rules.operation, fs, "", buildpath, projman.track)
         if error
             return (list(error))
         procon.builder = builder
@@ -628,10 +628,10 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
             buildnum: buildnum
         })
         if !error {
-            if builder.refresh(projman.track)
+            if builder.refresh()
                 buildonly = !buildonly                                      // reverse if refresh
             if !buildonly
-                `(error) = builder.run(projman.track)
+                `(error) = builder.run()
         }
         builder.destroy()
         procon.builder = false
@@ -662,7 +662,9 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
         publish = rules.publish
         where = procon.localDict.publish[stage].where
         if !rules || !where
-            return (list(Error("no project publish location configured")))
+            return (list(Error("no project publish location set")))
+        if !publish.input || !publish.sources || !publish.output
+            return (list(Error("project configuration has no publish instructions")))
         if publish.cacheControl
             outOptions = {
                 cacheControl: publish.cacheControl

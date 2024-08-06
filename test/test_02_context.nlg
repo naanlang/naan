@@ -38,7 +38,7 @@ RegisterTestCategory("context", [
     [ "function setNS(ns) { ns=reverse(ns),sudo(nsactive(reverse(ns, defNS))) };", "setNS" ],
     [ "x;", "x" ],
     [ "y;", "y" ],
-    [ "length(symlist(nsactive(true).0));", "172"],
+    [ "length(symlist(nsactive(true).0));", "171"],
     [ "testvar;", "testvar" ],
     [ "function setTestvar(v) { testvar=v };", "setTestvar" ],
     [ "naanvar;", "naanvar" ],

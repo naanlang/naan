@@ -37,10 +37,14 @@ closure WebSocket(options, local wsock) {
     //
     // Connect with the host if not already connected, returning a result tuple.
     //
-    wsock.connect = closure connect(local pending) {
+    wsock.connect = closure connect(local url, pending) {
         if wsock.ws
             return (list(false, { open: true }))
-        wsock.ws = xnew(window.WebSocket, "ws://${options.host}")
+        if window.location.protocol == "https:"
+            url = "wss://${options.host}"
+        else
+            url = "ws://${options.host}"
+        wsock.ws = xnew(window.WebSocket, url)
         pending = new(nonce)
     
         // onopen

@@ -667,13 +667,13 @@ closure psmcFsConnector(psm, api, local connClassID, connector, watch) {
 
 
 /*
- * psmcMakeClientPSM
+ * MakeClientPSM
  *
  *     Return a new client PSM with our known connectors.
  *
  */
 
-function psmcMakeClientPSM(api, dbname, local importPSM) {
+function MakeClientPSM(api, dbname, local importPSM) {
     global(App)
     importPSM = require("../storage/psm.nlg")
     App.psm = importPSM.MakePSM(dbname).1
@@ -694,12 +694,12 @@ function psmcMakeClientPSM(api, dbname, local importPSM) {
 
 function psmcInit(local manifest) {
 
-    manifest = `(psmcFsView, psmcFsConnector, psmcMakeClientPSM, psmcInit)
+    manifest = `(psmcFsView, psmcFsConnector, MakeClientPSM, psmcInit)
 
     Naan.module.build(module.id, "psm_client", function(modobj, compobj) {
         require("./client.nlg")
         compobj.manifest = manifest
-        modobj.exports.MakeClientPSM = psmcMakeClientPSM
+        modobj.exports.MakeClientPSM = MakeClientPSM
     })
 
 } ();

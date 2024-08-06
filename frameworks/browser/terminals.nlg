@@ -55,13 +55,17 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
 
     // connect
     // Connect with the host if not already connected.
-    closure connect(local host, pending) {
+    closure connect(local host, url, pending) {
         if target.ws
             return(list(false, { connected: true }))
         host = xnew(window.URL, api.url).host
         if !host || host == ""
             return(list(Error("invalid URL ${api.url}")))
-        target.ws = xnew(window.WebSocket,"ws://${host}")
+        if window.location.protocol == "https:"
+            url = "wss://${host}"
+        else
+            url = "ws://${host}"
+        target.ws = xnew(window.WebSocket, url)
         pending = new(nonce)
 
         // onopen
@@ -98,8 +102,10 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
                 if msg.id == "spawned" || msg.id == "workerlist" || msg.id == "termination"
                     return (hostWorkerUpdate(msg))
                 if msg.id != "targetout" {
-                    if msg.id == "status"
+                    if msg.id == "status" {
                         target.lastStatus = milliseconds()
+                        target.execSetStatus(msg.status)
+                    }
                     if target.msgQueue {
                         if msg.id != "status"
                             target.msgQueue.push(msg)
@@ -455,8 +461,10 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
             destroy()
             return }
         else if msg.id != "targetout" && msg.id != "loaded" {
-            if msg.id == "status"
+            if msg.id == "status" {
                 target.lastStatus = milliseconds()
+                target.execSetStatus(msg.status)
+            }
             if target.msgQueue {
                 if msg.id != "status"
                     target.msgQueue.push(msg)
@@ -468,6 +476,7 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
     // The worker had an error.
     
     target.worker.addEventListener("error", function(e) {
+        debuglog("TermLocal worker error:", e.message)
         target.execClosed(Error("instance error", e.message))
     })
 
@@ -720,6 +729,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         }
     
         function onstatus(status) {
+            target.execSetStatus(status)
             statusCB(target, status)
         }
     

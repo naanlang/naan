@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2023 by Richard C. Zulch
+ * Copyright (c) 2020-2024 by Richard C. Zulch
  *
  */
 
@@ -193,8 +193,14 @@ closure JsLoadScript(libpath, globalID, local scriptTag, fpath) {
     else
         fpath = "/".concat(libpath)
     if js.s.importScripts && tostring(js.s.importScripts) == "[Function importScripts]" {
-        js.s.importScripts(fpath)                                           // load in worker context
-        jsScripts[libpath] = js.s[globalID]
+        fpath = JSpath.dirname(js.w.location.href).concat(fpath)
+        try {
+            js.s.importScripts(fpath)                                       // load in worker context
+            jsScripts[libpath] = js.s[globalID]
+        } catch {
+            debuglog("JsLoadScript:", libpath, "failed", exception)
+            js.s.console.log("JsLoadScript:", libpath, "failed", exception) // ensure visibility in JS console
+        }
     } else if js.w {                                                        // load in browser context
         pending = new(nonce)
         scriptTag = js.w.document.createElement("script")
@@ -205,7 +211,7 @@ closure JsLoadScript(libpath, globalID, local scriptTag, fpath) {
             true
         }
         scriptTag.onerror = function (event) {
-            debuglog("jsScriptLoader:", libpath, "not found")
+            debuglog("JsLoadScript:", libpath, "not found")
             pending.signal(false)
             true
         }

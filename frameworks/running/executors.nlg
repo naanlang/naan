@@ -52,7 +52,7 @@ closure ExecutorBase(track, type, name, local exec) {
     }
     
     // execReceived
-    // THe specified message was received from the instance, so signal it.
+    // The specified message was received from the instance, so signal it.
     
     exec.execReceived = closure execReceived(data, local pending) {
         pending = exec.pending[data.xid]
@@ -63,6 +63,13 @@ closure ExecutorBase(track, type, name, local exec) {
         }
         exec.pending[data.xid] = undefined
         pending.signal(list(false, data))
+    }
+    
+    // execSetStatus
+    // Received a status update from the instance.
+    
+    exec.execSetStatus = function execSetStatus(status) {
+        exec.xstatus = status
     }
     
     // execFailed
@@ -263,21 +270,22 @@ closure ExecutorContext(exec, contextID, local context, util) {
  *
  * Allowable options are:
  *  {
- *      maxcount: <integer>                                                 // maximum workers, default 4
- *      initeval: `(<expr>, <put>, <get>)                                   // initializes each new worker
- *      basename: <string>                                                  // worker label for UI, default "batch"
+ *      spawnLoc: <string>                      // e.g. "Local" (default) or "Host"
+ *      maxcount: <integer>                     // maximum workers, default 4
+ *      initeval: `(<expr>, <put>, <get>)       // initializes each new worker
+ *      basename: <string>                      // worker label for UI, default "batch"
  *  }
  *
  */
 
-closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, crValue) {
+closure ExecutorParallel(track, options, local maxcount, parallel, exqueue, crValue) {
     global()
+    options = merge({
+        spawnLoc: "Local"
+        maxcount: 4
+        basename: "batch"
+    }, options)
     maxcount = options.maxcount
-    if !maxcount
-        maxcount = 4                                                        // default is 4 workers
-    basename = options.basename
-    if !string(basename)
-        basename = "batch"
     exqueue = []                                                            // waiting for execution
     parallel = new(object, this)
     parallel.workers = []                                                   // array of worker executors
@@ -288,36 +296,41 @@ closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, c
     //
     // Return the next available worker. If no workers are available and we haven't hit the maximum 
     // then create an additional worker and return it. If we cannot allocate another worker then this 
-    // returns false.
+    // returns { wait: true }.
     
     closure acquireWorker(local workdex, name, worker, context, result) {
         if parallel.available.length > 0
-            return (parallel.available.pop())
+            return (list(false, parallel.available.pop()))
         workdex = parallel.workers.length
         if workdex >= maxcount
-            return (false)
+            return (list(false, { wait: true }))
         parallel.workers[workdex] = false                                   // reserve our spot
-        name = basename.concat("-", workdex+1)
-        worker = App.nide.track.spawn("Local", name, "ExecutorParallel")    // ### App.nide.track.spawn may not exist
-        if worker.0 {                                                       // ### wasting space on workers list
+        name = options.basename.concat("-", workdex+1)
+        worker = track.spawn(options.spawnLoc, name, {
+            workerID: "ExecutorParallel"
+        })
+        if worker.0 {
+            parallel.workers.splice(workdex, 1)
             debuglog("execParallel: cannot spawn worker:", ErrorString(worker.0))
-            return (false)
+            return (list(worker.0))
         }
         worker = worker.1
         context = worker.context()
         if context.0 {
-            debuglog("execParallel: cannot create worker context:", ErrorString(context.0))
+            parallel.workers.splice(workdex, 1)
             worker.destroy()
-            return (false)
+            debuglog("execParallel: cannot create worker context:", ErrorString(context.0))
+            return (list(context.0))
         }
         context = context.1
         parallel.workers[workdex] = worker
         parallel.contexts[worker] = context
         if tuple(options.initeval) {
             result = apply(context.eval, options.initeval)
-            if result.0
-                debuglog("execParallel: cannot initialize worker", name, ErrorString(result.0)) }
-        return (worker)
+            if result.0 {
+                debuglog("execParallel: cannot initialize worker", name, ErrorString(result.0))
+                return (list(result.0)) } }
+        return (list(false, worker))
     }
     
     // releaseWorker
@@ -337,23 +350,26 @@ closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, c
     // don't remove work from the queue until we already have a worker.
     //
 
-    closure execNext(local worker, result) {
+    closure execNext(local error, worker, result) {
         if exqueue.length > 0 {
-            worker = acquireWorker()                                        // false if none available
-            if !worker {
-                if maxcount > 0 && parallel.workers.length == 0             // maxcount zero when being destroyed
-                    throw("execParallel: cannot allocate any workers at all")
-                return                                                      // we're busy, so try again later
+            `(error, worker) = acquireWorker()
+            if error {
+                if maxcount > 0 && parallel.workers.length == 0 {
+                    exqueue = []
+                    throw("execParallel: cannot allocate any workers at all") }
+                return                                                      // one failed, so try again later
             }
+            if worker.wait
+                return                                                      // we're busy, so try again later
             future(function(local next, context) {
                 next = exqueue.splice(0, 1).0                               // remove oldest entry, from start
                 if !next {
                     releaseWorker(worker)                                   // someone else already processed this
                     return
-               }
+                }
                 context = parallel.contexts[worker]
                 if next.eval
-                    result = apply(context.eval, next.args)
+                    result = apply(context.eval, next.eval)
                 else if next.proc
                     result = context.rpc(next.proc, next.args)
                 else
@@ -372,7 +388,7 @@ closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, c
     //
 
     parallel.eval = closure evalf(expr, put, get, local pending) {
-        if !maxcount
+        if maxcount == 0
             return (crValue)                                                // already destroyed
         pending = new(nonce)
         exqueue.push({
@@ -392,13 +408,55 @@ closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, c
         evalf(expr, eval(put), eval(get))
     }
     
+    // exBatch
+    //
+    // Remote helper to execute a batch function.
+    //
+    
+    closure exBatch(expr, local pending) {
+        // evaluate the expression in batch mode
+        function execbat() {
+            try {
+                pending.signal(list(false, evalactive(expr)))
+            } catch {
+                pending.signal(list(Error(exception)))
+            }
+        }
+
+        pending = new(nonce)
+        exec(list(execbat))
+        pending.wait()
+    }
+    
+    // batch
+    //
+    // Execute eval above in a remote in batch mode, waiting until it is complete.
+    //
+
+    parallel.batch = closure batchf(expr, put, get, local result) {
+        result = evalf(list(exBatch, list(quote, expr)), `(exBatch).append(put), get)
+        if result.0                                                         // unpack our error wrapper
+            result
+        else
+            result.1
+    }
+        
+    // batchq
+    //
+    // Evaluate the specified QUOTED expression in a remote in batch mode.
+    //
+    
+    parallel.batchq = macro batchq(expr, put, get) {
+        batchf(expr, eval(put), eval(get))
+    }
+
     // rpc
     //
     // Execute a procedure call in a remote worker.
     //
     
     parallel.rpc = closure rpc(proc, args, local pending) {
-        if !maxcount
+        if maxcount == 0
             return (crValue)                                                // already destroyed
         pending = new(nonce)
         exqueue.push({
@@ -410,13 +468,36 @@ closure ExecutorParallel(options, local maxcount, basename, parallel, exqueue, c
         pending.wait()
     }
 
+    // status
+    //
+    // Report status of workers. Each worker has a dictionary:
+    //  {
+    //      state:  <string>                    // "active" or "idle"
+    //      status: <dict>                      // like runaverage(1)
+    //  }
+    //
+
+    parallel.status = function status(local output, worker) {
+        output = []
+        for worker in parallel.workers {
+            output.push({
+                name: worker.name
+                type: worker.type
+                state: if parallel.available.indexOf(worker) >= 0
+                    "idle" else "active"
+                status: worker.xstatus
+            })
+        }
+        output
+    }
+
     // destroy
     //
     // Destroy the object by destroying the workers and failing pending requests with cancelResult.
     //
     
     parallel.destroy = closure destroy(cancelResult, local worker, next) {
-        if !maxcount
+        if maxcount == 0
             return (false)                                                  // already destroyed
         crValue = cancelResult
         maxcount = 0
@@ -540,6 +621,13 @@ closure ExecutorTracker(local xtrak) {
             else
                 apply(xtrak.makers[type], cons(xtrak, args))
         } (pop(args), args)
+    }
+    
+    // parallel
+    // Return a new parallel executor with specified options.
+    
+    xtrak.parallel = function parallel(options) {
+        ExecutorParallel(xtrak, options)
     }
     
     xtrak.register(execLambda, "Lambda")

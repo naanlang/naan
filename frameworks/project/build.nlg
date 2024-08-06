@@ -118,7 +118,7 @@
  *          ]
  *      }
  *
- * build = Builder(rulesDict, operation, fs, srcpath, destpath)             // create a builder object
+ * build = Builder(rulesDict, operation, fs, srcpath, destpath, track)      // create a builder object
  * build.increment()                                                        // increment the build counter
  * build.make()                                                             // run the build
  * build.clean()                                                            // clear all output folders
@@ -140,7 +140,7 @@
  *
  */
 
-closure Builder(rules, operation, fs, srcpath, destpath, local build, group, newgroup) {
+closure Builder(rules, operation, fs, srcpath, destpath, track, local build, group, newgroup) {
     build = new(object, this)
     build.srcpath = srcpath
     build.destpath = destpath
@@ -393,7 +393,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
 
     closure zip(files, options, local result) {
         if !build.zipper
-            build.zipper = ExecutorParallel({                               // create worker for zipping
+            build.zipper = ExecutorParallel(track, {                        // create worker for zipping
                 maxcount: 1                                                 // stupid Zip lib can't do more than one
                 basename: "zip"
                 initeval: `(false, (zip1))
@@ -529,7 +529,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
 
     closure parseAndPack(text, fpath, options, local result) {
         if !build.parallel
-            build.parallel = ExecutorParallel({                             // create worker pool
+            build.parallel = ExecutorParallel(track, {                      // create worker pool
                 basename: "build"
                 initeval: `(false, (parseAndPack1))
             }) 
@@ -1190,7 +1190,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //
     // Run the current build product by spawning a new worker.
     //
-    build.runSpawn = function runSpawn(track local error, maintext, executor, vpath, site) {
+    build.runSpawn = function runSpawn(local error, maintext, executor, vpath, site) {
         `(error, maintext) = fs.readFile(JSpath.join(build.destpath, build.runway.main))
         if error
             error = Error("Builder: cannot read main file", error)
@@ -1228,7 +1228,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //
     // Run the current build product by opening a new window.
     //
-    build.runWindow = function runWindow(track
+    build.runWindow = function runWindow(
         local title, main, url, features, vpath, error, window, site) {
         if !js.w
             return (list(Error('Run method "window" requires browser host')))
@@ -1260,13 +1260,13 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     // Run the current build product, which would be after the make call. Returns a standard result
     // tuple.
     //
-    build.run = function run(track) {
+    build.run = function run() {
         if build.runway.open
             fs.shellOpen(JSpath.join(build.destpath, build.runway.open), build.runway.args)
         else if build.runway.spawn
-            build.runSpawn(track)
+            build.runSpawn()
         else if build.runway.window
-            build.runWindow(track)
+            build.runWindow()
         else
             list(false, { ok: true })
     }
@@ -1276,7 +1276,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, local build, group, new
     //
     // Refresh after updating the v-site, returning true iff an existing vsite was found.
     //
-    build.refresh = function refresh(track local url_origin, found) {
+    build.refresh = function refresh(local url_origin, found) {
         if build.runway."v-site" {
             url_origin = js.w.location.origin.concat("/run", build.runway."v-site")
             for target in track.enumlist() {

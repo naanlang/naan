@@ -513,7 +513,7 @@ closure dawsTable(database, path, tableOptions, local table) {
                             resp._error = "JSON decoding failed"
                     } }
                 else if resp.contentType.startsWith("image/")
-                    { }                                                     // already "decoded", e.g. base64
+                    resp.content = readableStreamToArrayBuffer(resp.content)
                 else if jsTypedArray(resp.content)
                     resp.content = xnew(TextDecoder, "utf-8").decode(resp.content)
                 else if jsInstanceOf(resp.content, js.w.ReadableStream)
