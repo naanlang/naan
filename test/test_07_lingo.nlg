@@ -192,7 +192,7 @@ RegisterTestCategory("Lingo", [
     [ "macro(x){x.c=5}({a:3,b:4});", { errors: "can't modify NaanConst::Dictionary{2} from Test-Lingo" } ],
     [ "macro(x){x[1]=6}([3,4,5]);", { errors: "can't modify NaanConst::Array[3] from Test-Lingo" } ],
 
-    [ "js.*;", '("n", "o", "i", "d", "g", "r", "t")' ],
+    [ "js.*;", '("n", "o", "i", "d", "g", "r", "t", "k")' ],
     
     [ "[1,2,3].concat(4,5,6);", "[1, 2, 3, 4, 5, 6]" ],
     [ "[1,2,3].concat([4,5,6]);", "[1, 2, 3, 4, 5, 6]" ],

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2023 by Richard C. Zulch
+ * Copyright (c) 2019-2024 by Richard C. Zulch
  *
  */
 
@@ -728,6 +728,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
                     tasks: group.tasks
                     readpath: infile,
                     writepath: outfile
+                    follow: group.follow || undefined
                 }
                 if group.input.startsWith("@")
                     entry.insource = JSpath.join(group.input.substring(1), group.sources[sdex])
@@ -982,6 +983,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
                         overwrite: true                                     // overwrite files
                         force: true                                         // ignore modify date
                         idmode: true                                        // preserve ids and mode
+                        follow: entry.follow                                // optional follow links
                     })
                     if error                                                // deepcopy returns a list of errors
                         error = error.0                                     // but we're only doing one item

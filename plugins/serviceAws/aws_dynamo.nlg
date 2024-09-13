@@ -191,21 +191,23 @@ closure DynaConverter(local conv) {
     }
 
     // datumNaanToDyn
-    // Convert a Naan datum to DynamoDB format.
+    // Convert a Naan datum to DynamoDB format. If no valid conversion is known then it becomes NULL
+    // in DynamoDB and a debug warning is logged. Note that this is not called for arbitrary symbols
+    // from genAttributeValueAdder() because it uses symbols to refer to actual attributes by name.
     //
     conv.datumNaanToDyn = function datumNaanToDyn(datum, local output, ntype, dtype) {
         output = { }
         if tuple(datum)
             datum = datum.toarray
-        if array(datum) {
+        if Array.isArray(datum) {
             dtype = "L"                                                     // heterogenous list
             datum = datum.map(function(item) {
                 datumNaanToDyn(item)
             })
         } else {
             ntype = typeof(datum)
-            if ntype == xobject
-                dtype = "B"                                                 // assume binary
+            if ntype == xobject && jsTypedArray(datum)
+                dtype = "B"                                                 // binary/blob
             else if ntype == dictionary {
                 dtype = "M"
                 datum = recordNaanToDyn(datum)
@@ -217,21 +219,19 @@ closure DynaConverter(local conv) {
             else if ntype == string
                 dtype = "S"
             else if ntype == symbol {
-                if datum === null {
-                    dtype = "NULL"
-                    datum = "true"
-                }
-                else if datum === true || datum === false
+                if datum === true || datum === false
                     dtype = "BOOL"
-                else if datum === undefined
-                    return (undefined)                                      // Zen!
-                else
-                    return (datum.tostring)
-                    
-            } else
+                else if datum !== null {
+                    debuglog("DynaConverter.datumNaanToDyn: nonstandard symbol", datum)
+                    datum = null }
+            } else {
                 debuglog("DynaConverter.datumNaanToDyn: invalid type", ntype)
+                datum = null }
         }
-        output[dtype] = datum
+        if datum === null
+            output["NULL"] = true
+        else
+            output[dtype] = datum
         output
     }
 
@@ -277,7 +277,7 @@ closure DynaConverter(local conv) {
     // Convert a DynamoDB typed item dictionary to Naan format.
     //
     conv.recordDynToNaan = function recordDynToNaan(ditem, local output, key, data, dtype, dvalue) {
-        if ditem.constructor === Array.prototype.constructor || array(ditem) {        // process an array
+        if Array.isArray(ditem) {                                           // process an array
             output = []
             for data in ditem
                 output.push(recordDynToNaan(data))
@@ -429,7 +429,7 @@ closure DynaConverter(local conv) {
         attval = genAttributeValueAdder(params)
         attname = genAttributeNameAdder(params)
         for `(rangename, ranges) in conds {
-            if !array(ranges)
+            if !Array.isArray(ranges)
                 ranges = [ranges]
             for range in ranges {
                 rangex = false
@@ -930,7 +930,7 @@ closure DynaTable(dyna, tablename, options, local table) {
                 remaining -= processed
             params.ExclusiveStartKey = data.LastEvaluatedKey
             if processed && remaining > 0 && data.LastEvaluatedKey {
-                params.limit = remaining                                // set up for next iteration
+                params.Limit = remaining                                // set up for next iteration
                 true                                                    // continue looping
             }
         })

@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023 by Richard C. Zulch
+ * Copyright (c) 2023-2024 by Richard C. Zulch
  *
  */
 
@@ -22,6 +22,8 @@
  *      onmessage:  <proc>(e, message)          // message received
  *      onerror:    <proc>(e)                   // error occurred
  *      onclose:    <proc>(e)                   // connection has closed
+ *      query:      <string>                    // query string starting with ? for insecure connections
+ *      querys:     <string>                    // query string starting with ? for secure connections
  *  }
  *
  */
@@ -41,9 +43,9 @@ closure WebSocket(options, local wsock) {
         if wsock.ws
             return (list(false, { open: true }))
         if window.location.protocol == "https:"
-            url = "wss://${options.host}"
+            url = "wss://${options.host}${options.querys||''}"
         else
-            url = "ws://${options.host}"
+            url = "ws://${options.host}${options.query||''}"
         wsock.ws = xnew(window.WebSocket, url)
         pending = new(nonce)
     

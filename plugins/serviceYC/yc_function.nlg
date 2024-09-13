@@ -1,0 +1,163 @@
+/*
+ * yc_function.nlg
+ * serviceYC
+ *
+ *     Access to serverless function management services for YC.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * YCFunction
+ *
+ *     YCFunction manipulation functions.
+ *
+ */
+
+closure YCFunction(local ycfun) {
+    ycfun = new(object, this)
+
+    //
+    // login
+    //
+    ycfun.login = closure login(creds) {
+        ycfun.creds = creds
+        list(false, { ok: true })
+    }
+    
+    //
+    // getFunction
+    //
+    // Get basic function info like:
+    //  {
+    //      id           : "d4er5sq67r5j47nno6nb",
+    //      folderId     : "b1gjjahqm5u9tjolom9l",
+    //      createdAt    : "2022-08-30T00:57:18.024Z",
+    //      name         : "hello-world",
+    //      description  : "A quick first function.",
+    //      logGroupId   : "ckgbmh6df6dt92pphc6b",
+    //      httpInvokeUrl: "https://functions.yandexcloud.net/d4er5sq67r5j47nno6nb",
+    //      status       : "ACTIVE"
+    //  }
+    //
+    ycfun.getFunction = closure getFunction(funcID, local url, error, data) {
+        debuglog("YCFunction.getFunction", funcID)
+        url = "https://serverless-functions.api.cloud.yandex.net/functions/v1/functions/".concat(funcID)
+        `(error, data) = YcRequest(url, ycfun.creds, {
+            query: { x: 1 }
+        })
+        if error
+            debuglog("YCFunction.getFunction failed:", ErrorString(error))
+        list(error, data)
+    }
+
+    //
+    // getVersionByTag
+    //
+    // Get info about a specific function version using its tag, e.g. $latest:
+    //  {
+    //      resources       : { memory: "134217728" },
+    //      tags            : ["$latest"],
+    //      id              : "d4evm4lsi91hqkv78ane",
+    //      functionId      : "d4er5sq67r5j47nno6nb",
+    //      createdAt       : "2022-08-31T03:32:59.577Z",
+    //      runtime         : "nodejs16",
+    //      entrypoint      : "index.handler",
+    //      executionTimeout: "3s",
+    //      serviceAccountId: "aje9s3df60gofsddio0c",
+    //      imageSize       : "4096",
+    //      status          : "ACTIVE",
+    //      logGroupId      : "ckgbmh6df6dt92pphc6b" }
+    //  }
+    //
+    ycfun.getVersionByTag = closure getVersionByTag(funcID, tag, local url, error, data) {
+        url = "https://serverless-functions.api.cloud.yandex.net/functions/v1/versions:byTag".concat(
+            EncodeQuery("?", {
+                functionId: funcID
+                tag: tag
+            }))
+        `(error, data) = YcRequest(url, ycfun.creds, {
+            query: { x: 1 }
+        })
+        if error
+            debuglog("YCFunction.getVersionByTag failed:", ErrorString(error))
+        list(error, data)
+    }
+
+    //
+    // invokeFunction
+    //
+    // Invoke a public cloud function. It is impossible to invoke a private cloud function from 
+    // browsers because the function cannot respond to a CORS authorization request using the OPTIONS
+    // method without an authorization header that cannot be added to the preflight.
+    //
+    ycfun.invokeFunction = closure invokeFunction(funcID, local url, error, data) {
+        url = "https://functions.yandexcloud.net/".concat(funcID)
+        `(error, data) = https.HttpsApiRequest(url, {
+            query: { x: 1 }
+        })
+        if error
+            debuglog("YCFunction.invokeFunction failed:", ErrorString(error))
+        list(error, data)
+    }
+
+    //
+    // updateFunctionCode
+    //
+    //
+    ycfun.updateFunctionCode = closure updateFunctionCode(info, bucket, key, sha256,
+        local url, params, error, data) {
+        params = {
+            function_id:        info.functionId
+            functionID:         info.functionId
+            runtime:            info.runtime
+            description:        "Updated: ".concat(Date())
+            entrypoint:         info.entrypoint
+            resources:          info.resources
+            executionTimeout:   info.executionTimeout
+            serviceAccountId:   info.serviceAccountId
+            package: {
+                bucketName:     bucket
+                objectName:     key
+                sha256:         sha256
+            }
+        }
+        if info.environment
+            params.environment = info.environment
+        if info.logOptions
+            params.logOptions = info.logOptions
+        url = "https://serverless-functions.api.cloud.yandex.net/functions/v1/versions"
+        `(error, data) = YcRequest(url, ycfun.creds, {
+            putdata: params
+        })
+        if error
+            debuglog("YCFunction.updateFunctionCode failed:", ErrorString(error))
+        list(error, data)
+    }
+
+    // finis
+    ycfun
+}
+
+
+/*
+ * ycFunctionInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function ycFunctionInit(local manifest) {
+    manifest = `(YCFunction, ycFunctionInit)
+
+    Naan.module.build(module.id, "yc_function", function(modobj, compobj) {
+        require("./serviceYC.nlg")
+        compobj.manifest = manifest
+        modobj.exports.YCFunction = YCFunction
+    })
+
+} ();

@@ -1,0 +1,60 @@
+/*
+ * serviceYC.nlg
+ * serviceYC
+ *
+ *     ServiceYC module configuration and management for browser and NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2022 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * YcRequest
+ *
+ *     Make a request to a Yandex Cloud API using a Yandex Cloud Function acting as a relay proxy.
+ * This works like frameworks/browser/HttpsApiRequest and frameworks/node/HttpsApiRequest except
+ * that it takes a credentials argument for access to the relay. Technically this is not required
+ * when we are going from node, but I'm keeping it for consistency.
+ *
+ */
+
+closure YcRequest(url, creds, options, local headers) {
+    if !options
+        options = { }
+    else
+        options = new(options)
+    headers = [
+        list("x-naanide-auth", creds.relayAuthKey)
+        list("x-naanide-ep", url)
+    ]
+    if options.headers
+        headers.push(list("x-naanide-hdrs", options.headers.join("\n")))
+    options.headers = headers
+    https.HttpsApiRequest(creds.relayURL, options)
+};
+
+
+/*
+ * seycInit
+ *
+ *     Initialize the YC module.
+ *
+ */
+
+function seycInit(local manifest) {
+    manifest = `(YcRequest, seycInit)
+
+    Naan.module.build(module.id, "serviceYC", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("naanlib:frameworks/common").LiveImport()
+        if js.g {
+            nodeHttp = js.r("http")
+            https = require("naanlib:frameworks/node/https_request.nlg") }
+        else
+            https = require("naanlib:frameworks/browser/https_request.nlg")
+        module.exports.YcRequest = YcRequest
+    })
+} ();

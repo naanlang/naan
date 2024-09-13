@@ -58,11 +58,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.2.1");
+        console.log("1.3.0");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.2.1+1");
+        console.log("1.3.0+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {
@@ -139,6 +139,9 @@ if (eval_text) {
 
         "   }\n" +
         "}();;\n";
+} else if (!process.stdin.isTTY) {
+    console.log("naan: nothing specified and no TTY; exiting");
+    process.exit(1);
 }
 
 

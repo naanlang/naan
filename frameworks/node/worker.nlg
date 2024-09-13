@@ -18,7 +18,7 @@
  *
  */
 
-closure workCurrent(workerID, startup, local current) {
+closure workCurrent(workco, workerID, startup, local current) {
     global()
     current = new(object, this)
     current.workerID = workerID
@@ -31,9 +31,22 @@ closure workCurrent(workerID, startup, local current) {
         debugout:   ONdebugOut.proc
         messageout: ONmessageOut.proc
     })
+    current.guid = 1
+    current.host = js.t                                                     // our magic Naan controller reference
     
-    current.host =  js.t                                                    // our magic Naan controller reference
-    
+    // replyHook
+    //
+    //     Intercept the ReplyMessage function to see if we should handle it.
+    //
+    function replyHook(data) {
+        if data._guid
+            workco.uworkers[data._guid].msgport.postMessage({
+                id: "targetreceive"
+                data: data
+            })
+    }
+    current.host.OnReplyHook(replyHook.proc)
+
     // ONtextOut
     // Process console text output by Naan.
     
@@ -79,6 +92,8 @@ closure workCurrent(workerID, startup, local current) {
     // Process message output.
     
     function ONmessageOut(data) {
+        if data._guid
+            return                                                          // already replied
         sendAll({
             id: "targetout",
             data: data
@@ -98,6 +113,7 @@ closure workCurrent(workerID, startup, local current) {
     // Notify all links that we have terminated.
     
     function exitNotify(exitCode, local link) {
+        workco.uworkers[current.guid] = undefined
         for link in current.links
             link.exitWorker(exitCode)
     }
@@ -157,7 +173,7 @@ closure workCurrent(workerID, startup, local current) {
             if !(linkref.link eq thislink)
                 linkref.responder(msg)
     }
-    
+
     //
     // vitalUpdate
     //
@@ -173,18 +189,94 @@ closure workCurrent(workerID, startup, local current) {
 
 
 /*
+ * workMainProxy
+ *
+ *     Make a nodejs proxy representing the main thread. This runs inside the worker and allows it
+ * to do remote execution with Main.
+ *
+ */
+
+closure workMainProxy(track, name, options, local target) {
+    global(js)
+    target = require("../running/executors.nlg").ExecutorBase(track, "mainProxy", name)
+    target.name = name
+
+    //
+    // target.PostMessage
+    //
+    //     Post a message to the main thread.
+    //
+    target.PostMessage = function PostMessage(data) {
+        js.t.DispatchMessage(data)
+        list(false, { posted: true })
+    }
+
+    //
+    // onreceive
+    //
+    //     Process a received message from the main thread, typically in response.
+    //
+    function onreceive(data) {
+        target.execReceived(data)
+    }
+    
+    // destroy
+    //
+    //     Destroy the execution instance.
+    //
+    target.destroy = function destroy() {
+        target.execClosed(Error("instance destroyed"))
+        track.delete(target)
+    }
+
+    js.t.OnReceive(onreceive.proc)
+    track.add(target)
+
+    // finis
+
+    list(false, target)
+};
+
+
+/*
+ * WorkerToMain
+ *
+ *     Connect our worker to the main thread, returning a result tuple with an executor representing
+ * Main. Use this to create a context object for Main, allowing remote evaluation.
+ *
+ */
+
+closure WorkerToMain(local nideRunning, track) {
+    // mainProxy -- link tracker to main thread proxy
+    function mainProxy(track, name, options) {
+        workMainProxy(track, name, options)
+    }
+
+    if !js.g {
+        error = Error("WorkerToMain only available in node workers")
+        return (list(error))
+    }
+    nideRunning = require("naanlib:frameworks/running/executors.nlg")
+    track = nideRunning.ExecutorTracker()
+    track.register(mainProxy, "proxy")
+    track.spawn("proxy")                                                    // returns result tuple
+};
+
+
+/*
  * workThread
  *
  *     Spawn a Naan worker in its own thread.
  *
  */
 
-closure workThread(workerID, startup, local worker, options, subChannel, deathWatcher) {
+closure workThread(workco, workerID, startup, local worker, options, subChannel, deathWatcher) {
     global(threads, JSpath)
     worker = new(object, this)
     worker.name = startup.name
     worker.workerID = workerID
     worker.links = []
+    worker.guid = UUID()
 
     // create our worker thread
 
@@ -207,6 +299,7 @@ closure workThread(workerID, startup, local worker, options, subChannel, deathWa
     // Notify all links that we have terminated.
     
     function exitNotify(exitCode, local link) {
+        workco.uworkers[worker.guid] = undefined
         for link in worker.links
             link.exitWorker(exitCode)
         worker.links = []
@@ -261,6 +354,12 @@ closure workThread(workerID, startup, local worker, options, subChannel, deathWa
             worker.msgport.postMessage(startmsg)
             worker.links[0].responder({                                     // only send this to first link
                 id: "started"                                               // don't want multiple initializers
+            }) }
+        else if msg.id == "targetsend" {
+            msg.data._guid = worker.guid
+            js.t.DispatchMessage({
+                id: "targetin"
+                data: msg.data
             }) }
         else {
             if msg.id == "status"
@@ -403,6 +502,7 @@ closure workController(api, local workco) {
     workco = new(object, this)
     workco.serverID = "Workers"                                             // our serverID, used for communications
     workco.workers = { }                                                    // dictionary of workers by workerID
+    workco.uworkers = { }                                                   // dictionary of workers by GUID
     workco.links = new(weakmap)
     api.Register(workco.serverID, workco)
     
@@ -487,9 +587,10 @@ closure workController(api, local workco) {
             else if message.workerOp == "spawn" {
                 if !worker {                                                // create worker if needed
                     if message.workerID == "NideServer"
-                        worker = workco.current = workCurrent(message.workerID, message.payload)
+                        worker = workco.current = workCurrent(workco, message.workerID, message.payload)
                     else
-                        worker = workThread(message.workerID, message.payload)
+                        worker = workThread(workco, message.workerID, message.payload)
+                    workco.uworkers[worker.guid] = worker
                     workco.workers[message.workerID] = worker }
                 if !link
                     makeLink(message, conn)                                 // make sure we have a link for responses
@@ -521,7 +622,7 @@ closure workController(api, local workco) {
                     return } }
             error = Error("invalid parameters", message.workerOp, message.workerID)
         }
-        call(makeSender(conn, message), "error", [error])
+        ErrorDebuglog("workController.wsReceive error:", error)
     }
     
     //
@@ -562,12 +663,13 @@ closure workController(api, local workco) {
  */
 
 function workInit(local manifest) {
-
-    manifest = `(workCurrent, workThread, workLink, workController, workInit)
+    manifest = `(workCurrent, workMainProxy, WorkerToMain, workThread, workLink, workController,
+        workInit)
 
     Naan.module.build(module.id, "worker", function(modobj, compobj) {
         require("./node.nlg")
         compobj.manifest = manifest
         modobj.exports.WorkerController = workController
+        modobj.exports.WorkerToMain = WorkerToMain
     })
 }();

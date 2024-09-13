@@ -1,0 +1,205 @@
+/*
+ * yc_apigateway.nlg
+ * serviceYC
+ *
+ *     Support for YC API Gateway and websockets.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Gateway
+ *
+ *     Handler for incoming websocket messages from the YC API Gateway.
+ *
+ */
+
+closure Gateway(local apig) {
+    global(https)
+    apig = new(object, this)
+
+    // open
+    //
+    // Initialize for a new gateway, but we don't know anything about it yet. This should ensure we
+    // can talk with the cloud, returning a result tuple. The first message that comes in will have
+    // headers that identify the gateway resource specifically.
+    //
+    apig.open = closure open() {
+        apig.ycvm = VmControl()
+    }
+
+    // close
+    //
+    // Close this handler because no more requests will come in.
+    //
+    apig.close = closure close() {
+        apig.ycvm = false
+    }
+
+    // requested
+    //
+    // A new websocket operation was requested. The ExpressJS request/response structures are passed.
+    //
+    // The requested return value for connect:
+    //  {
+    //      op: "connect"
+    //      connID: <string>
+    //      connAt: <integer>
+    //  }
+    // The requested return value for disconnect:
+    //  {
+    //      op: "disconnect"
+    //      connID: <string>
+    //      code: <integer>
+    //      reason: <string>
+    //  }
+    // The requested return value for message:
+    //  {
+    //      op: "message"
+    //      connID: <string>
+    //      message: <string>
+    //      contType: <string>
+    //  }
+    //
+    // Example request headers from /wsgw endpoint:
+    //  {
+    //      user-agent          : "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
+    //      accept-encoding     : "gzip",
+    //      accept-language     : "en-US,en;q=0.9,ru;q=0.8",
+    //      cache-control       : "no-cache",
+    //      host                : "tutorbe-1.ru-central1.internal",
+    //      origin              : "https://d5di07c52f5hpi7h8kb8.apigw.yandexcloud.net",
+    //      pragma              : "no-cache",
+    //      sec-websocket-extensions: "permessage-deflate; client_max_window_bits",
+    //      uber-trace-id       : "0000000000000000014a60f3326789e4:1a4ee8a332acff59:0:01",
+    //      x-api-gateway-function-id: "d4e16asgl4t3i2j1m7t4",
+    //      x-envoy-external-address: "64.201.120.56",
+    //      x-envoy-original-path: "/?guid=1a5d070b-6aaf-4421-aa66-b13d15a7eaa3",
+    //      x-forwarded-for     : "64.201.120.56",
+    //      x-forwarded-proto   : "https",
+    //      x-real-remote-address: "64.201.120.56",
+    //      x-request-id        : "ceaa9f57-4cb8-4fce-8081-c065b8073130",
+    //      x-serverless-certificate-ids: "{}",
+    //      x-serverless-gateway-id: "d5di07c52f5hpi7h8kb8",
+    //      x-trace-id          : "3e393eb7-4680-4d71-8b3d-824e5b768255",
+    //      x-yc-apigateway-websocket-connected-at: "1725131521366",
+    //      x-yc-apigateway-websocket-connection-id: "c05188b1jdifd7gsn7bqqochiv94l622u",
+    //      x-yc-apigateway-websocket-event-type: "CONNECT",
+    //      x-naanide-guid      : "1a5d070b-6aaf-4421-aa66-b13d15a7eaa3",
+    //      connection          : "close"
+    //  }
+    //
+    apig.requested = closure requested(req, res, local data, eventType) {
+        if !apig.gatewayID
+            apig.gatewayID = req.get("x-serverless-gateway-id")
+        data = {
+            connID: req.get("x-yc-apigateway-websocket-connection-id")
+            connAt: toint(req.get("x-yc-apigateway-websocket-connected-at"))
+            guid: req.get("x-naanide-guid") || undefined
+        }
+        eventType = req.get("x-yc-apigateway-websocket-event-type")
+        if eventType == "CONNECT" {
+            data.op = "connect"
+        }
+        else if eventType == "DISCONNECT" {
+            data.op = "disconnect"
+            data.code = req.get("X-Yc-Apigateway-Websocket-Disconnect-Status-Code")
+            data.reason = req.get("X-Yc-Apigateway-Websocket-Disconnect-Reason")
+        }
+        else if eventType == "MESSAGE" {
+            data.op = "message"
+            data.message = new(req.body)
+            data.contType = req.get('content-type')
+        } else
+            debuglog("serviceYC::Gateway.requested: invalid event type", eventType)
+        list(false, data)
+    }
+    
+    // send
+    //
+    // Send a websocket message via the API Gateway.
+    //
+    apig.send = closure send(connID, msg, local error, authHeader, data) {
+        `(error, authHeader) = apig.ycvm.authHeader()
+        if !string(msg)
+            msg = JSONstringify(msg)
+        data = {
+            data: EncodeBase64(msg)
+            type: "TEXT"                                                    // allegedly "BINARY" is an option
+        }
+        if !error
+            `(error, data) = https.HttpsApiRequest("https://apigateway-connections.api.cloud.yandex.net/apigateways/websocket/v1/connections/${connID}:send", {
+                method: "POST"
+                headers: [ authHeader ]
+                putdata: data
+                debug: true
+            })
+        if error {
+            ErrorDebuglog("serviceYC::Gateway.send failed:", error)
+            list(error)
+        } else
+            list(false, data)
+    }
+    
+    // get
+    //
+    // Get websocket connection status from the API Gateway.
+    //
+    apig.get = closure get(connID, local error, authHeader, data) {
+        `(error, authHeader) = apig.ycvm.authHeader()
+        if !error
+            `(error, data) = https.HttpsApiRequest("https://apigateway-connections.api.cloud.yandex.net/apigateways/websocket/v1/connections/${connID}", {
+                method: "GET"
+                headers: [ authHeader ]
+            })
+        if error {
+            ErrorDebuglog("serviceYC::Gateway.get failed:", error)
+            list(error)
+        } else
+            list(false, data)
+    }
+    
+    // disconnect
+    //
+    // Disconnect a websocket connection from the API Gateway.
+    //
+    apig.disconnect = closure disconnect(connID, local error, authHeader, data) {
+        `(error, authHeader) = apig.ycvm.authHeader()
+        if !error
+            `(error, data) = https.HttpsApiRequest("https://apigateway-connections.api.cloud.yandex.net/apigateways/websocket/v1/connections/${connID}", {
+                method: "DELETE"
+                headers: [ authHeader ]
+            })
+        if error {
+            ErrorDebuglog("serviceYC::Gateway.disconnect failed:", error)
+            list(error)
+        } else
+            list(false, data)
+    }
+
+    // finis
+    
+    apig
+};
+
+
+/*
+ * ycagInit
+ *
+ *     Initialize the YC module.
+ *
+ */
+
+function ycagInit(local manifest) {
+    manifest = `(Gateway, ycagInit)
+
+    Naan.module.build(module.id, "yc_apigateway", function(modobj, compobj) {
+        require("./yc_vm.nlg")
+        compobj.manifest = manifest
+        module.exports.Gateway = Gateway
+    })
+} ();

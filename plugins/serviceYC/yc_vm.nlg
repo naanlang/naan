@@ -1,0 +1,207 @@
+/*
+ * yc_vm.nlg
+ * serviceYC
+ *
+ *     YC VM inquiry and control.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024 by Richard C. Zulch
+ *
+ */
+
+vmState = false;
+
+/*
+ * VmControl
+ *
+ * When run on a YC VM instance, this class can acquire useful VM information and perform selected
+ * operations. At the present time it can obtain the identity document with instanceID, auth token,
+ * and shut down the VM.
+ *
+ */
+
+closure VmControl(local ycvm) {
+    global(https, nodeHttp, vmState)
+    if vmState.ycvm
+        return (vmState.ycvm)                                               // singleton
+    ycvm = new(object, this)
+    vmState = new(nonce)                                                    // don't save with state
+    vmState.ycvm = ycvm
+
+    // httpLocalRequest
+    //
+    // Make a simple GET request for the Docker's 169.254.169.254 metadata interface. This is not
+    // supported by the standard NaaN framework HttpsApiRequest because it is HTTP and returns JSON
+    // without bothering to set a contentType advising this.
+    //
+    
+    closure httpLocalRequest(url, params, local pending, chunks, request) {
+        pending = new(nonce)
+        chunks = []
+        request = nodeHttp.request(url, params, closure (response) {
+            response.on("data", function (chunk) {
+                chunks.push(chunk)
+            })
+            response.on("end", function (local content, error) {
+                content = js.g.Buffer.concat(chunks)
+                if response.statusCode < 200 || response.statusCode >= 299 {    // 299 is "cancelled"
+                    debuglog("httpRequest status:", url, response.statusCode, "message:", content)
+                    pending.signal(list(Error("httpRequest statusCode:", url, response.statusCode, {
+                        status: response.statusCode
+                    }), false, { status: response.statusCode }))
+                    return
+                }
+                if response.complete {
+                    try {
+                        content = js.g.JSON.parse(content.toString())
+                    } catch {
+                        error = Error("httpRequest decode:", url, exception)
+                    }
+                }
+                else
+                    error = Error("httpRequest terminated prematurely:", url, response.statusCode)
+                pending.signal(list(error, content, {
+                    headers: response.headers
+                    status: response.statusCode
+                    contentType: response.headers["content-type"]
+                }))
+            })
+        })
+        request.on("error", function hre(error) {
+            debuglog("httpRequest error:", url, "error:", error)
+            error = Error("httpRequest failed:", url, error)
+            pending.signal(list(error))
+        })
+        request.end()
+        pending.wait()
+    }
+
+    // getIdentityDoc
+    //
+    // Ask the VM for its identity document. This information does not change.
+    //
+    // How to get instanceID from "identity document":
+    //  curl -H Metadata-Flavor:Google 169.254.169.254/computeMetadata/v1/instance/vendor/identity/document
+    //      {"instanceId":"epd15j0nbbp0mgs9p9ra","productCodes":null,"imageId":"fd8ru2jkl1laurb1emo7", \
+    //      "productIds":["f2eo49853qme9iril0tp"],"createdAt":"2024-06-15T18:12:50Z","version":"2023-03-01"}
+    //
+    closure getIdentityDoc(local error, idDoc) {
+        if ycvm.idDoc
+            return (list(false, ycvm.idDoc))
+        `(error, idDoc) = httpLocalRequest("http://169.254.169.254/computeMetadata/v1/instance/vendor/identity/document", {
+            headers: {
+                "Metadata-Flavor": "Google"
+            }
+        })
+        if error
+            list(error)
+        else
+            list(false, ycvm.idDoc = idDoc)
+    }
+
+    // getAuthDoc
+    //
+    // Ask the VM for an auth token so we can call YC APIs using the VM's permissions. This expires
+    // so we keep track of when to call it again.
+    //
+    // How to get auth token:
+    //  curl -H Metadata-Flavor:Google 169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token
+    //      {"access_token":"t1.9euelZqVjY2Tk8rIlYyQnpGPjZbJmO3rnpWazpqcmJ6dnJKLzoqKlJeOmpHl9PdVKkhM-e8lZC_l3fT \
+    //      3FVlFTPnvJWQv5c3n9euelZqLlJaSnZaUypaYzc_Pnc2Mme_8xeuelZqLlJaSnZaUypaYzc_Pnc2Mmb3rnpWanZ2WnpaPysfNzc \
+    //      eUy8zOmI-13oac0ZyQko-Ki5rRi5nSnJCSj4qLmtKSmouem56LntKMng.-wi4CzEJbPX5ume3Ma_P7nZG-g0YRCQ2P4l2koIRYV \
+    //      drsy9QGHR5JEx2zD--xtvXGBBCbZNo-I41GdjEb_IPCg","expires_in":41998,"token_type":"Bearer"}
+    //
+    closure getAuthDoc(local now, error, authDoc, expireTime) {
+        now = milliseconds()
+        if ycvm.authDoc && ycvm.authDocExpire > milliseconds()
+            return (list(false, ycvm.authDoc))                              // use cached credential
+        `(error, authDoc) = httpLocalRequest("http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token", {
+            headers: {
+                "Metadata-Flavor": "Google"
+            }
+        })
+        if authDoc {
+            expireTime = now + (authDoc.expires_in - 3600) * 1000           // give us 1 hour of margin
+            if !expireTime || expireTime < now + 3600000 {                  // if not at least one hour from now
+                debuglog("YcVmControl.getAuthDoc: invalid credential expires_in", authDoc.expires_in)
+                expireTime = now + 3600000
+            }
+            ycvm.authDocExpire = expireTime
+            ycvm.authDoc = authDoc
+        }
+        if error
+            list(error)
+        else
+            list(false, authDoc)
+    }
+    
+    // authHeader
+    //
+    // Return authorization header for the VM to be used in API requests to YC, as a result tuple.
+    // The returned header is a list: (`Authorization, "Bearer <token>")
+    //
+    ycvm.authHeader = closure authHeader(error, authDoc) {
+        `(error, authDoc) = getAuthDoc()
+        if error
+            list(error)
+        else
+            list(false, list(`Authorization, "${authDoc.token_type} ${authDoc.access_token}"))
+    }
+    
+    // shutdownVM
+    //
+    // Tell YC to shutdown our VM.
+    //
+    //  curl -X POST -H "Authorization:Bearer <token>" \
+    //      https://compute.api.cloud.yandex.net/compute/v1/instances/epd15j0nbbp0mgs9p9ra:stop
+    //  {
+    //      "done": false,
+    //      "metadata": {
+    //          "@type": "type.googleapis.com/yandex.cloud.compute.v1.StopInstanceMetadata",
+    //          "instanceId": "epd15j0nbbp0mgs9p9ra"
+    //      },
+    //      "id": "epdnbllb1cgtmukpt1aq",
+    //      "description": "Stop instance",
+    //      "createdAt": "2024-06-15T19:47:40.315889611Z",
+    //      "createdBy": "aje1ecgabcmt1uukhqen",
+    //      "modifiedAt": "2024-06-15T19:47:40.315889611Z"
+    //  }
+    //
+    ycvm.shutdownVM = closure shutdownVM(local error, idDoc, header, data) {
+        `(error, idDoc) = getIdentityDoc()
+        if !error
+            `(error, header) = authHeader()
+        if !error
+            `(error, data) = https.HttpsApiRequest("https://compute.api.cloud.yandex.net/compute/v1/instances/${idDoc.instanceId}:stop", {
+                method: "POST"
+                headers: [ header ]
+            })
+        if error
+            list(error)
+        else
+            list(false, data)
+    }
+
+    // finis
+    
+    ycvm
+};
+
+
+/*
+ * ycvmInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function ycvmInit(local manifest) {
+    manifest = `(vmState, VmControl, ycvmInit)
+
+    Naan.module.build(module.id, "yc_vm", function(modobj, compobj) {
+        require("./serviceYC.nlg")
+        compobj.manifest = manifest
+        module.exports.VmControl = VmControl
+    })
+} ();

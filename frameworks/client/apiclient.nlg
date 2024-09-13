@@ -22,7 +22,9 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
     global()
     client = new(object, this)
     if !url.match(RegExp("^https?:\/\/", "i"))
-        url = "http://${url}"
+        url = "http://${url}"                                               // a protocol is required
+    if url.slice(-1) != "/"
+        url = url.concat("/")                                               // must end in "/"
     client.url = url
     client.guid = guid
     client.notifyAfter = 0
@@ -42,7 +44,7 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
     //
 
     client.docs = closure docs(local error, content, extra) {
-        `(error, content, extra) = clientRequest(url.concat("/"))
+        `(error, content, extra) = clientRequest(url)
         printline(content)
     }
 
@@ -51,7 +53,7 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
     //
 
     client.status = closure status(cbStatus, timeoutms, local query, error, content, extra, queued) {
-        query = EncodeQuery("/status/?", {
+        query = EncodeQuery("status/?", {
             timeout: timeoutms
             after: client.notifyAfter
         })
@@ -75,7 +77,7 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
     //
 
     client.get = closure get(path, options, local error, content, extra) {
-        `(error, content, extra) = clientRequest(url.concat("/", path))
+        `(error, content, extra) = clientRequest(url.concat(path))
         if !error && extra.status != 200
             error = Error("readFile failed: ".concat(extra.status), {
                     status: extra.status
@@ -91,7 +93,7 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
     //
 
     client.readFile = closure readFile(filepath, options, local query, error, content, extra) {
-        query = EncodeQuery("/readfile/?", {
+        query = EncodeQuery("readfile/?", {
             path: filepath
         })
         `(error, content, extra) = clientRequest(url.concat(query), options)
@@ -112,7 +114,7 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
 
     client.psmRemote = closure psmRemote(options, data, callback, 
         local query, reqOptions, error, content, extra) {
-        query = EncodeQuery("/psm/?", options)
+        query = EncodeQuery("psm/?", options)
         reqOptions = {
             putdata: data
         }

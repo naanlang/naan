@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2022 by Richard C. Zulch
+ * Copyright (c) 2017-2024 by Richard C. Zulch
  *
  */
 
@@ -223,7 +223,17 @@ exports.NaanControllerWeb = function() {
         }, 1);
     };
 
+    var replyHook;
+    this.OnReplyHook = function OnReplyHook(proc) {
+        replyHook = proc;
+        return (proc);
+    };
+
     this.ReplyMessage = function ReplyMessage(data) {                       // "remote" -> "local"
+        if (replyHook)
+            setTimeout(function() {
+                replyHook(data);
+            }, 1);
         termlist.forEach(function(term) {
             if (term.OnMessageOut)
                 term.OnMessageOut(data);

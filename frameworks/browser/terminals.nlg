@@ -10,6 +10,13 @@
  *
  */
 
+/*
+ * globals
+ *
+ */
+
+workers;
+
 
 /*
  * TermHost
@@ -55,17 +62,19 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
 
     // connect
     // Connect with the host if not already connected.
-    closure connect(local host, url, pending) {
+    closure connect(local url, pending) {
         if target.ws
             return(list(false, { connected: true }))
-        host = xnew(window.URL, api.url).host
-        if !host || host == ""
-            return(list(Error("invalid URL ${api.url}")))
-        if window.location.protocol == "https:"
-            url = "wss://${host}"
+        try {
+            url = xnew(window.URL, api.url)
+        } catch {
+            return(list(Error("invalid URL ${api.url}", exception)))
+        }
+        if url.protocol == "https:"
+            url.protocol = "wss:"
         else
-            url = "ws://${host}"
-        target.ws = xnew(window.WebSocket, url)
+            url.protocol = "ws:"
+        target.ws = xnew(window.WebSocket, url.href)
         pending = new(nonce)
 
         // onopen
@@ -422,7 +431,9 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
 
 closure TermLocal(track, name, options, local target, nlregex, listener)
 {
-    global(js, window)
+    global(js, window, workers)
+    if !dictionary(workers)
+        workers = {}
     options = merge({
         type: "Local"
     }, options)
@@ -450,6 +461,8 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
             return (list(Error("Local environment does not support workers")))
         target.worker = xnew(window.Worker, "env_webworker.js")
         listener = target.worker
+        target.guid = UUID()
+        workers[target.guid] = target
     }
 
     // onmessage
@@ -540,8 +553,11 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
                     altcmd: options.startup.initcmds
                 })
             target.started = true
+        } else if msg.id == "targetsend" {
+            msg.data._guid = target.guid
+            js.t.DispatchMessage(msg.data)
         }
-    }
+     }
     
     //
     // target.DebugCmd
@@ -652,6 +668,82 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
 
 
 /*
+ * termMainProxy
+ *
+ * column positioning:                          //                          //                      !
+ *     Make a browser proxy representing the main thread. This runs inside the worker and allows it
+ * to do remote execution with Main.
+ *
+ */
+
+closure termMainProxy(track, name, options, local target) {
+    global(js)
+    target = require("../running/executors.nlg").ExecutorBase(track, "mainProxy", name)
+    target.name = name
+
+    //
+    // target.PostMessage
+    //
+    //     Post a message to the main thread.
+    //
+    target.PostMessage = function PostMessage(data) {
+        js.t.DispatchMessage(data)
+        list(false, { posted: true })
+    }
+
+    //
+    // onreceive
+    //
+    //     Process a received message from the main thread, typically in response.
+    //
+    function onreceive(data) {
+        target.execReceived(data)
+    }
+    
+    // destroy
+    //
+    //     Destroy the execution instance.
+    //
+    target.destroy = function destroy() {
+        target.execClosed(Error("instance destroyed"))
+        track.delete(target)
+    }
+
+    js.t.OnReceive(onreceive.proc)
+    track.add(target)
+
+    // finis
+
+    list(false, target)
+};
+
+
+/*
+ * WorkerToMain
+ *
+ *     Connect our worker to the main thread, returning a result tuple with an executor representing
+ * Main. Use this to create a context object for Main, allowing remote evaluation.
+ *
+ */
+
+closure WorkerToMain(local nideRunning, track) {
+    // mainProxy -- link tracker to main thread proxy
+    function mainProxy(track, name, options) {
+        termMainProxy(track, name, options)
+    }
+
+    if !js.s {
+        error = Error("WorkerToMain only available in browser workers")
+        return (list(error))
+    }
+    nideRunning = require("frameworks/running/executors.nlg")
+    track = nideRunning.ExecutorTracker()
+    track.register(mainProxy, "proxy")
+    track.spawn("proxy")                                                    // returns result tuple
+};
+
+
+/*
  * findIDEtarget
  *
  *     Find a target for our IDE that matches the specified name, workerID, and naancont.
@@ -677,7 +769,7 @@ closure findIDEtarget(track, name, workerID, naancont, local target) {
  */
 
 closure termIDE(track, name, workerID, naancont, title, local target, connected) {
-    global()
+    global(workers)
     target = findIDEtarget(track, name, workerID, naancont)
     if target {                                                             // new naancont on existing target
         target.updateController(naancont)
@@ -691,23 +783,31 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     target.workerID = workerID
     target.naancont = naancont
     connected = []
-
+    
+    // replyHook
     //
+    //     Intercept the ReplyMessage function to see if we should handle it.
+    //
+    function replyHook(data) {
+        if data._guid
+            workers[data._guid].worker.postMessage({
+                id: "targetreceive"
+                data: data
+            })
+    }
+
     // target.DebugCmd
     //
     //     Post a debug command to the target, ourselves.
     //
-
     target.DebugCmd = function DebugCmd(data) {
         naancont.DispatchDebugger(data)
     }
 
-    //
     // target.PostMessage
     //
     //     Post a message to the target, ourselves.
     //
-
     target.PostMessage = function PostMessage(data) {
         naancont.DispatchMessage(data)
         list(false, { posted: true })
@@ -716,7 +816,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     // termAttach
     //
     // Create a closure for an attaching terminal.
-
+    //
     target.termAttach = closure termAttach(term, db, statusCB, local connection, inbound) {
         connection = new(object, this)
 
@@ -793,7 +893,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     // updateController
     //
     //     Update the naan controller on this target, which means updating for all the terminals.
-    
+    //
     target.updateController = function updateController(newnc, local conn) {
         naancont = newnc
         target.naancont = newnc
@@ -811,7 +911,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     // vsiteRefresh
     //
     //     The vsite upon which we are based has changed.
-    
+    //
     target.vsiteRefresh = function vsiteRefresh(url_origin) {
         naancont.VsiteRefresh(url_origin)
     }
@@ -819,12 +919,13 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     // destroy
     //
     //     Destroy the execution instance.
-    
+    //
     target.destroy = function destroy() {
         target.execClosed(Error("instance destroyed"))
         track.delete(target)
     }
 
+    js.t.OnReplyHook(replyHook.proc)
     track.add(target)
 
     // finis
@@ -868,13 +969,14 @@ closure termInstallVirtualWatcher(track, naancont) {
  */
 
 function termInit(local manifest) {
-
-    manifest = `(TermHost, TermLocal, findIDEtarget, termIDE, termInstallVirtualWatcher, termInit)
+    manifest = `(TermHost, TermLocal, termMainProxy, WorkerToMain, findIDEtarget, termIDE,
+        termInstallVirtualWatcher, termInit)
 
     Naan.module.build(module.id, "terminals", function(modobj, compobj) {
         require("./browser.nlg")
         compobj.manifest = manifest
         modobj.exports.TermLocal = TermLocal
         modobj.exports.TermHost = TermHost
+        modobj.exports.WorkerToMain = WorkerToMain
     })
 } ();

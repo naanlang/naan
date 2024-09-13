@@ -234,7 +234,10 @@ closure ScopedServiceWorker(pubID, pubVersion, callback, local scoper, result) {
     scoper = new(object, ScopedServiceWorker)
     scoper.scopes = {}
     scoper.serv = ServiceWorker(pubID, pubVersion)
-    result = scoper.serv.register("/", closure(error, data, local response, filepath, scope) {
+    scoper.root = js.r("path").dirname(js.w.location.pathname)              // normally "/", but could be subfolder
+    if scoper.root.slice(-1) != "/"
+        scoper.root = scoper.root.concat("/")                               // must end in "/"
+    result = scoper.serv.register(scoper.root, closure(error, data, local response, filepath, scope) {
         if data.message == "fetch" {
             response = {
                 id: "response"

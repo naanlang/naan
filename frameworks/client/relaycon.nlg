@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023 by Richard C. Zulch
+ * Copyright (c) 2023-2024 by Richard C. Zulch
  *
  */
 
@@ -80,6 +80,8 @@ closure RelayCon(host, secret, options, local relay, nlregex)
             onmessage: onmessage
             onerror: onerror
             onclose: onclose
+            query: undefined                                                // don't put secret on unsecure connections
+            querys: secret && EncodeQuery("?", { guid: secret })
         })
         result = relay.wscon.connect()
         if !result.0

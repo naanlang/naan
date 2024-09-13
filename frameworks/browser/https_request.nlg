@@ -24,6 +24,7 @@
  *      encoding:       <string>                // "binary" to receive binary data as arrayBuffer
  *      range:          <string>                // sets range header
  *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
+ *      keepalive:      <boolean>               // true to send data at unload
  *      debug:          <boolean>               // log errors and status results
  *  }
  *
@@ -55,6 +56,7 @@ closure HttpsApiRequest(url, options,
         headers: { }
         redirect: 'follow'
         referrerPolicy: 'no-referrer'
+        keepalive: options.keepalive || undefined
     }
     if options.method
         fetchOptions.method = options.method

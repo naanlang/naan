@@ -1,0 +1,36 @@
+openapi: 3.0.0
+info:
+  title: tutor-backend API
+  version: 1.0.0
+servers:
+- url: https://d5dhrgakpe39e11lqefr.apigw.yandexcloud.net
+paths:
+  /{proxy+}:
+    options:
+      parameters:
+      - name: proxy
+        in: path
+        required: true
+        schema:
+          type: string
+      x-yc-apigateway-integration:
+        type: dummy
+        http_code: 200
+        http_headers:
+          Access-Control-Allow-Headers: "*"
+          Access-Control-Allow-Methods: "DELETE,GET,HEAD,OPTIONS,PATCH,POST,PUT"
+          Access-Control-Allow-Origin: "*"
+        content:
+          "application/json": ""
+    x-yc-apigateway-any-method:
+      parameters:
+      - name: proxy
+        in: path
+        required: true
+        schema:
+          type: string
+      x-yc-apigateway-integration:
+        type: cloud_functions
+        function_id: d4ehjjcfk8ffe43o5t7j
+        tag: $latest
+        service_account_id: ajeuftvbtshn348ert80

@@ -83,7 +83,16 @@ closure APIServer(options, local server, chroot) {
         if server.guid
             server.oururl = server.oururl.concat("?guid=", server.guid)
         App.api = server                                                    // used remotely by client/relaycon.nlg
-        server.ws = WebSocketServer(server)
+        if options.gateway {                                                // processes at /wsgw endpoint
+            server.ws = WebSocketGatewayServer()
+            `(error) = server.ws.open(server, options.gateway)
+            if error {
+                error = Error("APIServer: cannot establish websocket gateway", options.gateway, error)
+                ErrorDebuglog(error)
+                return (list(error))
+            }
+        } else                                                              // default is native websocket protocols
+            server.ws = WebSocketServer(server)
         WesRelay(server)                                                    // registers as subsystem
         server.psm = psmServerMod.MakeServerPSM(server, options.name)
         `(error, hostfs) = server.psm.conns.NodeFS.connect("Host", "NideFS", list(""))
@@ -267,7 +276,7 @@ closure APIServer(options, local server, chroot) {
 
     server.app.all("/psm", closure(req, res, local guid) {
         guid = req.get("x-naanlang-api-guid")
-        if server.guid && guid != server.guid && req.method !== "OPTIONS"
+        if server.guid && guid != server.guid
             res.status(403).send("unauthorized")
         else if !server.hostfs
             res.status(503).send("host filesystem not available")
@@ -275,9 +284,184 @@ closure APIServer(options, local server, chroot) {
             server.hostfs.api(req, res)
     })
 
+    //  "/wsgw"
+
+    server.app.all("/wsgw", closure(req, res) {
+        if !server.ws.requested
+            res.status(503).send("websocket gateway not available")
+        else
+            server.ws.requested(req, res)
+        res.set('Content-Type', 'application/json')
+        res.status(200).send("")
+    })
+
     // finis
 
     server
+};
+
+
+/* 
+ * WebSocketGatewayServer
+ *
+ * Process websocket operations forwarded by an API Gateway. This connects to the specified gateway
+ * component to process the details.
+ *
+ * Gateway handler methods:
+ *      handler = Gateway(server)               -- constructor, returns gateway object
+ *      `(error) = open(wsgate)                 -- initialize for any API Gateway
+ *      `(error, data) = requested(req, res)    -- process incoming requests
+ *      `(error) = send(connID, message)        -- send a message
+ *      close()                                 -- close the gateway for all connections
+ *
+ */
+
+closure WebSocketGatewayServer(local wsgate) {
+    wsgate = new(object, this)
+    wsgate.conns = {}                                                       // our connections indexed by connID
+    wsgate.subsystems = { }                                                 // registered subsystems
+
+    // open
+    //
+    // Open the server with the specified gateway.
+    //
+    wsgate.open = closure open(server, gatewayPath) {
+        try {
+            wsgate.handler = require(gatewayPath).Gateway(server)
+            result = wsgate.handler.open()
+            if result.0
+                return (list(result.0))
+        } catch {
+            return (list(exception))
+        }
+        wsgate.guid = server.guid
+        list(false, { ok: true })
+    }
+
+    // requested
+    //
+    // We have an incoming request translated from WS by the API Gateway. This finds out from our
+    // gateway handler the client this pertains to and connects/disconnects/messages as appropriate.
+    //
+    wsgate.requested = closure requested(req, res, local error, data, conn, message) {
+        // reqOpen
+        // Get our connection or make one.
+        function reqOpen(connID) {
+            conn = wsgate.conns[connID]
+            if !conn {
+                conn = WebSocketConn(wsgate, connID)
+                wsgate.conns[connID] = conn
+                for serverID in wsgate.subsystems
+                     wsgate.subsystems[serverID].wsOpen(conn)
+            }
+            conn
+        }
+
+        `(error, data) = wsgate.handler.requested(req, res)
+        if data.op == "connect"
+            conn = reqOpen(data.connID)
+        else if data.op == "message"
+            reqOpen(data.connID).msgin(data.message)
+        else if data.op == "disconnect" {
+            conn = wsgate.conns[data.connID]
+            wsgate.conns[data.connID] = undefined
+            if conn {
+                conn.close(data.code, data.reason)
+                for serverID in wsgate.subsystems
+                    wsgate.subsystems[serverID].wsClose(conn)
+            }
+        }
+    }
+    
+    // close
+    //
+    // Respond to server closing.
+    //
+    wsgate.close = function close(conn, local serverID) {
+        wsgate.handler.close()
+        wsgate.handler = false
+        for serverID in wsgate.subsystems
+            wsgate.subsystems[serverID].wsClose()
+    }
+
+    // finis
+    wsgate
+};
+
+
+/*
+ * WebSocketConn
+ *
+ *     WebSocketConn objects represent a connection with a particular client. These are created when
+ * a new client connects. The protocol is JSON with the top level being a dictionary having the
+ * following static keys specified by the client:
+ *     serverID:    defined by the server, this string defines where requests should be routed.
+ *     clientID:    defined by the client, this string defines where replies should be sent.
+ * These are class (code) designators. Further keys can be defined to identify a specific instance on
+ * the client or server.
+ *
+ */
+
+closure WebSocketConn(wsgate, connID, local wsconn) {
+    global()
+    wsconn = new(object, this)
+    wsconn.info = {
+        destID: UUID()
+    }
+
+    // msgin
+    //
+    // This finds the appropriate target for an incoming message, which can be a relay message that
+    // we send on to the next node on the network.
+    //
+    wsconn.msgin = closure msgin(message, local error) {
+        if wsgate.guid && message.guid != wsgate.guid
+            error = Error("unauthorized")
+        else if message.init {
+            if message.init.destID {
+                wsconn.relay = true
+                wsgate.subsystems.Relay.wsChangeDestID(conn, wsconn.info.destID, message.init.destID)
+            }
+            wsconn.info = merge(wsconn.info, message.init)
+        }
+        else if message.respOp && wsgate.subsystems.Relay
+            wsgate.subsystems.Relay.wsReceive(message, wsconn)          // with respOp, must be a relay
+        else if message.clientID && wsgate.subsystems[message.serverID]
+            wsgate.subsystems[message.serverID].wsReceive(message, wsconn)
+        else
+            error = Error("can't route message")
+        if error
+            ErrorDebuglog("WebSocketConn.msgin error:", error)
+    }
+
+    // on close
+    //
+    // Connection has closed.
+    //
+    wsconn.close = closure close(code, reason) {
+        if code != 1000 && code != 1001 && code != 1005 && code != 1006
+            debuglog("WebSocketConn: connection has closed:", code, reason, JSONstringify(wsconn.info))
+        wsconn.closed = {
+            code: code
+            reason: reason
+        }
+    }
+
+    // send
+    //
+    // Send a dictionary, which must have a clientID defined.
+    //
+    wsconn.send = function send(message) {
+        if !message.clientID || !message.serverID
+            throw("WebSocketConn.send: client and server IDs required")
+        if wsgate.closed
+            list(Error("cannot send - websocket closed"))
+        wsgate.handler.send(connID, JSONstringify(message))
+        list(false, { ok: true })
+    }
+
+    // finis
+    wsconn
 };
 
 
@@ -322,8 +506,9 @@ closure WebSocketServer(server, local websocks) {
     })
 
     // closeConn
+    //
     // respond to connection closing
-
+    //
     websocks.closeConn = function closeConn(conn, local serverID) {
         websocks.conns = websocks.conns.filter(function(item) {
             item !== conn
@@ -641,7 +826,8 @@ function apisLoadLibs() {
 };
 
 function ApisInit(local manifest) {
-    manifest = `(APIServer, WebSocketServer, WesCon, WesRelay, apisLoadLibs, ApisInit)
+    manifest = `(APIServer, WebSocketGatewayServer, WebSocketConn, WebSocketServer, WesCon, WesRelay,
+        apisLoadLibs, ApisInit)
 
     Naan.module.build(module.id, "apiserver", function(modobj, compobj) {
         require("./node.nlg")

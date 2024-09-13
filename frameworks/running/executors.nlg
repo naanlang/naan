@@ -56,9 +56,11 @@ closure ExecutorBase(track, type, name, local exec) {
     
     exec.execReceived = closure execReceived(data, local pending) {
         pending = exec.pending[data.xid]
-        if !pending {
+        if !pending {                                                       // not waiting on message
             if data.xmsg == "xready"
                 exec.pending.ready = true
+            if data.xmsg == "xattention"
+                { }
             return
         }
         exec.pending[data.xid] = undefined

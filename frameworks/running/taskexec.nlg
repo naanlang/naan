@@ -28,12 +28,16 @@ closure TaskDispatcher(replier, local contexts, gohome, util) {
         reply = {
             xmsg: "error"
             xid: data.xid
+            _guid: data._guid || undefined
             error: "unknown operation"
         }
         try {
             restorens = makeActivator()
             if data.xmsg == "xstart"
-                reply = { xmsg: "xready" }                                  // ready to accept messages
+                reply = {                                                   // ready to accept messages
+                    xmsg: "xready"
+                     _guid: data._guid || undefined
+                }
             else if data.xmsg == "register" {
                 //
                 // register a new context to default namespace
