@@ -16,6 +16,17 @@
  *
  *     Make an API server object.
  *
+ * Options:
+ *  {
+ *      name:           <string>                // server name (default "NaanServer")
+ *      abspath:        <string>                // absolute pathname for web root
+ *      relpath:        <string>                // web root pth relative to js.d
+ *      fixedPort:      <number>                // fixed
+ *      basePort:       <number>                // starting point for search
+ *      gateway:        <string>                // websocket gateway URL
+ *      statics:        [<string>, ...]         // search paths for static content
+ *  }
+ *
  */
 
 closure APIServer(options, local server, chroot) {
@@ -30,7 +41,10 @@ closure APIServer(options, local server, chroot) {
         relpath: ""
         name: "NaanServer"
     }, options)
-    chroot = JSpath.join(js.d, options.relpath)
+    if options.abspath
+        chroot = options.abspath
+    else
+        chroot = JSpath.join(js.d, options.relpath)
     server.root = chroot
 
     // updatePort

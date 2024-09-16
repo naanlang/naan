@@ -640,7 +640,7 @@ exports.NaanControllerWeb = function() {
     if (querystrings["restart"] || !loadLocal())
     {                                                                       // don't load state or can't load state
         naanlib.banner();
-        var hostpath = naanlib.js.r("path").dirname(window.location.href);
+        var hostpath = window.location.origin.concat(naanlib.js.r("path").dirname(window.location.pathname));
         naanlib.start({
             cmd: 'App.version = "$Version$";;\r\n'
                 + 'App.cache = "$CacheBuster$";;\r\n'

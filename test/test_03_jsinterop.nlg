@@ -35,11 +35,11 @@ RegisterTestCategory("JSinterop", [
 
     [ "o(3);", {
         "dev": { errors: "xcall \"[object Object]\": TypeError: object.apply is not a function" }
-        "prod": { errors: "xcall \"[object Object]\": TypeError: e[3].apply is not a function" }
+        "prod": { errors: "xcall \"[object Object]\": TypeError: r[3].apply is not a function" }
     }[    "prod"]],
     [ "o(Number);", {
         "dev": { errors: "xcall \"[object Object]\": TypeError: object.apply is not a function" }
-        "prod": { errors: "xcall \"[object Object]\": TypeError: e[3].apply is not a function" }
+        "prod": { errors: "xcall \"[object Object]\": TypeError: r[3].apply is not a function" }
     }[    "prod"]],
     [ "Number(3);", "[Number 3]" ],
     [ "Number(3).toString();", "\"3\"" ],

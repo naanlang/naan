@@ -1298,6 +1298,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //
     build.increment = closure increment(newnum, local error, filecon, buildnum) {
         build.buildnum = undefined
+        if !build.buildnopath
+            return (list(false, { version: false }))
         `(error, filecon) = fs.readFile(build.buildnopath)
         if !error
             buildnum = toint(filecon.trim())

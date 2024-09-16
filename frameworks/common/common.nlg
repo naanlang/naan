@@ -19,6 +19,7 @@
  */
 
 function EncodeQuery(prefix, items, local result, item) {
+    global()
     result = []
     for item in items
         result.push(EncodeURIComponent(item).concat("=", EncodeURIComponent(items[item])))
@@ -38,6 +39,7 @@ function EncodeQuery(prefix, items, local result, item) {
  */
 
 function DecodeQuery(text, local output, rpreg, qarr, item, pair) {
+    global()
     output = {}
     rpreg = RegExp("\\+", "g")
     qarr = text.split("&")
@@ -62,6 +64,7 @@ function DecodeQuery(text, local output, rpreg, qarr, item, pair) {
  */
 
 function ContentTypeFromFileExt(filepath, local mimeType, encoding) {
+    global(JSpath)
     mimeType = {
         "css":  "text/css",
         "csv":  "text/csv",
@@ -103,6 +106,7 @@ function ContentTypeFromFileExt(filepath, local mimeType, encoding) {
  */
  
 function UUID(local rando) {
+    global(RandomBytes)
     if !RandomBytes
         return (false)
     rando = RandomBytes(36)                                                 // length of UUID
@@ -128,6 +132,7 @@ function UUID(local rando) {
  */
 
 function VersionCheck(testv, refv, local rxver, test, ref) {
+    global()
     rxver = RegExp("([0-9]+)[.]([0-9]+)[.]([0-9]+)-?[A-Za-z_]*[+]?([0-9]+)")
     function numerify(x){ Number.parseInt(x) }
     test = testv.match(rxver).map(numerify.proc)
@@ -147,6 +152,7 @@ function VersionCheck(testv, refv, local rxver, test, ref) {
  */
 
 function JsonParse(data) {
+    global(exception)
     try {
         data = JSONparse(data)
         list(false, data)
@@ -165,6 +171,7 @@ function JsonParse(data) {
  */
 
 function JsonStringify(data) {
+    global(exception)
     try {
         data = JSONstringify(data)
         list(false, data)
@@ -185,15 +192,18 @@ function JsonStringify(data) {
 
 jsScripts = { };                                                            // script values become false on reload
  
-closure JsLoadScript(libpath, globalID, local scriptTag, fpath) {
+closure JsLoadScript(libpath, globalID, local savens, fpath, hostpath, pending, scriptTag) {
+    global(jsScripts, js, JSpath)
     if jsScripts[libpath]
         return                                                              // already loaded
+    savens = nsactive()
     if libpath.startsWith("/")
         fpath = libpath
     else
         fpath = "/".concat(libpath)
+    hostpath = js.w.location.origin.concat(JSpath.dirname(js.w.location.pathname))
     if js.s.importScripts && tostring(js.s.importScripts) == "[Function importScripts]" {
-        fpath = JSpath.dirname(js.w.location.href).concat(fpath)
+        fpath = hostpath.concat(fpath)
         try {
             js.s.importScripts(fpath)                                       // load in worker context
             jsScripts[libpath] = js.s[globalID]
@@ -204,7 +214,7 @@ closure JsLoadScript(libpath, globalID, local scriptTag, fpath) {
     } else if js.w {                                                        // load in browser context
         pending = new(nonce)
         scriptTag = js.w.document.createElement("script")
-        scriptTag.src = JSpath.dirname(js.w.location.href).concat(fpath, requireQuery())
+        scriptTag.src = hostpath.concat(fpath, requireQuery())
         scriptTag.onload = function (event) {
             jsScripts[libpath] = js.w[globalID]
             pending.signal(js.w[globalID])
@@ -219,6 +229,7 @@ closure JsLoadScript(libpath, globalID, local scriptTag, fpath) {
         pending.wait()
     } else if js.g
         jsScripts[libpath] = js.r(libpath)                                  // load in NodeJS context
+    nsactive(savens)
     jsScripts[libpath]
 };
 
@@ -234,6 +245,7 @@ closure JsLoadScript(libpath, globalID, local scriptTag, fpath) {
  */
 
 macro LoadComponentOnDemand(functionKeys, componentPath, local modobj, key) {
+    global()
     modobj = car(nsrights().lookup("module"))
     functionKeys = eval(functionKeys)
     componentPath = eval(componentPath)
@@ -281,6 +293,7 @@ macro LoadComponentOnDemand(functionKeys, componentPath, local modobj, key) {
  */
 
 macro LiveExport() {
+    global()
     closure (exporterMod, local importList) {
         importList = []
         //
