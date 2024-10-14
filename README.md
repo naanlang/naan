@@ -4,14 +4,14 @@
 Naan is an async-first software platform for rapid development.
 
 #### Release:
-     **Naan for NPM** version **1.3.1+1**  
+     **Naan for NPM** version **1.3.2+1**  
      Copyright (c) 2017-2024 Zulch Laboratories, Inc.
 
 #### Features
 - **Naan** runs in NodeJS and web browsers using JavaScript
 - Based on an asynchronous LISP-2 engine with persistent execution
 - The default **Lingo**™ surface language provides familiar Algol-style braces syntax
-- Concurrent operation without async or await declarations
+- Fiber-based concurrent execution without async or await declarations
 - Provides tuples, objects, closures, macros, lexical and dynamic binding
 - Module and package support with namespaces and write-protect isolation
 - Preserves referential integrity when communicating among workers or hosts
@@ -23,7 +23,7 @@ Naan is an async-first software platform for rapid development.
 
 #### Installation
 
-Please ensure you have a recent version of [node.js](http://nodejs.org/). The minimum is `v14.14.0`
+Please ensure you have a recent version of [node.js](http://nodejs.org/). The minimum is `v16.20.2`
 
 For use everywhere as a command line app:
 

@@ -1,0 +1,263 @@
+/*
+ * gc_api.nlg
+ * serviceGC
+ *
+ *     NodeJS REST API client for serviceGC.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * GcApi
+ *
+ * GC API object. This handles access token acquisition and refresh.
+ *
+ * options:
+ *  {
+ *      preview:    <boolean>                   // true for preview models
+ *      debug:      <boolean>                   // https requests have additional diagnostics
+ *      sseHook:    <proc>                      // call procedure with SSE messages
+ *  }
+ *
+ */
+
+closure GcApi(options, local gcapi, cacert, renew, access_token, expires_at) {
+    global(https, JSpath)
+    gcapi = new(object, this)
+    if options.preview {
+        gcapi.urlbase = "https://gigachat-preview.devices.sberbank.ru/api/v1/"
+        gcapi.model_suffix = "-preview"
+    }
+    else
+        gcapi.urlbase = "https://gigachat.devices.sberbank.ru/api/v1/"
+
+    // auth
+    //
+    // Authenticate the API and get an access token and expiration date. The creds dictionary will be
+    // modified, so pass a copy if desired. Returns standard error tuple.
+    //
+    closure auth(creds, local path, error, headers, data) {
+        if defined(creds, `rootCert)
+            cacert = creds.rootCert                                         // use supplied cacert or false
+        else {                                                              // load our default
+            path = JSpath.resolve(js.d, module.locpath, "russian_trusted_root_ca_pem.crt")
+            `(error, cacert) = require("../nodeLib/node_fs.nlg").ReadFile(path, "binary")
+            if error
+                return (list(Error("gc: unable to load root cert", error)))
+            creds.rootCert = cacert                                         // save for renewal
+        }
+        gcapi.rqUID = UUID()
+        headers = [
+            `("Content-Type", "application/x-www-form-urlencoded")
+            `("Accept", "application/json")
+            list("RqUID", gcapi.rqUID)
+            list("Authorization", "${creds.authType} ${creds.authKey}")
+        ]
+        `(error, data) = https.HttpsApiRequest(creds.url, {
+            putdata: "scope=${creds.scope}"
+            headers: headers
+            cacert: cacert || undefined
+            debug: options.debug || undefined })
+        if error
+            return (list(Error("gc: unable to authenticate api", error)))
+        renew = creds
+        access_token = data.access_token
+        expires_at = data.expires_at
+        list(false, { ok: true })
+    }
+
+    // request
+    //
+    // Make an HTTPS request on the API, renewing the access token first if needed.
+    //
+    closure request(url, put, local error, data, status) {
+        if !(milliseconds() < expires_at - 60000) {
+            `(error, data) = auth(renew)
+            if error
+                return (list(Error("gc: unable to renew access")))
+        }
+        `(error, data, status) = https.HttpsApiRequest(url, {
+            putdata: put || undefined
+            cacert: cacert || undefined
+            headers: [
+                `(Accept, "application/json"),
+                list(`Authorization, "Bearer ".concat(access_token))
+            ]
+            sseHook: options.sseHook || undefined
+        })
+        if error
+            list(error)
+        else
+            list(false, new(data))
+    }
+
+    // login
+    //
+    // Login to the GC API with the specified credentials.
+    //
+    // creds:
+    //  {
+    //      authType:   <string>                // "Basic"
+    //      authKey:    <string>                // "NTdkM...Zg=="
+    //    [ url:        <string> ]              // "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+    //    [ scope:      <string> ]              // GIGACHAT_API_PERS | GIGACHAT_API_B2B | GIGACHAT_API_CORP
+    //    [ rootCert:   <Uint8Array> ]          // optional root_ca_pem.crt, omit for default, or false for none
+    //  }
+    //
+    gcapi.login = function login(creds) {
+        if !string(creds.authType) || !string(creds.authKey)
+            return (list(Error("gc: invalid credentials")))
+        creds = merge({
+            scope: "GIGACHAT_API_CORP"
+            url: "https://ngw.devices.sberbank.ru:9443/api/v2/oauth"
+        }, creds)
+        auth(creds)
+    }
+
+    // modelList
+    //
+    // Return a list of available models.
+    //
+    gcapi.modelList = closure modelList() {
+        request(gcapi.urlbase.concat("models"))
+    }
+
+    // chatCompletion
+    //
+    // Return a chat completion.
+    //
+    //  query defined by GC:
+    //  {
+    //      model:              <string>            // desired model from modelList
+    //      messages:   [
+    //          {
+    //              role:       <string>            // system | user | assistant | function
+    //              content:    <string> | <dictionary>     // prompts | function arguments
+    //          }
+    //          ...
+    //      ]
+    //      attachments: [
+    //          <string>                            // name of an attachment
+    //          ...
+    //      ]
+    //      temp:               <float>
+    //      top_p:              <float>
+    //      max_tokens:         <integer>
+    //      repetition_penalty: <float>
+    //      stream:             <boolean>
+    //      update_interval:    <float>
+    //  }
+    //
+    //  response defined by GC:
+    //  {
+    //      choice: [
+    //          message: {
+    //              role:       <string>            // system | user | assistant | function
+    //              content:    <string> | <dictionary>     // prompts | function arguments
+    //          }
+    //          index:          <integer>
+    //          finish_reason:  <string>            // stop | length | function_call | blacklist
+    //      ]
+    //      create:             <integer>
+    //      model:              <string>
+    //      usage: {
+    //          prompt_tokens:  <integer>           // role: user
+    //          completion_tokens:  <integer>       // role: assistant
+    //          total_tokens:   <integer>
+    //      }
+    //      object:             <string>
+    //  }
+    //
+    gcapi.chatCompletion = closure chatCompletion(query) {
+        if options.preview {
+            query = new(query)
+            if !query.model.endsWith("-preview")
+                query.model = query.model.concat("-preview")
+        }
+        request(gcapi.urlbase.concat("chat/completions"), query)
+    }
+    
+    // uploadFile
+    //
+    gcapi.uploadFile = closure uploadFile(image) {
+        request(gcapi.urlbase.concat("files"), image)
+    }
+    
+    // listFiles
+    //
+    gcapi.listFiles = closure listFiles() {
+        request(gcapi.urlbase.concat("files"))
+    }
+        
+    // fileInfo
+    //
+    gcapi.fileInfo = closure fileInfo(fileID) {
+        request(gcapi.urlbase.concat("files/:${fileID}"))
+    }
+
+    // downloadFile
+    //
+    gcapi.downloadFile = closure downloadFile(fileID) {
+        request(gcapi.urlbase.concat("files/:${fileID}/content"))
+    }
+
+    // createEmbedding
+    //
+    //  query:
+    //  {
+    //    [ model:              <string> ]                      // model name
+    //      input:              <string> || [ <string>... ]     // string or array thereof
+    //  }
+    //
+    gcapi.createEmbedding = closure createEmbedding(query) {
+        if !query.model {
+            query = new(query)
+            query.model = "Embeddings"
+        }
+        request(gcapi.urlbase.concat("embeddings"), query)
+    }
+
+    // countTokens
+    //
+    //  input defined by gc:
+    //  {
+    //      model:              <string>                        // model name
+    //      input:              <string> || [ <string>... ]
+    //  }
+    //
+    //  output defined by gc:
+    //  {
+    //      object:             <string>                        // "tokens"
+    //      tokens:             <integer>
+    //      characters:         <integer>
+    //  }
+    //
+    gcapi.countTokens = closure countTokens(request) {
+        request(gcapi.urlbase.concat("tokens/count"), request)
+    }
+
+    // fin
+    gcapi
+};
+
+
+/*
+ * gcapiInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function gcapiInit(local manifest) {
+    manifest = `(GcApi, gcapiInit)
+
+    Naan.module.build(module.id, "gc_api", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("./serviceGC.nlg")
+        module.exports.GcApi = GcApi
+    })
+} ();

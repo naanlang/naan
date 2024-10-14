@@ -83,6 +83,7 @@ function ContentTypeFromFileExt(filepath, local mimeType, encoding) {
         "nlg":  "text/plain",
         "npk":  "application/json",
         "ogg":  "video/ogg",
+        "png":  "image/png",
         "svg":  "image/svg+xml",
         "text": "text/plain",
         "txt":  "text/plain",
@@ -192,20 +193,15 @@ function JsonStringify(data) {
 
 jsScripts = { };                                                            // script values become false on reload
  
-closure JsLoadScript(libpath, globalID, local savens, fpath, hostpath, pending, scriptTag) {
-    global(jsScripts, js, JSpath)
+closure JsLoadScript(libpath, globalID, local savens, hostpath, pending, scriptTag) {
+    global(jsScripts, JSpath, js)
     if jsScripts[libpath]
         return                                                              // already loaded
     savens = nsactive()
-    if libpath.startsWith("/")
-        fpath = libpath
-    else
-        fpath = "/".concat(libpath)
-    hostpath = js.w.location.origin.concat(JSpath.dirname(js.w.location.pathname))
+    hostpath = js.w.location.origin.concat(JSpath.join(JSpath.dirname(js.w.location.pathname), libpath))
     if js.s.importScripts && tostring(js.s.importScripts) == "[Function importScripts]" {
-        fpath = hostpath.concat(fpath)
         try {
-            js.s.importScripts(fpath)                                       // load in worker context
+            js.s.importScripts(hostpath)                                    // load in worker context
             jsScripts[libpath] = js.s[globalID]
         } catch {
             debuglog("JsLoadScript:", libpath, "failed", exception)
@@ -214,7 +210,7 @@ closure JsLoadScript(libpath, globalID, local savens, fpath, hostpath, pending, 
     } else if js.w {                                                        // load in browser context
         pending = new(nonce)
         scriptTag = js.w.document.createElement("script")
-        scriptTag.src = hostpath.concat(fpath, requireQuery())
+        scriptTag.src = hostpath.concat(requireQuery())
         scriptTag.onload = function (event) {
             jsScripts[libpath] = js.w[globalID]
             pending.signal(js.w[globalID])

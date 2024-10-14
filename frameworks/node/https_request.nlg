@@ -31,7 +31,8 @@
  *          key:        <data>
  *          passphrase: <data>                  // optional
  *      }
- *      allowSelfSigned: <boolean>              // allow a self-signed certificate at the servera
+ *      allowSelfSigned: <boolean>              // allow a self-signed certificate at the server
+ *      streamHook:     <proc>                  // called for incoming chunks of text/event-stream
  *      debug:          <boolean>               // log errors and status results
  *  }
  *
@@ -100,11 +101,26 @@ closure httpsApiReqOnce(url, options,
     pending = new(nonce)
     chunks = []
     request = nodeHttps.request(url, reqOptions, closure (response) {
+        // test if response is a SSE stream
+        function stream() { response.headers["content-type"].startsWith("text/event-stream") }
+
         response.on("data", function (chunk) {
-            chunks.push(chunk)
+            if options.streamHook && stream()
+                call(options.streamHook, chunk)                             // got some data
+            else
+                chunks.push(chunk)
         })
-        response.on("end", function (local content, error, headers) {
-            content = js.g.Buffer.concat(chunks)
+        response.on("end", function (local state, content, error, headers) {
+            state = {
+                headers: response.headers
+                status: response.statusCode
+                contentType: response.headers["content-type"]
+                complete: response.complete
+            }
+            if options.streamHook && stream()
+                call(options.streamHook, false, state)                      // no more data
+            else
+                content = js.g.Buffer.concat(chunks)
             if response.statusCode < 200 || response.statusCode >= 299 {    // 299 is "cancelled"
                 if options.debug
                     debuglog("HttpsApiRequest status:", url, response.statusCode, "message:", content)
@@ -120,7 +136,7 @@ closure httpsApiReqOnce(url, options,
                         error = Error("HttpsApiRequest decode:", url, error)
                     else
                         content = new(content)
-                    if array(content) {                                     // deencapsulate to get API result
+                    if array(content) {                                     // naan: decapsulate to get API result
                         content = totuple(content)
                         error = content.0
                         content = content.1
@@ -129,11 +145,7 @@ closure httpsApiReqOnce(url, options,
             }
             else
                 error = Error("HttpsApiRequest terminated prematurely:", url, response.statusCode)
-            pending.signal(list(error, content, {
-                headers: response.headers
-                status: response.statusCode
-                contentType: response.headers["content-type"]
-            }))
+            pending.signal(list(error, content, state))
         })
     })
     request.on("error", function hre(error) {
@@ -150,6 +162,66 @@ closure httpsApiReqOnce(url, options,
 
 
 /*
+ * sseParserFactory
+ *
+ * Returns an Server-Sent Events parser that calls the specified message procedure each time an event
+ * is recognized. Call the returned parser object's write method to add data for parsing.
+ *
+ */
+
+closure sseParserFactory(message, local parser) {
+    global()
+    parser = new(object, this)
+    parser.buffer = ""
+    parser.eomrx = RegExp("(?:\\r(?!\\n)|\\r\\n|\\n){2}")
+    parser.eolrx = RegExp("(?:\\r(?!\\n)|\\r\\n|\\n){1}")
+    parser.divrx = RegExp("([^:]*)[:] ?(.*)")
+
+    // write
+    //
+    // Add a string to the parser input, calling message for any completed messages.
+    //
+    parser.write = function write(text,
+        local messages, msg, output, line, found, field, value) {
+        parser.buffer = parser.buffer.concat(text)
+        messages = parser.buffer.split(parser.eomrx)
+        loop {
+            msg = messages.shift()
+            if messages.length == 0 {
+                parser.buffer = msg
+                break
+            }
+            output = { }
+            for line in msg.split(parser.eolrx) {
+                found = line.match(parser.divrx)
+                if found {
+                    field = found.1
+                    value = found.2
+                } else {
+                    field = line
+                    value = ""
+                }
+                if field == "data" {
+                    if output.data
+                        output.data = output.data.concat("\n", value)
+                    else
+                        output.data = value
+                }
+                else if field == "event"
+                    output.type = value
+                else if field == "id"
+                    output.lastEventID = value
+            }
+            call(message, output)
+        }
+    }
+
+    // finis
+    parser
+};
+
+
+/*
  * HttpsApiRequest
  *
  * Make the request with optional retry logic.
@@ -157,11 +229,24 @@ closure httpsApiReqOnce(url, options,
  * Options:
  *  {
  *      retrier: function(error) { error.status == 502 }                    // retry 502 errors
+ *      sseHook: function(msg) { }                                          // process SSE messages
  *  }
  *
  */
 
-closure HttpsApiRequest(url, options, local result) {
+closure HttpsApiRequest(url, options, local parser, decoder, result) {
+    if options.sseHook {
+        parser = sseParserFactory(options.sseHook)
+        decoder = xnew(stringDecoder.StringDecoder, "utf8")
+        options = merge(options, {
+            streamHook: function(chunk) {
+                if chunk
+                    parser.write(decoder.write(chunk))                      // data arrived
+                else
+                    parser.write(decoder.end())                             // end of data
+            }
+        })
+    }
     loop {
         result = httpsApiReqOnce(url, options)
         if result.0 && result.0.status {                                    // check for retries
@@ -182,7 +267,7 @@ closure HttpsApiRequest(url, options, local result) {
  */
 
 function https_nodeInit(local manifest) {
-    manifest = `(httpsApiReqOnce, HttpsApiRequest, https_nodeInit)
+    manifest = `(httpsApiReqOnce, sseParserFactory, HttpsApiRequest, https_nodeInit)
 
     Naan.module.build(module.id, "https_request", function(modobj, compobj) {
         require("./node.nlg")

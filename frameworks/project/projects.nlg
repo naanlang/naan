@@ -296,7 +296,7 @@ closure projConnector(projman, projtype, local connector, watch) {
  *
  * Nide.proj/
  *      nide_cliser.cfg                 - JSON definition of the project (see below)
- *      NaanIDE_version.txt             - [default] substitution file defining 1.3.1+1 etc.
+ *      NaanIDE_version.txt             - [default] substitution file defining 1.3.2+1 etc.
  *      NaanIDE_version_builds.txt      - [default] contains current build number as decimal string
  *      build/                          - [optional] default build output location
  *      NaanIDE.lic                     - [optional] defines Zulch Laboratories, Inc. and other license info
@@ -574,8 +574,12 @@ closure projConfig(projman, where, projID, local procon, fs, configpath) {
         if error
             return (list(error))
         rules = procon.configDict."build-rules"[stage]
-        if rules.inherit
-            rules = js.o.assign(procon.configDict."build-rules"[rules.inherit], rules)
+        if rules.inherit {
+            data = procon.configDict."build-rules"[rules.inherit]
+            if !data
+                return (list(Error("build inherit rules '${rules.inherit}' do not exist")))
+            rules = merge(data, rules)
+        }
         else if !rules
             rules = procon.configDict.build                                 // fallback to old config structure
         rules = new(rules)

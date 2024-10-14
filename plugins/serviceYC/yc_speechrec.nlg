@@ -1,0 +1,138 @@
+/*
+ * yc_speechrec.nlg
+ * serviceYC
+ *
+ *     Access to Yandex Speechkit recognition.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * YCSpeechRec
+ *
+ * Speech recognition object.
+ *
+ */
+
+closure YCSpeechRec(options, local ycspr) {
+    ycspr = new(object, this)
+    ycspr.recogURL = "https://transcribe.api.cloud.yandex.net/speech/stt/v2/longRunningRecognize"
+    ycspr.checkURL = "https://operation.api.cloud.yandex.net/operations/"
+
+    // login
+    //
+    ycspr.login = closure login(creds) {
+        ycspr.creds = creds
+        list(false, { ok: true })
+    }
+
+    // startRecog
+    //
+    // Start a speech recognition task using audio from the specified YC Cloud Storage object.
+    //
+    // Available options are:
+    //  {
+    //      language:   <string>                // e.g. "ru-RU", "en-US", or false for auto-detect
+    //      deferred:   <boolean>               // up to 24 hours for 1/4 the price
+    //      debug:      <boolean>               // extra debug logging for https request
+    //  }
+    //
+    // This returns an Operation object containing the ID of the asynchronous recognition operation:
+    //  {
+    //      done:       <boolean>               // recognition complete
+    //      recogID:    <string>                // operationID to poll for completion
+    //      createdAt:  <date>                  // when operation started
+    //      createdBy:  <string>                // YC ID of user who started it
+    //      modifiedAt: <date>                  // last modified
+    //      // following items only when operation complete:
+    //      response: {
+    //          "@type":    <string>            // gRPC type
+    //          chunks:     <array>             // array of chunks
+    //      }
+    //  }
+    //
+    ycspr.startRecog = closure startRecog(audioURI, options, local error, data) {
+        params = {
+            config: {
+                specification: {
+                    languageCode: options.language || "auto"                // e.g. "ru-RU", "en-US"
+                    model: options.deferred && "deferred-general" || "general"
+                    audioEncoding: "MP3"
+                    // profanityFilter: false                               // default value
+                    // literature_text: false                               // default for language "auto"
+                    // sampleRateHertz: 48000                               // default value for LPCM format
+                    // audioChannelCount: ...                               // only for LPCM format
+                    // rawResults: false                                    // write numbers as digits
+                }
+            }
+            audio: {
+                uri: audioURI
+            }
+        }
+        `(error, data) = https.HttpsApiRequest(ycspr.recogURL, {
+            putdata: params
+            headers: [
+                list(`Authorization, "Api-Key ".concat(ycspr.creds.apiKeySecret))
+            ]
+            debug: options.debug || undefined })
+        if error
+            list(Error("YCSpeechRec.startRecog failed:", error))
+        else
+            list(false, {
+                done: data.done
+                recogID: data.id
+                createdAt: Date(data.createdAt)
+                createdBy: data.createdBy
+                modifiedAt: Date(data.modifiedAt)
+            })
+    }
+
+    // checkRecog
+    //
+    // Check if a recognition operation, identified by recogID, has completed. If called too often
+    // this can encounter an API rate limit, which is 2500/hour total as of 20241007.
+    //
+    ycspr.checkRecog = closure checkRecog(recogID, local error, data) {
+        `(error, data) = https.HttpsApiRequest(ycspr.checkURL.concat(recogID), {
+            headers: [
+                list(`Authorization, "Api-Key ".concat(ycspr.creds.apiKeySecret))
+            ]})
+        if error
+            list(Error("YCSpeechRec.checkRecog failed:", error))
+        else
+            list(false, {
+                done: data.done
+                recogID: data.id
+                createdAt: Date(data.createdAt)
+                createdBy: data.createdBy
+                modifiedAt: Date(data.modifiedAt)
+                response: data.response || undefined
+            })
+    }
+
+    // finis
+    ycspr
+}
+
+
+/*
+ * ycSpeechRecInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function ycSpeechRecInit(local manifest) {
+    manifest = `(YCSpeechRec, ycSpeechRecInit)
+
+    Naan.module.build(module.id, "yc_speechrec", function(modobj, compobj) {
+        require("./serviceYC.nlg")
+        compobj.manifest = manifest
+        modobj.exports.YCSpeechRec = YCSpeechRec
+    })
+
+} ();

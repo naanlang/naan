@@ -154,7 +154,7 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
         // An error occurred on the WebSocket connection.
         target.ws.onerror = function onerror(e) {
             pending.signal(list(Error("websocket failed", e)))
-            debuglog("ws error:", e)
+            debuglog("ws error")
         }
         
         // onclose

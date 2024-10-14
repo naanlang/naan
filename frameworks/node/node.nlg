@@ -133,6 +133,7 @@ function nodrInit(local manifest) {
             nodeHttps = js.r("https")
             nodeUrl= js.r("url")
             threads = js.r("worker_threads")
+            stringDecoder = js.r("string_decoder")
         }()
         module.reload = nodrReload
         module.exports.NaanlangDir = NaanlangDir

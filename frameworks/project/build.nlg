@@ -142,8 +142,8 @@
 
 closure Builder(rules, operation, fs, srcpath, destpath, track, local build, group, newgroup) {
     build = new(object, this)
-    build.srcpath = srcpath
-    build.destpath = destpath
+    build.srcpath = JSpath.normalize(srcpath)
+    build.destpath = JSpath.normalize(destpath)
     build.intpath = JSpath.join(destpath, "tmp")
     build.tasks = {                                                         // all tasks counter
         copy: 0,
@@ -694,13 +694,13 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
                                         if !file.info.hidden
                                             addgroup.sources.push(file.name)    // add non-hidden files found in specified directory
                                     if addgroup.input
-                                        addgroup.input = JSpath.join(addgroup.input, source, listing.data.pathsep)
+                                        addgroup.input = JSpath.join(addgroup.input, source, "/")
                                     else
-                                        addgroup.input = source.concat(listing.data.pathsep)
+                                        addgroup.input = JSpath.join("/")
                                     if group.destfile
-                                        addgroup.output = JSpath.join(addgroup.output, listing.data.pathsep)
+                                        addgroup.output = JSpath.join(addgroup.output, "/")
                                     else
-                                        addgroup.output = JSpath.join(addgroup.output, source, listing.data.pathsep)
+                                        addgroup.output = JSpath.join(addgroup.output, source, "/")
                                     addgroup.groupno = build.nextgno++      // needed for concat/zip
                                     groups.push(addgroup)
                                 }
@@ -1067,6 +1067,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         //
         function writeCatenate(writepath,
             local template, entry, content, catsub, dozip, docat, fsoptions, zipmap, error, result) {
+            debuglog("writeCatenate", writepath)
             template = build.templates[writepath]                       // optional in some cases ### should warn in others
             catsub = { }
             for entry in catenates[writepath] {                         // error check and substitution build
@@ -1145,6 +1146,11 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     build.make = closure make(options, local sink, xchan, entry, outext, error) {
         sink = new(textstream, "", `string)                                 // log all output
         xchan = textstreams(list(sink, sink))
+        `(error) = fs.mkdir(build.destpath)                                 // make sure our directory exists
+        if error {
+            error = Error("cannot make build products folder", error)
+            return (list(error))
+        }
         try {
             resetlist()
             analyze(options.debugMake)
@@ -1201,7 +1207,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
                 workerID: "Run-${build.buildnum}"
                 startup: {
                     initcmds: maintext
-                    dirpath: fs.path.resolve(fs.path.sep, fs.rootpath, build.destpath)
+                    dirpath: fs.path.resolve("/", fs.rootpath, build.destpath)
                 }
             })
             if error

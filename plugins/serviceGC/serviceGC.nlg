@@ -1,0 +1,31 @@
+/*
+ * serviceGC.nlg
+ * serviceGC
+ *
+ *     ServiceGC module configuration and management for NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * segcInit
+ *
+ *     Initialize the GC module.
+ *
+ */
+
+function segcInit(local manifest) {
+    manifest = `(segcInit)
+
+    Naan.module.build(module.id, "serviceGC", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("naanlib:frameworks/common").LiveImport()
+        if !js.g
+            throw("serviceGC: NodeJS required")
+        https = require("naanlib:frameworks/node/https_request.nlg")
+    })
+} ();
