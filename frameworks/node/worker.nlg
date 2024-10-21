@@ -10,6 +10,13 @@
  *
  */
 
+/*
+ * globals
+ *
+ */
+
+gWorkers;
+
 
 /*
  * workCurrent
@@ -19,8 +26,8 @@
  */
 
 closure workCurrent(workco, workerID, startup, local current) {
-    global()
-    current = new(object, this)
+    global(js)
+    current = require("../running/executors.nlg").ExecutorBase(workco, workerID, startup.name)
     current.workerID = workerID
     current.name = startup.name
     current.links = []
@@ -94,6 +101,7 @@ closure workCurrent(workco, workerID, startup, local current) {
     function ONmessageOut(data) {
         if data._guid
             return                                                          // already replied
+        current.execReceived(data)
         sendAll({
             id: "targetout",
             data: data
@@ -153,7 +161,17 @@ closure workCurrent(workco, workerID, startup, local current) {
         if current.links.length == 0
             current.host.Detach(current.termif)                             // attached while one link is active
     }
-    
+
+    //
+    // target.PostMessage
+    //
+    //     Post a message to the main thread.
+    //
+    current.PostMessage = function PostMessage(data) {
+        js.t.DispatchMessage(data)
+        list(false, { posted: true })
+    }
+
     //
     // msgin
     //
@@ -186,6 +204,18 @@ closure workCurrent(workco, workerID, startup, local current) {
     // finis
     current
 };
+
+
+/*
+ * WorkerConnect
+ *
+ *     Return the existing web worker for a workerGUID, or false if it does not exist.
+ *
+ */
+
+function WorkerConnect(workerGUID) {
+    gWorkers[workerGUID]
+}
 
 
 /*
@@ -270,13 +300,14 @@ closure WorkerToMain(local nideRunning, track) {
  *
  */
 
-closure workThread(workco, workerID, startup, local worker, options, subChannel, deathWatcher) {
-    global(threads, JSpath)
-    worker = new(object, this)
+closure workThread(workco, workerID, startup, guid
+    local worker, options, subChannel, deathWatcher) {
+    global(js, threads, JSpath)
+    worker = require("../running/executors.nlg").ExecutorBase(workco, workerID, startup.name)
     worker.name = startup.name
     worker.workerID = workerID
     worker.links = []
-    worker.guid = UUID()
+    worker.guid = guid || UUID()
 
     // create our worker thread
 
@@ -346,6 +377,8 @@ closure workThread(workco, workerID, startup, local worker, options, subChannel,
                 state: false                                                // resume state, if we have any
                 altcmd: false
                 dirpath: js.d
+                workerID: workerID
+                workerGUID: worker.guid
             }
             if startup.initcmds
                 startmsg.altcmd = startup.initcmds.concat("\n")
@@ -364,6 +397,8 @@ closure workThread(workco, workerID, startup, local worker, options, subChannel,
         else {
             if msg.id == "status"
                 worker.lastStatus = milliseconds()
+            else if msg.id == "targetout"
+                worker.execReceived(msg.data)
             sendAll(msg) }                                                  // default is just return message to the client
     })
     
@@ -399,6 +434,19 @@ closure workThread(workco, workerID, startup, local worker, options, subChannel,
     
     worker.detach = function detach(link) {
         removeLink(link)
+    }
+
+    //
+    // PostMessage
+    //
+    //     Post a message to the main thread.
+    //
+    worker.PostMessage = function PostMessage(data) {
+        worker.msgport.postMessage({                                        // send data to worker
+            id: "targetin",
+            data: data
+        })
+        list(false, { posted: true })
     }
 
     //
@@ -498,7 +546,7 @@ closure workLink(workco, conn, worker, sender, local link) {
  */
 
 closure workController(api, local workco) {
-    global()
+    global(gWorkers)
     workco = new(object, this)
     workco.serverID = "Workers"                                             // our serverID, used for communications
     workco.workers = { }                                                    // dictionary of workers by workerID
@@ -559,12 +607,47 @@ closure workController(api, local workco) {
         workco.workers[workerID] = undefined                                // it's like this worker has never been
     }
 
+    // spawn
     //
+    //     Spawn a new worker with the specified configuration dictionary and optional GUID.
+    //
+    workco.spawn = closure spawn(workerID, config, guid, local worker) {
+        if !dictionary(gWorkers)
+            gWorkers = {}
+        worker = workco.workers[workerID]
+        if !worker {                                                        // create worker if needed
+            if workerID == "NideServer"
+                worker = workco.current = workCurrent(workco, workerID, config)
+            else
+                worker = workThread(workco, workerID, config, guid)
+            workco.uworkers[worker.guid] = worker
+            workco.workers[workerID] = worker
+            gWorkers[worker.guid] = worker }
+        if workerID == "NideServer"
+            workco.current.vitalUpdate({
+                id: "workerlist",                                           // send the initial list of workers
+                workers: let(workers, workerID, worker) {
+                    workers = { }
+                    for `(workerID, worker) in workco.workers
+                        workers[workerID] = {
+                            name: worker.name
+                        }
+                    workers
+                }()
+            })
+        else {
+            worker.vitalWatch(termination)
+            workco.current.vitalUpdate({
+                id: "spawned",                                              // note a new worker thread
+                name: config.name
+                workerID: workerID
+            }) }
+    }
+
     // wsReceive
     //
     //     Process a message from the websocket API.
     //
-
     workco.wsReceive = function wsReceive(message, conn, local worker, link, error) {
         if !message.workerID
             error = Error("workerID required", message.workerOp)
@@ -576,50 +659,25 @@ closure workController(api, local workco) {
                 if worker && message.payload {
                     if !link
                         makeLink(message, conn)                             // make sure we have a link for responses
-                    worker.msgin(message.payload)                           // send message to worker
-                    return } }
+                    worker.msgin(message.payload) }                         // send message to worker
+                return }
             else if message.workerOp == "echo" {
                 if worker && message.payload {
                     if !link
                         makeLink(message, conn)                             // make sure we have a link for responses
-                    worker.echo(message.payload, link)                      // echo message to other links
-                    return } }
+                    worker.echo(message.payload, link) }                    // echo message to other links
+                return }
             else if message.workerOp == "spawn" {
-                if !worker {                                                // create worker if needed
-                    if message.workerID == "NideServer"
-                        worker = workco.current = workCurrent(workco, message.workerID, message.payload)
-                    else
-                        worker = workThread(workco, message.workerID, message.payload)
-                    workco.uworkers[worker.guid] = worker
-                    workco.workers[message.workerID] = worker }
+                spawn(message.workerID, message.payload, message.workerGUID)
                 if !link
                     makeLink(message, conn)                                 // make sure we have a link for responses
-                if message.workerID == "NideServer"
-                    workco.current.vitalUpdate({
-                        id: "workerlist",                                   // send the initial list of workers
-                        workers: let(workers, workerID, worker) {
-                            workers = { }
-                            for `(workerID, worker) in workco.workers
-                                workers[workerID] = {
-                                    name: worker.name
-                                }
-                            workers
-                        }()
-                    })
-                else {
-                    worker.vitalWatch(termination)
-                    workco.current.vitalUpdate({
-                        id: "spawned",                                      // note a new worker thread
-                        name: message.payload.name
-                        workerID: message.workerID
-                    }) }
                 return }
             else if message.workerOp == "terminate" {
                 if worker {
                     if !link
                         makeLink(message, conn)                             // make sure we have a link for responses
-                    worker.terminate()                                      // echo message to other links
-                    return } }
+                    worker.terminate() }                                    // echo message to other links
+                return }
             error = Error("invalid parameters", message.workerOp, message.workerID)
         }
         ErrorDebuglog("workController.wsReceive error:", error)
@@ -663,13 +721,13 @@ closure workController(api, local workco) {
  */
 
 function workInit(local manifest) {
-    manifest = `(workCurrent, workMainProxy, WorkerToMain, workThread, workLink, workController,
-        workInit)
-
+    manifest = `(workCurrent, WorkerConnect, workMainProxy, WorkerToMain, workThread, workLink,
+        workController, workInit)
     Naan.module.build(module.id, "worker", function(modobj, compobj) {
         require("./node.nlg")
         compobj.manifest = manifest
         modobj.exports.WorkerController = workController
+        modobj.exports.WorkerConnect = WorkerConnect
         modobj.exports.WorkerToMain = WorkerToMain
     })
 }();

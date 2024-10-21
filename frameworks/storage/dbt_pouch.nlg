@@ -508,7 +508,7 @@ closure ListBrowserDBs(local pending, output, item) {
  */
 
 closure DbConnector(psm, local connClassID, connector, watch) {
-    global()
+    global(js)
     connClassID = "PouchDB"
     connector = new(object, this)
     connector.psm = psm

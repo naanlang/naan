@@ -430,7 +430,7 @@ closure psmcFsView(api, rootpath, local view, pathmod) {
  */
 
 closure psmcFsConnector(psm, api, local connClassID, connector, watch) {
-    global()
+    global(App)
     connClassID = "NodeFS"
     connector = new(object, this)
     connector.psm = psm

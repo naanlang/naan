@@ -213,7 +213,7 @@ closure GitTree(local fs, reporoot, gtree, repodir, stagedir) {
     closure fileHash(fspath, callback) {
         if !callback
             return (syncAdapter(fileHash, fspath))
-        fs.readFile(fspath, false, function(error, strdata, local hash) {
+        fs.readFile(fspath, false, function(error, strdata) {
             if error
                 callback(error)
             else
@@ -1025,7 +1025,7 @@ closure GitTree(local fs, reporoot, gtree, repodir, stagedir) {
 
         // comrecur
         // Recursively copy portions of tree that should be in commit.
-        function comrecur(input, parpath, chout, local node, nodout, path, action) {
+        function comrecur(input, parpath, chout, local node, nodout, path) {
             for node in input {
                 nodout = { name: node.name }
                 path = joinode(parpath, node)

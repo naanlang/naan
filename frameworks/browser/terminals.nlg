@@ -15,7 +15,7 @@
  *
  */
 
-workers;
+gWorkers;
 
 
 /*
@@ -431,9 +431,9 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
 
 closure TermLocal(track, name, options, local target, nlregex, listener)
 {
-    global(js, window, workers)
-    if !dictionary(workers)
-        workers = {}
+    global(js, window, gWorkers)
+    if !dictionary(gWorkers)
+        gWorkers = {}
     options = merge({
         type: "Local"
     }, options)
@@ -456,14 +456,15 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
             // ### tell target we are closing (if needed)
         })
         listener = window
+        target.guid = 1
     } else {
         if not window.Worker
             return (list(Error("Local environment does not support workers")))
         target.worker = xnew(window.Worker, "env_webworker.js")
         listener = target.worker
         target.guid = UUID()
-        workers[target.guid] = target
     }
+    gWorkers[target.guid] = target
 
     // onmessage
     // A message was received from the worker.
@@ -551,6 +552,8 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
                     id: "start",
                     state: false                                            // resume state, if we have any
                     altcmd: options.startup.initcmds
+                    workerID: target.workerID
+                    workerGUID: target.guid
                 })
             target.started = true
         } else if msg.id == "targetsend" {
@@ -668,9 +671,20 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
 
 
 /*
+ * WorkerConnect
+ *
+ *     Return the existing web worker for a workerGUID, or false if it does not exist.
+ *
+ */
+
+function WorkerConnect(workerGUID) {
+    gWorkers[workerGUID]
+};
+
+
+/*
  * termMainProxy
  *
- * column positioning:                          //                          //                      !
  *     Make a browser proxy representing the main thread. This runs inside the worker and allows it
  * to do remote execution with Main.
  *
@@ -769,7 +783,7 @@ closure findIDEtarget(track, name, workerID, naancont, local target) {
  */
 
 closure termIDE(track, name, workerID, naancont, title, local target, connected) {
-    global(workers)
+    global(js, gWorkers)
     target = findIDEtarget(track, name, workerID, naancont)
     if target {                                                             // new naancont on existing target
         target.updateController(naancont)
@@ -790,7 +804,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     //
     function replyHook(data) {
         if data._guid
-            workers[data._guid].worker.postMessage({
+            gWorkers[data._guid].worker.postMessage({
                 id: "targetreceive"
                 data: data
             })
@@ -969,14 +983,15 @@ closure termInstallVirtualWatcher(track, naancont) {
  */
 
 function termInit(local manifest) {
-    manifest = `(TermHost, TermLocal, termMainProxy, WorkerToMain, findIDEtarget, termIDE,
-        termInstallVirtualWatcher, termInit)
+    manifest = `(TermHost, TermLocal, WorkerConnect, termMainProxy, WorkerToMain, findIDEtarget,
+        termIDE, termInstallVirtualWatcher, termInit)
 
     Naan.module.build(module.id, "terminals", function(modobj, compobj) {
         require("./browser.nlg")
         compobj.manifest = manifest
         modobj.exports.TermLocal = TermLocal
         modobj.exports.TermHost = TermHost
+        modobj.exports.WorkerConnect = WorkerConnect
         modobj.exports.WorkerToMain = WorkerToMain
     })
 } ();

@@ -646,18 +646,18 @@ RegisterTestCategory("Lingo", [
     [ "closure myob(initv, local myob) {\n"
         "    myob = new(object)\n"
         "    myob.value = initv\n"
-        "    myob.\\.tostring = function \\.tostring(obj) {\n"
+        "    myob@\\.tostring = function \\.tostring(obj) {\n"
         "        \"myob-\".concat(myob.value) }\n"
         "    myob };",
         "myob" ],
-    [ "myob(3);>", "Object{2}" ],
+    [ "myob(3);>", "Object{1}" ],
     [ "myob(3);", "myob-3" ],
     
     //
     // dialects
     //
     
-    [ "dt = Dialect.derive('test');", "Object{22}" ],
+    [ "dt = Dialect.derive('test');", "{object dialect}" ],
     [ "dt.redefine(`^, function(x,y,local z) {z=1,while y-- > 0 z *= x,z});", "^" ],
     [ "$$ = dt.parse(new(textstream, '2^9;'));", "(false, 2^9)" ],
     [ "eval($$);", "(false, 512)" ],

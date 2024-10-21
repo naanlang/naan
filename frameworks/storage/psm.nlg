@@ -260,6 +260,16 @@ closure MakePSMutil(fs, local util) {
 
     util.deepcopy = closure deepcopy(inpath, sources, outfs, outpath, options, callback,
         local errors, copies, fsopt, folders) {
+        
+        // fixpath
+        // Fix the path to match the destination.
+        function fixpath(path) {
+            if fs.path.sep == outfs.path.sep
+                path
+            else
+                path.replaceAll(fs.path.sep, outfs.path.sep)
+        }
+
         if !callback
             return (syncAdapter(deepcopy, inpath, sources, outfs, outpath, options))
         if sources && !array(sources) || !string(inpath) || !string(outpath)
@@ -281,7 +291,7 @@ closure MakePSMutil(fs, local util) {
         asyncArray(sources, 10, closure mklist(entry,
             local srcpath, destpath, epath, error, stat, folder, node) {
             srcpath = fs.path.join(inpath, entry)
-            destpath = outfs.path.join(outpath, entry)
+            destpath = fixpath(outfs.path.join(outpath, entry))
             if destpath == "."
                 destpath = ""                                               // joined empty strings
             `(error, stat) = fs.info(srcpath, fsopt)

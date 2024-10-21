@@ -30,7 +30,7 @@
  */
 
 closure APIServer(options, local server, chroot) {
-    global(JSpath, js, bodyParser, express, psmServerMod, workerMod)
+    global(App, JSpath, js, bodyParser, express, psmServerMod, workerMod)
     apisLoadLibs()
     server = new(object, this)
     server.app = express()
@@ -116,7 +116,7 @@ closure APIServer(options, local server, chroot) {
             return (list(error))
         }
         server.hostfs = hostfs
-        workerMod.WorkerController(server)
+        server.workco = workerMod.WorkerController(server)
         list(false, port)
     }
 
@@ -550,7 +550,7 @@ closure WebSocketServer(server, local websocks) {
  */
 
 closure WesCon(server, websocks, socket, request, local wescon) {
-    global()
+    global(js)
     wescon = new(object, this)
     wescon.socket = socket
     wescon.info = {

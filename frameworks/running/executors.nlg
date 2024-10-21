@@ -24,19 +24,20 @@ closure ExecutorBase(track, type, name, local exec) {
     exec.name = name
     
     // execReset
+    //
     // Initialize remote communications for a new or restarted instance.
-    
+    //
     exec.execReset = function execReset() {
         exec.pending = { }
         exec.nextSendID = toint(RandomBytes(3))                             // keep our sequence code unique for shared servers
-        exec.nextContextID = 1
     }
     execReset()
 
     // execSend
+    //
     // Send a message to the running instance and return a nonce to wait on. If data is not a
     // dictionary then it is ignored.
-    
+    //
     exec.execSend = closure execSend(msg, data, local pending, error) {
         if !dictionary(data)
             data = { }
@@ -52,8 +53,9 @@ closure ExecutorBase(track, type, name, local exec) {
     }
     
     // execReceived
+    //
     // The specified message was received from the instance, so signal it.
-    
+    //
     exec.execReceived = closure execReceived(data, local pending) {
         pending = exec.pending[data.xid]
         if !pending {                                                       // not waiting on message
@@ -68,15 +70,17 @@ closure ExecutorBase(track, type, name, local exec) {
     }
     
     // execSetStatus
+    //
     // Received a status update from the instance.
-    
+    //
     exec.execSetStatus = function execSetStatus(status) {
         exec.xstatus = status
     }
     
     // execFailed
+    //
     // Communication has failed.
-    
+    //
     exec.execFailed = closure execFailed(error, local xid, pending) {
         exec.pending.error = error
         for `(xid, pending) in exec.pending
@@ -84,8 +88,10 @@ closure ExecutorBase(track, type, name, local exec) {
     }
     
     // execClosed
+    //
+    //
     // Note that the connection has closed, so signal all the waiters.
-    
+    //
     exec.execClosed = closure execClosed(error, local xid, pending) {
         for `(xid, pending) in exec.pending {
             pending.signal(list(error))
@@ -94,10 +100,13 @@ closure ExecutorBase(track, type, name, local exec) {
     }
         
     // context
-    // Return a context object for the instance, or an error, in a result tuple. Currently this does
-    // not ever reclaim old contexts on the instance end of things, but it should. ###
-
-    exec.context = closure context(local error, retries, ms, delta, excon) {
+    //
+    // Return a context object for the instance, or an error, in a result tuple. The optional state
+    // dictionary argument initializes the context with the state of a previous one to facilitate
+    // persistent reconnection. Currently this does not ever reclaim old contexts on the instance
+    // end of things, but it should. ###
+    //
+    exec.context = closure context(state, local error, retries, ms, delta, excon) {
         retries = 0
         ms = milliseconds()
         delta = 1
@@ -114,13 +123,14 @@ closure ExecutorBase(track, type, name, local exec) {
             sleep(delta)
             if delta < 100
                 delta *= 2 }
-        excon = ExecutorContext(exec, exec.nextContextID++)
+        excon = ExecutorContext(exec, state)
         excon.register()
     }
 
     // attention
+    //
     // Focus the UI on this instance because something needs attention.
-
+    //
     exec.attention = function attention() {
         track.attention(exec)
     }
@@ -141,20 +151,37 @@ closure ExecutorBase(track, type, name, local exec) {
  * ability to track namespace changes as the result of evaluating an expression. They do not override
  * normal namespace protections. The contexts exposed here preserve the active namespace after the
  * expression is evaluated.
+ *     The optional state argument preserves the context state so that it can be restored for
+ * resuming persistent connections.
  *
  */
 
-closure ExecutorContext(exec, contextID, local context, util) {
+closure ExecutorContext(exec, state, local context, coder, util) {
     global(apply)
     context = new(object, this)
+    if !state || !state.contextID
+        state = {
+            contextID: UUID()
+        }
+    context.state = state
+    coder = packageCoder(evalf)
     util = modlist().Util.exports
 
-    // register
-    // Register or re-register our context with the worker.
+    // getState
+    //
+    // Get context state for future initialization
+    //
+    context.getState = function getState() {
+        context.state
+    }
 
+    // register
+    //
+    // Register or re-register our context with the worker.
+    //
     context.register = closure register(local pending, result) {
         pending = exec.execSend("register", {
-            contextID: contextID
+            contextID: state.contextID
         })
         result = pending.wait()
         if result.1
@@ -164,10 +191,11 @@ closure ExecutorContext(exec, contextID, local context, util) {
     }
     
     // eval
+    //
     // Evaluate the specified expression in the current worker context. The optional put argument
     // if non-false is a tuple of symbols that should be transfered to the remote end, while get is
     // an optional tuple of symbols to retrieve after evaluation.
-
+    //
     context.eval = closure evalf(expr, put, get, local roots, pkg, data, pending, result) {
         if tuple(put)
             roots = cons(`expr, put)
@@ -175,9 +203,11 @@ closure ExecutorContext(exec, contextID, local context, util) {
             roots = `(expr)
         pkg = util.pkgSave(`expr, roots, {
             nsignore: true
-            comments: true })
+            comments: true
+            objectEncoder: coder.encodeObject
+        })
         data = {
-            contextID: contextID
+            contextID: state.contextID
             expr: pkg }
         if tuple(get)
             data.get = get
@@ -190,22 +220,25 @@ closure ExecutorContext(exec, contextID, local context, util) {
                 localroots: false
                 intern: false
                 execute: false
+                objectDecoder: coder.decodeObject
             })))
         else
             result
     }
-    
+
     // evalq
+    //
     // Evaluate the specified QUOTED expression in the current worker context.
-    
+    //
     context.evalq = macro evalq(expr, put, get) {
         evalf(expr, eval(put), eval(get))
     }
-                
+
     // apply
+    //
     // Apply list of arguments to the specified procure evaluated remotely. If the procedure is a
     // not a tuple then this uses the tuple definition if there is one.
-    
+    //
     context.apply = closure applyf(proc, args, put, get) {
         if !tuple(proc) && tuple(proc.proc)
             proc = proc.proc
@@ -213,9 +246,10 @@ closure ExecutorContext(exec, contextID, local context, util) {
     }
 
     // call
+    //
     // Call the specified function remotely using local arguments:
     //      context.call(proc, args...)
-    
+    //
     context.call = macro callf args {
         closure (proc, arglist, local eargs) {
             while arglist
@@ -225,13 +259,14 @@ closure ExecutorContext(exec, contextID, local context, util) {
     }
 
     // rpc
+    //
     // Execute a remote procedure call without package translation, to reduce overhead. This will not
     // properly transfer Naan-specific types like symbols, and the results will be native JavaScript.
     // The procedure must be specified as a symbol or string.
-    
+    //
     context.rpc = closure rpc(proc, args, local data, pending, result) {
         data = {
-            contextID: contextID
+            contextID: state.contextID
             proc: proc
             args: args }
         pending = exec.execSend("rpc", data)
@@ -647,7 +682,7 @@ closure ExecutorTracker(local xtrak) {
  */
 
 closure execLambda(track, url, name, workerID, local target, nlregex, clientID, serverID) {
-    global()
+    global(js)
     target = ExecutorBase(track, "Lambda", name)
     clientID = "DebugWorkers"
     serverID = "Workers"
@@ -896,7 +931,8 @@ closure execLambda(track, url, name, workerID, local target, nlregex, clientID, 
  */
 
 function execInit(local manifest) {
-    manifest = `(ExecutorBase, ExecutorContext, ExecutorParallel, ExecutorTracker, execLambda, execInit)
+    manifest = `(ExecutorBase, ExecutorContext, ExecutorParallel, ExecutorTracker, execLambda,
+        execInit)
 
     Naan.module.build(module.id, "executors", function(modobj, compobj) {
         require("./running.nlg")

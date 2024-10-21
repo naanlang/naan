@@ -88,7 +88,7 @@ closure Preferences(nicc, dbname, local prefs, error, data) {
         folder = "plugins/"
         path = folder.concat("plugins.cfg")
         pending = new(nonce)
-        nicc.api.readFile(path, function(error, req, event, local config) {
+        nicc.api.readFile(path, function(error, req, event) {
             if error
                 ErrorDebuglog("Can't read ".concat(path), error)
             else

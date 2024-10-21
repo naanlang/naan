@@ -183,7 +183,7 @@ closure plabConnector(psm, local connClassID, connector, watch) {
     //
     // Connect to an GitLab filesystem.
     
-    connector.connect = function connect(resID, service, args, local error,  glab, gitremote, table) {
+    connector.connect = function connect(resID, service, args, local error,  glab, gitremote) {
         `(error, glab) = connector.access(resID)
         if !error
             `(error, gitremote) = GitLabOps(glab)                           // get GitLab as a git remote

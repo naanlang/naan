@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2023 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
@@ -19,6 +19,7 @@
  */
 
 function rootproc(procdef, local parent) {
+    global()
     loop {                                                                  // can only find out proc
         parent = procdef.1@\.parent
         if !parent
@@ -38,6 +39,7 @@ function rootproc(procdef, local parent) {
  */
 
 function baseproc(procdef) {
+    global()
     if procdef.1@\.base.proc
         { }
     else
@@ -58,6 +60,7 @@ function baseproc(procdef) {
  */
 
 function pathmatch(parent, path, local segment, nth, child) {
+    global()
     if empty(path)
         return (parent)
     segment = pop(path)
@@ -83,6 +86,7 @@ function pathmatch(parent, path, local segment, nth, child) {
  */
 
 function procpath(procdef, local path, segment, parent, peers, nth, peer) {
+    global()
     loop {
         segment = procdef.1
         parent = segment@\.parent
@@ -114,6 +118,7 @@ function procpath(procdef, local path, segment, parent, peers, nth, peer) {
  */
 
 function procname(name, local parent) {
+    global()
     parent = name@\.parent
     name = tostring(name)
     if parent
@@ -136,6 +141,7 @@ function procname(name, local parent) {
  */
     
 function procstring(procdef, options, local name, output, parm) {
+    global()
     if options.fullname || !defined(options, `fullname)
         name = procname(procdef.1)                                          // default is full name
     else
@@ -157,6 +163,82 @@ function procstring(procdef, options, local name, output, parm) {
 
 
 /*
+ * packageCoder
+ *
+ *     Encode and decode objects for the NaaN packager to establish proxies for remote access.
+ *
+ */
+
+closure packageCoder(evalf, local coder) {
+    global()
+    coder = new(object, this)
+    coder.wmapEncoding = new(weakmap)
+    coder.mapDecoding = { }
+
+    // encodeObject
+    //
+    // Encode an object into the ident dictionary so that the remote end can create a proxy.
+    //
+    coder.encodeObject = closure encodeObject(obj, local objectID) {
+        if coder.wmapEncoding[obj]
+            { }
+        else {
+            objectID = UUID()
+            coder.mapDecoding[objectID] = obj
+            coder.wmapEncoding[obj] = {
+                name: obj@\.closure || undefined
+                objectID: objectID
+            }
+        }
+    }
+
+    // decodeObject
+    //
+    // Decode the ident dictionary into a proxy object allowing method invocation.
+    //
+    coder.decodeObject = closure decodeObject(ident, local x, obj) {
+        if coder.mapDecoding[ident.objectID]
+            { }
+        else if ident.name {
+            putproc(ident.name, false)
+            obj = coder.mapDecoding[ident.objectID] = closure(nn, objectID) {
+                call(enclose(list(`closure, nn, list(`local, `x),
+                    quote(x=new(object, nn)),
+                    quote(x@\.tostring = function() { "{proxy ${nn}}" }),
+                    quote(x@\.undefined = closure undef args {
+                        let (result) {
+                            result = evalf(list(`\.execute\-method, objectID, args))
+                            if result.0
+                                throw("remoting failure: ${ErrorString(result.0)}")
+                            else
+                                result.1
+                        } ()
+                    }), `x)))
+            } (ident.name, ident.objectID)
+            coder.wmapEncoding[obj] = ident
+            obj
+        } else
+            coder.mapDecoding[ident.objectID] = new(object)
+    }
+    
+    // invokeMethod
+    //
+    // Invoke a local object method from the remote proxy, returning a result tuple.
+    //
+    coder.invokeMethod = closure invokeMethod(objectID, args, local obj) {
+        obj = coder.mapDecoding[objectID]
+        if obj
+            list(false, eval(list(deref, obj, pop(args), args)))
+        else
+            list(Error("object ${objectID} not found"))
+    }
+
+    // finis
+    coder
+};
+
+
+/*
  * runnInit
  *
  *     Initialize the module.
@@ -164,8 +246,8 @@ function procstring(procdef, options, local name, output, parm) {
  */
 
 function runnInit(local manifest) {
-    manifest = `(rootproc, baseproc, pathmatch, procpath, procname, procstring, runnInit)
-
+    manifest = `(rootproc, baseproc, pathmatch, procpath, procname, procstring, packageCoder,
+        runnInit)
     Naan.module.build(module.id, "running", closure(modobj, compobj) {
         require("../common").LiveImport()
         compobj.manifest = manifest

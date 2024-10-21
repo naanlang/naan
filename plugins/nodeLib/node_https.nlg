@@ -17,7 +17,7 @@
  *
  */
 
-closure HttpsGetJson(hostname, pathname, query, local https, options, pending, req) {
+closure HttpsGetJson(hostname, pathname, query, local options, pending, req) {
     if query
         pathname = EncodeQuery(pathname.concat("?"), query)
     debuglog("HttpsGetJson", hostname, pathname)
@@ -55,7 +55,7 @@ closure HttpsGetJson(hostname, pathname, query, local https, options, pending, r
  */
 
 closure HttpsDownloadFile(hostname, pathname, query, filepath,
-    local dirpath, error, pending, writeStream, options, req)
+    local error, pending, writeStream, options, req)
 {
     filepath = nodePath.resolve("/tmp", filepath)
     if query

@@ -244,7 +244,7 @@ closure GitHubRepo(access, repodict, local gepo, url) {
     // Return a list of commits in the repo, optionally matching the specified file path.
     //
     //
-    gepo.commits = closure commits(filepath, local pardict, query, error, response, result) {
+    gepo.commits = closure commits(filepath, local pardict, query) {
         pardict = {
             per_page: 100
         }
@@ -420,7 +420,8 @@ closure GitHubRepo(access, repodict, local gepo, url) {
     //      ref:  <commit>      - branch, tag or commit hash, default to main branch
     //  }
     //
-    gepo.readfile = closure readfile(filepath, options, local ref, params, query, method, error, response, result) {
+    gepo.readfile = closure readfile(filepath, options
+        local ref, params, query) {
         if !string(filepath)
             return (list(Error("filepath must be a string:", filepath)))
         ref = options.ref
@@ -489,7 +490,7 @@ closure GitHubRepo(access, repodict, local gepo, url) {
 
 gtopParseLinkHeaderRegExp;
 
-function gtopParseLinkHeader(header, local segment, output) {
+function gtopParseLinkHeader(header, local output) {
     if !jsInstanceOf(gtopParseLinkHeaderRegExp, RegExp.prototype)
         gtopParseLinkHeaderRegExp = RegExp('<([^?]+\\?[=\\w&?]+page=(\\d+))>;\\s*rel="(\\w+)"', 'g')
     output = { }

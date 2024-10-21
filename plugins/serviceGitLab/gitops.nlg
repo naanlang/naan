@@ -464,7 +464,8 @@ closure GitLabRepo(access, repodict, local gepo, url) {
     //      head: <boolean>     - true to obtain metadata only without contents
     //  }
     //
-    gepo.readfile = closure readfile(filepath, options, local ref, params, query, method, error, response, result) {
+    gepo.readfile = closure readfile(filepath, options
+        local ref, params, query, method) {
         if !string(filepath)
             return (list(Error("filepath must be a string:", filepath)))
         ref = options.ref

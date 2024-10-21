@@ -58,11 +58,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.3.2");
+        console.log("1.4.0");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.3.2+1");
+        console.log("1.4.0+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {

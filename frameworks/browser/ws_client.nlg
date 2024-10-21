@@ -51,7 +51,7 @@ closure WebSocket(options, local wsock) {
     
         // onopen
         // The WebSocket connection is now open.
-        wsock.ws.onopen = closure onopen(e, local spawner) {
+        wsock.ws.onopen = closure onopen(e) {
             pending.signal(list(false, { ok: true }))
             options.onopen(e)
         }

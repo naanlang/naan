@@ -263,7 +263,7 @@ RegisterTestCategory("context", [
     //
     
     [ "closure Xx(y, local xx) { xx = new(object, this) };", "Xx" ],
-    [ "x = Xx(33);", "Object{0}" ],
+    [ "x = Xx(33);", "{object Xx}" ],
     [ "car(x@\\.closure.proc.2.0)", "33" ],
     [ "new(object, 3)@*", "false" ]
 ]);

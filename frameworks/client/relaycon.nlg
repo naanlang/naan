@@ -43,7 +43,7 @@ wsMod;;                                         // websocket module
 
 closure RelayCon(host, secret, options, local relay, nlregex)
 {
-    global(execsMod, wsMod)
+    global(App, execsMod, wsMod)
     relay = new(object, this)
     options = merge({
         name: "NaanIDE Server"
@@ -301,6 +301,7 @@ function hocoInit(local manifest) {
     manifest = `(RelayCon, hocoInit)
 
     Naan.module.build(module.id, "relaycon", function(modobj, compobj) {
+        require("./client.nlg")
         execsMod = require("../running/executors.nlg")
         if js.w
             wsMod = require("../browser/ws_client.nlg")

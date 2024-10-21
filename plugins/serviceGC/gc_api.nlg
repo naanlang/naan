@@ -26,7 +26,7 @@
  */
 
 closure GcApi(options, local gcapi, cacert, renew, access_token, expires_at) {
-    global(https, JSpath)
+    global(js, https, JSpath)
     gcapi = new(object, this)
     if options.preview {
         gcapi.urlbase = "https://gigachat-preview.devices.sberbank.ru/api/v1/"

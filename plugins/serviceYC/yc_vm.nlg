@@ -22,7 +22,7 @@ vmState = false;
  */
 
 closure VmControl(local ycvm) {
-    global(https, nodeHttp, vmState)
+    global(js, https, nodeHttp, vmState)
     if vmState.ycvm
         return (vmState.ycvm)                                               // singleton
     ycvm = new(object, this)

@@ -1067,7 +1067,6 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         //
         function writeCatenate(writepath,
             local template, entry, content, catsub, dozip, docat, fsoptions, zipmap, error, result) {
-            debuglog("writeCatenate", writepath)
             template = build.templates[writepath]                       // optional in some cases ### should warn in others
             catsub = { }
             for entry in catenates[writepath] {                         // error check and substitution build

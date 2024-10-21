@@ -183,7 +183,7 @@ closure phubConnector(psm, local connClassID, connector, watch) {
     //
     // Connect to an ghub bucket filesystem, returning a view.
     
-    connector.connect = function connect(resID, service, args, local error,  ghub, gitremote, table) {
+    connector.connect = function connect(resID, service, args, local error,  ghub, gitremote) {
         `(error, ghub) = connector.access(resID)
         if !error
             `(error, gitremote) = GitHubOps(ghub)                           // get GitHub as a git remote

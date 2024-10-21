@@ -19,12 +19,27 @@
  *
  */
 
-closure TaskDispatcher(replier, local contexts, gohome, util) {
+closure TaskDispatcher(replier, local contexts, gohome, coder, util) {
     global()
     contexts = { }
     gohome = makeActivator()
+    coder = packageCoder(evalf)
     util = modlist().Util.exports
-    closure(data, local reply, restorens, context, expr, roots, proc, args, result) {
+
+    // sendEval
+    //
+    // Send an evaluation request to the original execution context.
+    //
+    closure evalf(expr) {
+        debuglog("TaskDispatcher doesn't yet implement reverse proxy objects")
+        list(Error("### reverse object proxy not implemented"))
+    }
+
+    // dispatcher
+    //
+    // Return a new task dispatcher.
+    //
+    closure dispatcher(data, local reply, restorens, context, expr, roots, proc, args, result) {
         reply = {
             xmsg: "error"
             xid: data.xid
@@ -70,10 +85,14 @@ closure TaskDispatcher(replier, local contexts, gohome, util) {
                         intern: true                                        // intern symbols
                         localroots: true                                    // make roots local if needed to intern
                         execute: true                                       // execute auto-running procedures
+                        objectDecoder: coder.decodeObject
                     })
                     expr = caar(expr)
+                    if expr.0 == `\.execute\-method
+                        expr = coder.invokeMethod(expr.1, expr.2)           // object method, args
+                    else
+                        expr = evalactive(expr)                             // evaluate expression
                     reply.error = undefined
-                    expr = evalactive(expr)
                     if data.get
                         roots = new(data.get).map(function(sym){            // new() to get symbol from compress
                             compress(sym)
@@ -84,7 +103,8 @@ closure TaskDispatcher(replier, local contexts, gohome, util) {
                         roots = `(expr)
                     reply.result = util.pkgSave(`expr, roots, {
                         nsignore: true                                      // don't report namespace errors
-                        comments: true })                                   // include comments
+                        comments: true
+                        objectEncoder: coder.encodeObject})                 // include comments
                     if context.namespace !== nsactive().0
                     {                                                       // evaluation changed namespace
                         context.namespace = nsactive().0

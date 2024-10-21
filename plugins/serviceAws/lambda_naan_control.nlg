@@ -33,7 +33,7 @@ closure lancoRest(local url, client) {
         request.addEventListener("error", function reqFailed(event, local errtext) {
             if request.status == 0
                 errtext = "connectivity"
-            ellse
+            else
                 errtext = "request failed"
             error = Error(errtext, {
                 status: request.status
@@ -92,7 +92,7 @@ closure lancoWs(local url, laws) {
         // onmessage
         // A message was received from the worker via WebSockets.
         
-        laws.ws.onmessage = function onmessage(e, local message, msg) {
+        laws.ws.onmessage = function onmessage(e) {
             laws.doMessage(e.data)
         }
         
@@ -114,7 +114,7 @@ closure lancoWs(local url, laws) {
     // doMessage
     //
     //     Process the specified undecoded message.
-    laws.doMessage = function doMessage(text, local message, msg) {
+    laws.doMessage = function doMessage(text, local message) {
         try {
             message = new(JSONparse(text))
         } catch {
