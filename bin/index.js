@@ -7,20 +7,24 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2023 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
 "use strict";
 
 /*
- * imports
+ * imports & environment
  *
  */
 
 var path = require("path");
 var fs = require("fs");
 var naanOptions = {};
+var jspath = require("path");
+var naanpath = path.join(__dirname, "..");                                  // path to naan, which is us
+var rootpath = naanpath;                                                    // path to us, which is naan
+var envpath = jspath.resolve(naanpath, 'lib/env_node.js');                  // path to Naan loader
 
 /*
  * Process command-line arguments
@@ -30,7 +34,12 @@ var naanOptions = {};
 var cmd_file;
 var eval_text;
 var do_interactive;
-var cmd_text = "nodeparse('node_repl_init.nlg');;\n";
+var cmd_text = ""
+    + `App.naanpath = '${ naanpath.replace(/\\/g, "\\\\") }';;\n`           // path/to/our naan library
+    + `App.rootpath = '${ rootpath.replace(/\\/g, "\\\\") }';;\n`           // path/to/our package.json
+    + "Naan.module.defineLoc('naanlib', App.naanpath);;\n"                  // defines "naanlib:" prefix for require
+    + "nodeparse('lib/node_repl_init.nlg');;\n"                             // REPL utility functions
+    + "App.shell = require('naanlib:frameworks/node/shell.nlg').ShellConnect({ cwd: js.d });;\n";
 
 process.argv.every((val, index) => {
     if (index < 2)
@@ -58,11 +67,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.4.0");
+        console.log("1.4.1");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.4.0+1");
+        console.log("1.4.1+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {
@@ -97,10 +106,10 @@ if (eval_text) {
     naanOptions.noWelcome = true;
     if (!do_interactive)
         naanOptions.replDisable = true;
-    cmd_text =
+    cmd_text = cmd_text.concat(
         "closure NodeREPL(local input, error, expr) {\n" +
 
-        (do_interactive ?  "" :
+        (do_interactive ? "" :
         "   sudo(putproc(`exception, false))\n") +
 
         "   input = new(textstream, js.expr)\n" +
@@ -114,15 +123,16 @@ if (eval_text) {
         "           } else\n" +
 
         (cmd_file && !do_interactive ?
-	    "		        eval(expr)\n" :
+	    "		        $(evalactive(expr))\n" :
 
         "           {\n" +
-        "               if input.tokenlast().atom == `;;\n" +
-        "                   eval(expr)\n" +
+        "               $(evalactive(expr))\n" +
+        "               if input.tokenlast().atom == `;; || $ === Naan.local.mu\n" +
+        "                   { }\n" +
         "               else if input.tokenlast().atom == `;>\n" +
-        "                   printline(eval(expr))\n" +
+        "                   printline($)\n" +
         "               else\n" +
-        "                   printline(Dialect.print(eval(expr)))\n" +
+        "                   printline(Dialect.print($))\n" +
         "           }\n") +
 
         "       }\n" +
@@ -138,7 +148,7 @@ if (eval_text) {
         "       exec(quote(js.g.process.exit(if error 1 else 0)))\n") +
 
         "   }\n" +
-        "}();;\n";
+        "}();;\n");
 } else if (!process.stdin.isTTY) {
     console.log("naan: nothing specified and no TTY; exiting");
     process.exit(1);
@@ -150,9 +160,9 @@ if (eval_text) {
  *
  */
 
-var NaanNodeREPL = require('../lib/env_node.js');
+var NaanNodeREPL = require(envpath);
 var naanrepl = new NaanNodeREPL(naanOptions);
-naanrepl.setDirectory(path.join(__dirname, "../lib"));
+naanrepl.setDirectory(rootpath);
 if (eval_text)
     naanrepl.setGlobal("expr", eval_text + "\n");
 naanrepl.textCommand(cmd_text);

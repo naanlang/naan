@@ -142,9 +142,14 @@ closure ResourceManager(dbname, prefix, local reman, watch, result) {
     reman.unWatch = watch.unWatch
     reman.dbname = dbname
     reman.conns = {}
-    result =  PouchDB(dbname)
+    try {
+        require("./dbt_pouch.nlg")
+        result = PouchDB(dbname)
+    } catch {
+        result = list(Error("PouchDB not available", exception))
+    }
     if result.0
-        return (result)                                                     // can't access our vault database
+        return (list(result))                                               // can't access our vault database
     reman.db = result.1
     
     // vault
@@ -423,19 +428,22 @@ closure ResourceTracker(reman, local retor, watch) {
     // Start tracking resources.
     retor.open = function open() {
         if retor.classIdList
-            return                                                          // already open
+            return (list(false, { open: true }))                            // already open
         watch.reset()
         retor.resids = { }                                                  // start empty
         retor.classIdList = []
         for classID in reman.connectors()
             addConnResources(classID)
         reman.watch(remanUpdateOnChange)
+        list(false, { ok: true })
     }
     
     // close
     //
     // stop tracking resources.
     retor.close = function close(local classID, connector) {
+        if !retor.classIdList
+            return (list(false, { open: false }))
         watch.reset()
         if retor.classIdList {
             for classID in retor.classIdList {
@@ -446,6 +454,7 @@ closure ResourceTracker(reman, local retor, watch) {
         }
         reman.unWatch(remanUpdateOnChange)
         retor.resids = false
+        list(false, { ok: true })
     }
 
     // finis
@@ -466,7 +475,6 @@ function rsrcInit(local manifest) {
 
     Naan.module.build(module.id, "resources", function(modobj, compobj) {
         require("./storage.nlg")
-        require("./dbt_pouch.nlg")
         commonWatching = require("../common/watching.nlg")
         compobj.manifest = manifest
         module.exports.ResourceManager = ResourceManager

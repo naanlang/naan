@@ -34,13 +34,17 @@
  *
  */
 
-closure dapoTable(database, path, local table, prefix) {
+closure dapoTable(database, rootpath, local table, prefix) {
     global()
+    if !database || !string(rootpath)
+        return (list(Error("invalid arguments")))
     table = new(object, this)
     table.type = database.type
     table.db = database
-    table.path = path
-    table.prefix = makePrefix(path)
+    if rootpath != "" && rootpath.slice(-1) != "/"
+        rootpath = rootpath.concat("/")                                     // "" or "<path>/"
+    table.rootpath = rootpath
+    table.prefix = makePrefix(rootpath)
         
     // makePrefix
     //
@@ -80,7 +84,7 @@ closure dapoTable(database, path, local table, prefix) {
             return (syncAdapter(add, key, content, metadata))
         id = makeID(key)
         if !string(id)
-            return (asyncResult(callback, id))                                 // error from makeID
+            return (asyncResult(callback, id))                              // error from makeID
         if metadata && !dictionary(metadata)
             return (asyncResult(callback, Error("invalid arguments")))
         if !database.pouch
@@ -291,7 +295,7 @@ closure dapoTable(database, path, local table, prefix) {
     // only immediate children are listed, with directories at the end--and no metadata for them.
     //
 
-    table.records = closure records(options, callback, local prefix, pouchOpts, output) {
+    table.records = closure records(options, callback, local prefix, prelen, pouchOpts, output) {
         if !callback
             return (syncAdapter(records, options))
         output = {
@@ -300,9 +304,11 @@ closure dapoTable(database, path, local table, prefix) {
             if !string(options.prefix)
                 return (asyncResult(callback, Error("prefix option must be string")))
             output.prefix = options.prefix
-            prefix = table.prefix.concat(makePrefix(options.prefix)) }
-        else
+            prefix = table.prefix.concat(makePrefix(options.prefix))
+            prelen = options.prefix.length }
+        else {
             prefix = table.prefix
+            prelen = 0 }
         if !database.pouch
             return (asyncResult(callback, Error("database closed")))
         pouchOpts = {
@@ -321,19 +327,24 @@ closure dapoTable(database, path, local table, prefix) {
                         key = obj.id.substring(table.prefix.length)
                     else
                         key = "*key error*"                                 // should not happen
-                    if !options.deep {
-                        offset = key.indexOf("/", prefix.length)
-                        if offset >= 0 {
-                                key = key.substring(0, offset+1)            // child directory name
-                                if !firstkids[key]
-                                    firstkids[key] = key                    // first time we've seen this child directory
-                                else
-                                    continue } }                            // ignore deeper child
                     item = {
                         key:        key
                         _id:        obj.id
                         _rev:       obj.value.rev
                     }
+                    if !options.deep {
+                        offset = key.indexOf("/", prelen)                   // start looking past options.prefix
+                        if offset >= 0 {                                    // directory child
+                            if length(key) > offset+1 {                     // transitive child (not directory itself)
+                                obj.doc = undefined                         // just record directory name
+                                item._id = undefined
+                                item._rev = undefined }
+                            key = key.substring(0, offset+1)                // child directory name
+                            if !firstkids[key]
+                                firstkids[key] = key                        // first time we've seen this child directory
+                            else
+                                continue                                    // ignore deeper child
+                            item.key = key } }
                     if obj.doc {                                            // docs were requested
                         if obj.doc.content {
                             item._md5 = HashMD5(obj.doc.content)
@@ -741,6 +752,8 @@ closure DbConnector(psm, local connClassID, connector, watch) {
     //
     // Connect to a database, returning a PSM view.
     connector.connect = function connect(resID, service, args, local error, creds, db, rootpath, table) {
+        if !resID || args && !tuple(args)
+            return (list(Error("invalid arguments")))
         `(error, creds) = connector.access(resID)
         if !error
             `(error, db) = PouchDB(creds)
@@ -751,7 +764,7 @@ closure DbConnector(psm, local connClassID, connector, watch) {
         else if service == "NideFS" {
             rootpath = args.0                                               // connect to a NideFS filesystem
             if !rootpath
-                return (Error("mandatory rootpath missing"))
+                return (list(Error("mandatory rootpath missing")))
             `(error, table) = db.table(rootpath)
             if error
                 list(error)

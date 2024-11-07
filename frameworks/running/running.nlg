@@ -228,9 +228,9 @@ closure packageCoder(evalf, local coder) {
     coder.invokeMethod = closure invokeMethod(objectID, args, local obj) {
         obj = coder.mapDecoding[objectID]
         if obj
-            list(false, eval(list(deref, obj, pop(args), args)))
+            eval(list(deref, obj, pop(args), args))
         else
-            list(Error("object ${objectID} not found"))
+            throw("remoting error: object ${objectID} not found")
     }
 
     // finis

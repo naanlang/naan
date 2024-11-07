@@ -750,7 +750,7 @@ closure WorkerToMain(local nideRunning, track) {
         error = Error("WorkerToMain only available in browser workers")
         return (list(error))
     }
-    nideRunning = require("frameworks/running/executors.nlg")
+    nideRunning = require("naanlib:frameworks/running/executors.nlg")
     track = nideRunning.ExecutorTracker()
     track.register(mainProxy, "proxy")
     track.spawn("proxy")                                                    // returns result tuple

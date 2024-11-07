@@ -368,7 +368,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     // for each file. The result is a standard (error, data) tuple.
     
     function zip1(files, options, local libzip, ziparc, file, result) {
-        libzip = require("frameworks/project/jszip.nlg").JSZip()
+        libzip = require("naanlib:frameworks/project/jszip.nlg").JSZip()
         if !libzip
             return (list(Error("Build requires zip but it's not available")))
         ziparc = libzip.create()

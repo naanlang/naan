@@ -85,7 +85,7 @@ closure RelayCon(host, secret, options, local relay, nlregex)
         })
         result = relay.wscon.connect()
         if !result.0
-            sendControl("spawn", { name: "NaanIDE Server" })                // ensure worker is connected
+            sendControl("spawn", { name: options.name })                    // ensure worker is connected
         else if options.debug
             ErrorDebuglog("WebSocket connect failed:", result.0)
         result

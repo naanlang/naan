@@ -74,7 +74,7 @@ closure GcApi(options, local gcapi, cacert, renew, access_token, expires_at) {
     //
     // Make an HTTPS request on the API, renewing the access token first if needed.
     //
-    closure request(url, put, local error, data, status) {
+    closure request(url, put, sseHook, local error, data, status) {
         if !(milliseconds() < expires_at - 60000) {
             `(error, data) = auth(renew)
             if error
@@ -87,7 +87,7 @@ closure GcApi(options, local gcapi, cacert, renew, access_token, expires_at) {
                 `(Accept, "application/json"),
                 list(`Authorization, "Bearer ".concat(access_token))
             ]
-            sseHook: options.sseHook || undefined
+            sseHook: sseHook || options.sseHook || undefined
         })
         if error
             list(error)
@@ -172,13 +172,13 @@ closure GcApi(options, local gcapi, cacert, renew, access_token, expires_at) {
     //      object:             <string>
     //  }
     //
-    gcapi.chatCompletion = closure chatCompletion(query) {
+    gcapi.chatCompletion = closure chatCompletion(query, sseHook) {
         if options.preview {
             query = new(query)
             if !query.model.endsWith("-preview")
                 query.model = query.model.concat("-preview")
         }
-        request(gcapi.urlbase.concat("chat/completions"), query)
+        request(gcapi.urlbase.concat("chat/completions"), query, sseHook)
     }
     
     // uploadFile

@@ -766,7 +766,7 @@ function fimaInit(local manifest) {
 
     manifest = `(FileManager, fimaStore, fimaInit)
 
-    Naan.module.build(module.id, "fileManager", function(modobj, compobj) {
+    Naan.module.build(module.id, "file_manager", function(modobj, compobj) {
         require("./storage.nlg")
         commonWatching = require("../common/watching.nlg")
         compobj.manifest = manifest

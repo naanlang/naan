@@ -54,9 +54,9 @@ function gitcInit(local manifest) {
     })
     nideCommon = require("nideCommon/nideCommon.nlg")
     letimport(nideCommon)
-    require("plugins/gitClient/clientops.nlg")
-    require("plugins/gitClient/gitutils.nlg")
-    gitcRequireJS("plugins/gitClient/minimatch.js", function(error, result) {
+    require("./clientops.nlg")
+    require("./gitutils.nlg")
+    gitcRequireJS("./minimatch.js", function(error, result) {
         if error
             ErrorDebugLog(error)
     })

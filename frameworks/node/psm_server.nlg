@@ -525,7 +525,7 @@ function MakeServerPSM(api, name, local importPSM, error, path, psm) {
     if !error {
         App.psm = psm
         psmsFsConnector(App.psm, api)
-        require("frameworks/storage/dbt_pouch.nlg").DbConnector(App.psm)    // Pouch databases as filesystems
+        require("naanlib:frameworks/storage/dbt_pouch.nlg").DbConnector(App.psm)    // Pouch databases as filesystems
     } else
         ErrorDebuglog("Cannot create PSM", error)
     App.psm

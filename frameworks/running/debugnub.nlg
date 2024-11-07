@@ -33,6 +33,9 @@ closure DebugNub(local nub, debug, paused) {
     nub.codemgr = CodeManager()
     nub.exenable = true
     nub.watches = []
+    nub.contIDs = new(weakmap)
+    nub.stacks = { }
+    nub.usage = { }
 
     // debugDepth
     // Return the recursive debugging depth as an integer.
@@ -80,7 +83,7 @@ closure DebugNub(local nub, debug, paused) {
             for frame in nub.frames
                 if procedure(frame)
                     break
-            `(procdef, task) = nub.procTask(frame)
+            `(procdef, task) = debug.frameProcTask(frame)
         }
         if !procdef
             return (false)
@@ -396,14 +399,75 @@ closure DebugNub(local nub, debug, paused) {
             output.push(breakInfo(bpid))
         output
     }
+    
+    // procLoc
+    //
+    // Get the location of a procdef.
+    
+    nub.procLoc = function procLoc(procdef, task, local comp, position) {
+        if !task
+            task = rrrest(procdef)
+        comp = nub.codemgr.procComponent(procdef)
+        position = comp.textpos(procdef, task)
+        {
+            modname:    comp.modname
+            compname:   comp.compname
+            first:      position.first
+            last:       position.last
+            line:       position.line
+        }
+    }
+
+    // getContID
+    //
+    // Get the contID for a continuation.
+    
+    nub.getContID = function getContID(cont, local contID, frames) {
+        contID = nub.contIDs[cont]
+        if !contID
+            nub.contIDs[cont] = contID = UUID()
+        frames = cont.stacktrace().toarray
+        if frames.slice(-1).0 == `interrupt
+            frames.pop()
+        nub.stacks[contID] = frames
+        contID
+    }
+
+    // contGC
+    //
+    // Remove any continuations that are not in the specified array.
+    
+    nub.contGC = function contGC(contIDs, local contID) {
+        contIDs = contIDs.concat(nub.usage.*.toarray)                       // keep preserved ids
+        for contID in nub.stacks
+            if contIDs.indexOf(contID) < 0
+                nub.stacks[contID] = undefined
+    }
+    
+    // usingContID
+    //
+    // Mark that the contID is being used.
+    //
+    nub.usingContID = function usingContID(contID, usage) {
+        if nub.usage[contID]
+            nub.usage[contID] += usage
+        else if usage > 0
+            nub.usage[contID] = usage
+        if nub.usage[contID] == 0
+            nub.usage[contID] = undefined
+    }
 
     // callStack
     //
-    // List our callers as of the last entry.
+    // List our callers as of the last entry in the optional frames or current debugger stack.
     
-    nub.callStack = function callStack(local output, frame, type, record) {
+    nub.callStack = function callStack(contID, local frames, output, frame, type, record) {
         output = []
-        for frame in nub.frames {
+        if contID
+            frames = nub.stacks[contID]
+        else
+            frames = nub.frames
+        for frame in frames {
             record = {
                 type:       frame.0.tostring                                // e.g. "function"
             }
@@ -425,8 +489,12 @@ closure DebugNub(local nub, debug, paused) {
     //
     // Return the nth stack frame in the list returned by callStack above.
     
-    nub.nthFrame = function nthFrame(nth, local frame) {
-        for frame in nub.frames
+    nub.nthFrame = function nthFrame(nth, contID, local frames, frame) {
+        if contID
+            frames = nub.stacks[contID]
+        else
+            frames = nub.frames
+        for frame in frames
             if procedure(frame) || frame.0.tostring == "interrupt" {
                 if nth-- == 0
                     return (frame)
@@ -469,14 +537,15 @@ closure DebugNub(local nub, debug, paused) {
 
     // evalWatchesInFrame
     //
-    //     Parse and evaluate our watchpoints, optionally in the context of the nth frame. Each entry
-    // in the returned array is for a watchpoint, comprising a tuple: `(error, expression, evaluated)
+    //     Parse and evaluate our watchpoints, optionally in the context of the nth frame of the
+    // specified continuation or the current debugger stack. Each entry in the returned array is for
+    // a watchpoint, comprising a tuple: `(error, expression, evaluated).
     
-    nub.evalWatchesInFrame = function evalWatchesInFrame(nth,
+    nub.evalWatchesInFrame = function evalWatchesInFrame(nth, contID,
         local frame, locals, ns, mod, gohome, texts, watch, exprs, error, expr)
     {
         if integer(nth) {
-            frame = nthFrame(nth)
+            frame = nthFrame(nth, contID)
             locals = localist(frame)
             ns = frame.3.1.namespace
             if ns !== nsactive().0 {
@@ -506,8 +575,29 @@ closure DebugNub(local nub, debug, paused) {
     //
     // Return procedure and task from a frame, as a `(procdef, task) tuple.
     
-    nub.procTask = function procTask(frame) {
-        debug.frameProcTask(frame)
+    nub.procTask = function procTask(frame, contID, local frames, ftrav, procdef, bodydef) {
+        if contID
+            frames = new(nub.stacks[contID])
+        else
+            frames = new(debug.frames)
+        loop {
+            if frames.length == 0
+                break
+            ftrav = frames.shift()
+            if ftrav eq frame
+                frame = false                                               // can now stop on our desired procedure
+            if procedure(ftrav) {
+                if !frame {
+                    procdef = ftrav.3                                       // first procedure definition starting with desired frame
+                    if !bodydef
+                        bodydef = procdef                                   // use procdef as body if no body frame found
+                    break }
+                bodydef = false }                                           // any previously-found body applies to wrong procedure
+            else if ftrav.0 == `body || ftrav.0 == `loop {
+                if !bodydef
+                    bodydef = ftrav.2 } }                                   // use first body found before desired procedure
+        if procdef
+            list(procdef, bodydef)                                          // found valid location
     }
     
     // lastStepValue

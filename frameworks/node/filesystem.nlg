@@ -1137,6 +1137,11 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         })
         spawn.on("close", function(code) {
             output.exitCode = code                                          // zero on success; null on killed
+            completed(false, output)
+        })
+        spawn.on("exit", function(code, signal) {
+            output.exitCode = code                                          // if exited
+            output.signalName = signal                                      // if terminated
         })
         spawn.stderr.on("error", function(err) {
             completed(Error("stderr stream failed:", err))
@@ -1155,8 +1160,6 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
                 call(options.errproc, output)
             if linerOut
                 linerErr = false                                            // let end-of-out do the completion
-            else
-                completed(false, output)
         })
         linerErr.on("readable", function (local line) {
             if options.errproc
@@ -1179,8 +1182,6 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
                 call(options.outproc)
             if linerErr
                 linerOut = false                                            // let end-of-err do the completion
-            else
-                completed(false, output)
         })
         linerOut.on("readable", function (local line) {
             if options.outproc

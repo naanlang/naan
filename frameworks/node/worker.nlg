@@ -312,7 +312,7 @@ closure workThread(workco, workerID, startup, guid
     // create our worker thread
 
     // options = { execArgv: ["--inspect-brk"] }                            // uncomment for NodeJS debugging
-    worker.thread = xnew(threads.Worker, JSpath.resolve(js.d, "node_worker.js"), options)
+    worker.thread = xnew(threads.Worker, JSpath.resolve(js.d, "lib/node_worker.js"), options)
     subChannel = xnew(threads.MessageChannel)
     worker.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
     worker.msgport = subChannel.port2

@@ -247,7 +247,9 @@ macro LoadComponentOnDemand(functionKeys, componentPath, local modobj, key) {
     componentPath = eval(componentPath)
     if name(functionKeys)
         functionKeys = list(functionKeys)
-    for key in functionKeys
+    for key in functionKeys {
+        if modobj.exports[key]
+            continue                                                        // already defined
         closure (key, path, local exproc) {
             function loadComponent args {                                   // called when exported function first called
                 exproc = require(path)[key]
@@ -257,6 +259,7 @@ macro LoadComponentOnDemand(functionKeys, componentPath, local modobj, key) {
             }
             modobj.exports[key] = loadComponent
         } (key, componentPath)
+    }
     true
 };
 
@@ -274,7 +277,7 @@ macro LoadComponentOnDemand(functionKeys, componentPath, local modobj, key) {
  * LiveImport() function to a module's exports.
  *
  * To use LiveImport, call from the importing module as follows:
- *     require("frameworks/common/common.nlg").LiveImport(<fixproc>);
+ *     require("naanlib:frameworks/common/common.nlg").LiveImport(<fixproc>);
  * The optional <fixproc> is called after the imports in case the foreign module wants to fix up
  * anything after the import:
  *     fixproc(exporterMod);

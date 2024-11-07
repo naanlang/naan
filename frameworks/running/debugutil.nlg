@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2024 by Richard C. Zulch
  *
  */
 
@@ -260,24 +260,33 @@ closure DebugRemote(commander, local remoter, here, there, library) {
     here.breakInfo = function breakInfo(bpid) {
         libBreakInfo(bpid)
     }
+    
+    // usingContID
+    //
+    // Mark that the contID is being used.
+    //
+    here.usingContID = function usingContID(contID, usage) {
+        debugNub = car(compress("debugNub"))
+        debugNub.usingContID(contID, usage)
+    }
 
     // callstack
     //
-    // Report current callstack.
+    // Report the specified fiber callstack or current debugger stack.
     //
-    here.callStack = function callStack(local debugNub) {
+    here.callStack = function callStack(contID, local debugNub) {
         debugNub = car(compress("debugNub"))
-        debugNub.callStack()
+        debugNub.callStack(contID)
     }
     
     // frameinfo
     //
-    // Report information about the nth frame in the callStack.
+    // Report information about the nth frame in a fiber callstack or the current debugger stack.
     //
-    here.frameinfo = function frameinfo(nth, local debugNub, frame, proctask, comp, position) {
+    here.frameinfo = function frameinfo(nth, contID, local debugNub, frame, proctask, comp, position) {
         debugNub = car(compress("debugNub"))
-        frame = debugNub.nthFrame(nth)
-        proctask = debugNub.procTask(frame)
+        frame = debugNub.nthFrame(nth, contID)
+        proctask = debugNub.procTask(frame, contID)
         comp = debugNub.codemgr.procComponent(proctask.0)
         position = comp.textpos(proctask.0, proctask.1)
         {
@@ -302,11 +311,11 @@ closure DebugRemote(commander, local remoter, here, there, library) {
     //     The optional visible array is a preceding result of this function, where "visible=true"
     // can be applied to nested values to add recursive depth.
     //
-    here.scopeinfo = function scopeinfo(nth, visible,
+    here.scopeinfo = function scopeinfo(nth, visible, contID
         local debugNub, frame, procsym, parent, proc, lex1, ex1, params, content, scope, level, level1)
     {
         debugNub = car(compress("debugNub"))
-        frame = debugNub.nthFrame(nth)
+        frame = debugNub.nthFrame(nth, contID)
         procsym = frame.3.1
         parent = procsym@\.parent
         while parent {
@@ -370,11 +379,11 @@ closure DebugRemote(commander, local remoter, here, there, library) {
     // can be applied to nested values to add recursive depth. A stack frame index can be specified
     // to evaluate an expression in that context.
 
-    here.watchInfo = function watchInfo(visible, nth,
+    here.watchInfo = function watchInfo(visible, nth, contID,
         local debugNub, values, content, watch, child1, error, value, level, expr)
     {
         debugNub = car(compress("debugNub"))
-        values = debugNub.evalWatchesInFrame(nth)
+        values = debugNub.evalWatchesInFrame(nth, contID)
         visible = new(visible)                                              // don't modify original
         content = []
         for watch in debugNub.watches {
@@ -417,8 +426,9 @@ closure DebugRemote(commander, local remoter, here, there, library) {
     //
     // List the current futures.
     
-    here.futureslist = function futureslist(local debugNub, output, future, record, procsym) {
+    here.futureslist = closure futureslist(local debugNub, contIDs, output, future, record, procsym) {
         debugNub = car(compress("debugNub"))
+        contIDs = []
         output = []
         for future in futures() {
             if member(debugNub.pauser, future.waiting)
@@ -431,6 +441,7 @@ closure DebugRemote(commander, local remoter, here, there, library) {
             if procedure(future.execute) {
                 procsym = future.execute.1
                 record.execute = strcat(future.execute.0, space, procsym.namespace.tostring, "::", debugNub.procname(procsym))
+                record.execloc = debugNub.procLoc(future.execute)
             }
             else if future.execute
                 record.execute = tostring(future.execute)
@@ -439,9 +450,15 @@ closure DebugRemote(commander, local remoter, here, there, library) {
                     procsym = item.1
                     strcat(item.0, space, procsym.namespace.tostring, "::", debugNub.procname(procsym))
                 })
+                record.continuations = future.continuations.toarray.map(function(cont, local contID) {
+                    contID = debugNub.getContID(cont)
+                    contIDs.push(contID)
+                    contID
+                })
             }
             output.push(record)
         }
+        debugNub.contGC(contIDs)
         output
     }
 

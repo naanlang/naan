@@ -20,7 +20,7 @@
 
 closure plabConnector(psm, local connClassID, connector, watch) {
     connClassID = "GLAB"
-    require("plugins/serviceGitLab/gitops.nlg")
+    require("./gitops.nlg")
     connector = new(object, this)
     connector.psm = psm
     connector.vault = psm.vault(connClassID)

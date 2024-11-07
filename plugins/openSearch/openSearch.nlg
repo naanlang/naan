@@ -567,8 +567,8 @@ function opseInit(local manifest) {
 
     Naan.module.build(module.id, "openSearch", function(modobj, compobj) {
         compobj.manifest = manifest
-        require("frameworks/common").LiveImport()
-        letimport(require("frameworks/node/https_request.nlg"))
+        require("naanlib:frameworks/common").LiveImport()
+        letimport(require("naanlib:frameworks/node/https_request.nlg"))
         modobj.exports.OpenSearchClient = OpenSearchClient
     })
 } ();

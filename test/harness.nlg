@@ -83,15 +83,15 @@ closure Parsenv(name, local penv, gohome, lingo, naansym) {
                     `(errors, expr) = lingo.parse(source)
                     for error in errors
                         output.errors.push(penv.lib.ParseErrorString(error))
-                    if expr {
-                        output.exprs.push(expr)
-                        expr = function() { evalactive(expr) }()            // return here if return executed outside procedure
-                        output.results.push(expr)
-                        if source.tokenlast().atom == `;>
-                            output.pretty.push(tostring(expr, { quote: true }))
-                        else if source.tokenlast().atom != `;;
-                            output.pretty.push(lingo.print(expr))
-                    }
+                    output.exprs.push(expr)
+                    expr = function() { evalactive(expr) }()                // return here if return executed outside procedure
+                    output.results.push(expr)
+                    if expr === Naan.local.mu
+                        { }
+                    else if source.tokenlast().atom == `;>
+                        output.pretty.push(tostring(expr, { quote: true }))
+                    else if source.tokenlast().atom != `;;
+                        output.pretty.push(lingo.print(expr))
                 } finally {
                     sudo(putproc(`exception, savex)) }
             }

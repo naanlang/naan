@@ -23,7 +23,7 @@ RegisterTestCategory("core", [
     // booleans and/or undefined
     //
     
-    [ "false;", "" ],
+    [ "false;", "false" ],
     [ "true;", "true" ],
     [ "not true;", "false" ],
     [ "not false;", "true" ],
@@ -61,9 +61,16 @@ RegisterTestCategory("core", [
     [ "lambda(unintern(\"lambda\"));", "true" ],
 
     [ "car(`;);", ";" ],
+    
+    [ "null;", "null" ],
+    [ "null();", "(null)" ],
+    [ "mu;", "mu" ],
+    [ "mu();", "" ],
+    [ "mu.tostring;", '"mu"' ],
+    [ "mu().tostring;", '"mu"' ],
 
     //
-    // basic lists and dotted pairs
+    // basic tuples and dotted pairs
     //
     
     [ "`();>", "false" ],
@@ -82,6 +89,21 @@ RegisterTestCategory("core", [
     [ "`((a . b) . (c d));>", "((a . b) c d)" ],
     [ "`((a b) . (c . d));>", "((a b) c . d)" ],
 
+    //
+    // tuple manipulation
+    //
+    
+    [ "append(`(a,b,c), d, `(e,f));>", "(a b c d e f)" ],
+    [ "append(`(3), `((4)));>", "(3 (4))" ],
+    [ "append(`(3), 5);>", "(3 5)" ],
+    [ "append(3, 4, 5);>", "(3 4 5)" ],
+
+    [ "subatq(list(a,3), list(a, 4));", "list(4, 3)" ],
+    [ "subatq(list(a,3), [list(a, 4)]);", "list(4, 3)" ],
+    [ "subatq(function joe(x) { 4*x }, [list(joe, bob), list(x,y)]);>",
+        "(Lib::defproc function bob (y) (* 4 y))" ],
+    [ "subat(list(a, { b: c }, [d, e]), [list(a,1), list(b,2), list(c,3), list(e,d), list(d,e)]);",
+        "(1, { 2: 3 }, [e, d])" ],
 
     //
     // assignment

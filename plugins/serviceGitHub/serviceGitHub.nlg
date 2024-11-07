@@ -60,6 +60,6 @@ function ghubInit(local manifest) {
     Naan.module.build(module.id, "serviceGitHub", function(modobj, compobj) {
         compobj.manifest = manifest
     })
-    require("frameworks/common", { in: naanlib }).LiveImport()
+    require("naanlib:frameworks/common").LiveImport()
     require("./psm_github.nlg").GitHubConnector(App.psm)
 } ();

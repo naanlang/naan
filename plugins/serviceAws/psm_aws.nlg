@@ -252,6 +252,8 @@ closure psmaConnector(psm, local connClassID, connector, watch) {
     
     connector.connect = function connect(resID, service, args,
         local error,  s3b, db, rootpath, table) {
+        if !resID || args && !tuple(args)
+            return (list(Error("invalid arguments")))
         `(error, s3b) = connector.access(resID)
         if !error
             `(error, db) = S3DB(s3b, args.1)                                // get S3 bucket as a database
@@ -262,12 +264,12 @@ closure psmaConnector(psm, local connClassID, connector, watch) {
         else if service == "NideFS" {
             rootpath = args.0                                               // connect to a NideFS filesystem
             if !rootpath
-                return (Error("mandatory rootpath missing"))
+                return (list(Error("mandatory rootpath missing")))
             `(error, table) = db.table(rootpath, args.1)                    // args.1 is table options; see dawsTable
             if error
                 list(error)
             else
-                require("frameworks/storage/psm_dbtables.nlg").FSview(table, rootpath)
+                require("naanlib:frameworks/storage/psm_dbtables.nlg").FSview(table, rootpath)
         } else
             list(Error("unsupported service", service))
     }

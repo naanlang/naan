@@ -87,12 +87,14 @@ closure CodeManager(options,  local coman, cache)
                 output.push(false)
                 continue
             }
+            if text.startsWith("!")
+                text = "(${text})"                                          // no shell escapes here
             try {
                 source = new(textstream, text.concat(" ;"))                 // avoid EOF
                 if locals
                     source.setsymbols(locals)
                 registry = modlist().Lib.exports.Registry                   // dialect registry
-                dialect = registry.findName(registry.dialects().0)          // ### default dialecct
+                dialect = registry.findName(registry.dialects().0)          // ### default dialect
                 output.push(dialect.parse(source))
             } catch {
                 if true {

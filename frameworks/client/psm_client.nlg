@@ -625,6 +625,8 @@ closure psmcFsConnector(psm, api, local connClassID, connector, watch) {
     //
     // Connect to the specified service.
     connector.connect = function connect(resID, service, args, local error, creds, api, rootpath) {
+        if !resID || args && !tuple(args)
+            return (list(Error("invalid arguments")))
         `(error, creds) = connector.access(resID)
         if !error {
             if creds == "HostFS"

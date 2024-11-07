@@ -1,0 +1,134 @@
+/*
+ * shell.nlg
+ * Naanlib/frameworks/node
+ *
+ * Shell access and utilities for the host OS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * ShellConnect
+ *
+ * Executing this installs itself in the current dialect to provide a REPL shell escape, returning a
+ * standard result tuple. This sends lines starting with ! to the shell with "bash -c". The result is
+ * output as text and also assigned to the $$ variable in the active namespace.
+ *
+ * Options:
+ * {
+ *      fs:     <filesystem>                    // optional: the filesystem object to use
+ *      cwd:    <string>                        // optional: Current Working Directory
+ *      derive: <string>                        // optional: dialect to derive from, or "" for no !
+ * }
+ *
+ */
+
+closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
+    global(js, compress)
+    shob = new(object, this)
+
+    // readline
+    // read one line of text from the source
+    function readline(source, local cc, output) {
+        output = ""
+        while cc = source.readchar() {
+            output = output.concat(cc)
+            if cc == "\n"
+                break }
+        output
+    }
+
+    // exec
+    //
+    // Execute a shell command with optional current-working-directory.
+    //
+    shob.exec = closure exec(cmd, args, cwd, local pending, report, xlparams) {
+        pending = new(nonce)
+        report = {
+            stdout: []
+            stderr: []
+        }
+        xlparams = {
+            cmdargs: args
+            outproc: function(output, liner, kill, local line) {
+                while line = liner.read() {
+                    report.stdout.push(line)
+                    printline("\x1b[33m${line}\x1b[0m")                     // amber for stdout
+                }
+            }
+            errproc: function(output, liner, kill, local line) {
+                while line = liner.read() {
+                    report.stderr.push(line)
+                    printline("\x1b[36m${line}\x1b[0m")                     // cyan for stderr
+                }
+            }
+        }
+        if cwd
+            xlparams.execops = { cwd: cwd }
+        else if options.cwd
+            xlparams.execops = { cwd: options.cwd }
+        fs.execLines(cmd, xlparams, function(error, result) {
+        	evalactive(list(`assign, `(compress, "$$"), report))            // assign to $$ in active namespace
+            pending.signal(list(error, merge(result, report)))
+        })
+        pending.wait()
+    }
+
+    // shellparser
+    // intercept command-line parsing and look for a !shell escape
+    function shellparser(source, grammar, operators, local token) {
+        token = source.tokenread()
+        if token.atom == `! {
+            source.tokenlast(true)                                          // "consume" the ! token
+            text = readline(source)
+            source.tokenpush({                                              // don't show any output
+                atom: `;;
+                loc: tuple(0, text.length)
+            })
+            exec("bash", ["-c", text], js.d)                                // default directory: js.d
+	    }
+        else {
+            source.tokenpush(token)
+            xparser(source, grammar, operators)
+        }
+    }
+
+    if options.fs
+        fs = options.fs
+    else
+        `(error, fs) = Filesystem("")                                       // error not possible
+    if options.derive != "" {                                               // install hook
+        if string(options.derive)
+            shelly = Dialect.derive(options.derive)
+        else
+            shelly = Dialect
+        xparser = shelly.parser
+        shelly.parser = shellparser
+    }
+
+    // finis
+    shob
+};
+
+
+/*
+ * shInit
+ *
+ *     Initialize the node module.
+ *
+ *
+ */
+
+function shInit(local manifest) {
+    manifest = `(ShellConnect, shInit)
+
+    Naan.module.build(module.id, "shell", function(modobj, compobj) {
+        require("./filesystem.nlg")
+        compobj.manifest = manifest
+        modobj.exports.ShellConnect = ShellConnect
+    })
+} ();

@@ -38,10 +38,12 @@
 
 closure FSview(table, rootpath, local view) {
     global(JSpath)
-    if !table
+    if !table || !string(rootpath)
         return (list(Error("invalid arguments")))
     view = new(object, this)
     view.table = table
+    if rootpath != "" && rootpath.slice(-1) != "/"
+        rootpath = rootpath.concat("/")                                     // "" or "<path>/"
     view.rootpath = rootpath
     view.path = JSpath.posix                                                // for view.path.join(), etc.
 
@@ -118,23 +120,21 @@ closure FSview(table, rootpath, local view) {
     // checkPathName
     //
     // Return a `(path, name) tuple for a directory, or false if callback executed due to error. The
-    // name is the empty string if the path is empty. Path "/" has name "/". Otherwise the name is
-    // the last segment of the path, omitting the trailing slash.
+    // name is the empty string if the path is empty. Path "/" has name "". Otherwise the name is the
+    // last segment of the path, omitting any trailing slash. A key invariant is that the information
+    // should be the same whether the pathname was part of the rootpath or specified in the source
+    // path to an operation. That is why this "steals" the rootpath name if needed.
     //
-    function checkPathName(path, callback, local name, slashdex) {
-        if path == ""
-            name = ""
-        else {
-            if checkPath(path, callback)
-                return (false)                                              // non-string
-            if path.slice(-1) != "/"
-                path = path.concat("/")                                     // force to be directory
-            slashdex = path.lastIndexOf("/", path.length-2)
-            if path == "/" || slashdex < 0
-                name = path
-            else
-                name = path.slice(slashdex+1, -1)                           // omit trailing "/"
-        }
+    function checkPathName(path, callback, local name) {
+        if checkPath(path, callback)
+            return (false)                                                  // non-string
+        if path != "" && path.slice(-1) != "/"
+            path = path.concat("/")                                         // force to be directory
+        if path == "/" && rootpath != ""
+            name = rootpath                                                 // avoid making "//"
+        else
+            name = rootpath.concat(path)
+        name = name.split("/").slice(0,-1).pop() || ""                      // <|| ""> not needed
         list(path, name)
     }
 
@@ -683,7 +683,7 @@ closure FSview(table, rootpath, local view) {
             return                                                          // already executed callback with error
         dirdict = {
             name: name
-            path: path
+            path: rootpath.concat(path)
             data: {
                 platform: table.type
                 semantics: "dbfs"
@@ -743,14 +743,13 @@ closure FSview(table, rootpath, local view) {
         `(path, name) = checkPathName(path, callback)
         if !path
             return                                                          // already executed callback with error
-        options = {                                                         // ### might want to allow some options
+        options = merge({
             prefix: path
             deep: true
-        }
-        if name == "" && rootpath != ""
-            name = rootpath.split("/").slice(0,-1).pop() || ""
+        }, options)
         treedict = {
             name: name
+            path: rootpath.concat(path)
             data: {
                 platform: table.type
                 semantics: "dbfs"
