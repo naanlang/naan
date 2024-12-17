@@ -529,7 +529,7 @@ closure DbConnector(psm, local connClassID, connector, watch) {
     
     // localDBcred
     //
-    // True iff the specified credential dictionary is for a local browser DB.
+    // True iff the specified credential dictionary is for a local DB.
     function localDBcred(creds) {
         !creds.authName && creds.urlName.indexOf("://") < 0
     }
@@ -722,8 +722,13 @@ closure DbConnector(psm, local connClassID, connector, watch) {
         if creds {
             if creds.label
                 info.name = creds.label
-            if localDBcred(creds)
-                info.type = "browser storage"
+            if localDBcred(creds) {
+                if js.w
+                    info.type = "PouchDB-browser"
+                else
+                    info.type = "PouchDB-filesystem"
+            } else
+                info.type = "PouchDB-network"
             if creds.locked
                 info.locked = true
             if creds.hidden

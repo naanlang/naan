@@ -715,8 +715,8 @@ closure FSview(table, rootpath, local view) {
                             finfo.type = "directory"
                     } else if !finfo.type
                         finfo.type = "file"                                 // everything is a file in UNIX
-                    finfo.md5 = item.doc._md5 || undefined
-                    finfo.length = item.doc._length || item.doc.length || undefined
+                    finfo.md5 = item._md5 || item.doc._md5 || undefined
+                    finfo.length = item._length || item.doc._length || item.doc.length || undefined
                     if item.key.length > offset                             // not the directory itself
                         dirdict.children.push({
                             name: name

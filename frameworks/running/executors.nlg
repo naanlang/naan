@@ -71,10 +71,14 @@ closure ExecutorBase(track, type, name, local exec) {
     
     // execSetStatus
     //
-    // Received a status update from the instance.
+    // Received a status update from the instance. This makes a copy of the specified dictionary for
+    // garbage collection, because if we store the status from a separate vsite window then it can
+    // cause the main window to retain a vsite window after it's closed. The last status update sets
+    // an object in the context of the detached window, and then it never gets updated until the
+    // executor goes away. That doesn't always happen as soon as you think.
     //
     exec.execSetStatus = function execSetStatus(status) {
-        exec.xstatus = status
+        exec.xstatus = new(status)                                          // for GC (!)
     }
     
     // execFailed
@@ -218,7 +222,7 @@ closure ExecutorContext(exec, state, local context, coder, util) {
         else if result.1.result
             list(false, caar(util.pkgLoad(result.1.result, {
                 localroots: false
-                intern: false
+                intern: "symbols"
                 execute: false
                 objectDecoder: coder.decodeObject
             })))

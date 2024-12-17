@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2023 by Richard C. Zulch
+ * Copyright (c) 2020-2024 by Richard C. Zulch
  *
  */
 
@@ -36,6 +36,22 @@ closure S3bucket(s3, name, bucketOptions, local bucket) {
         }, function (error, data) {
             if error
                 error = Error("S3bucket.head failed:", error.name, "key:", key, "in", bucket.name)
+            pending.signal(list(error, data))
+        })
+        pending.wait()
+    }
+
+    //
+    // get
+    //
+    bucket.get = closure get(key, local pending) {
+        pending = new(nonce)
+        s3.aws.getObject({
+            Bucket: bucket.name
+            Key: key
+        }, function (error, data) {
+            if error
+                error = Error("S3bucket.get failed:", error.name, "key:", key, "in", bucket.name)
             pending.signal(list(error, data))
         })
         pending.wait()

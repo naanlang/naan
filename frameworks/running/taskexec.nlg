@@ -88,7 +88,7 @@ closure TaskDispatcher(replier, local contexts, gohome, coder, util) {
                         objectDecoder: coder.decodeObject
                     })
                     expr = caar(expr)
-                    if expr.0 == `\.execute\-method
+                    if expr.0 == `\.invoke\-method
                         expr = coder.invokeMethod(expr.1, expr.2)           // object method, args
                     else
                         expr = evalactive(expr)                             // evaluate expression

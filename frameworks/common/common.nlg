@@ -182,53 +182,6 @@ function JsonStringify(data) {
     }
 };
 
- 
-/*
- * JsLoadScript
- *
- *     Load the specified script, or return its main entry point if already loaded. This blocks the
- * caller until the script load completes. The return value is false if an error occurred.
- *
- */
-
-jsScripts = { };                                                            // script values become false on reload
- 
-closure JsLoadScript(libpath, globalID, local savens, hostpath, pending, scriptTag) {
-    global(jsScripts, JSpath, js)
-    if jsScripts[libpath]
-        return                                                              // already loaded
-    savens = nsactive()
-    hostpath = js.w.location.origin.concat(JSpath.join(JSpath.dirname(js.w.location.pathname), libpath))
-    if js.s.importScripts && tostring(js.s.importScripts) == "[Function importScripts]" {
-        try {
-            js.s.importScripts(hostpath)                                    // load in worker context
-            jsScripts[libpath] = js.s[globalID]
-        } catch {
-            debuglog("JsLoadScript:", libpath, "failed", exception)
-            js.s.console.log("JsLoadScript:", libpath, "failed", exception) // ensure visibility in JS console
-        }
-    } else if js.w {                                                        // load in browser context
-        pending = new(nonce)
-        scriptTag = js.w.document.createElement("script")
-        scriptTag.src = hostpath.concat(requireQuery())
-        scriptTag.onload = function (event) {
-            jsScripts[libpath] = js.w[globalID]
-            pending.signal(js.w[globalID])
-            true
-        }
-        scriptTag.onerror = function (event) {
-            debuglog("JsLoadScript:", libpath, "not found")
-            pending.signal(false)
-            true
-        }
-        js.w.document.body.appendChild(scriptTag)
-        pending.wait()
-    } else if js.g
-        jsScripts[libpath] = js.r(libpath)                                  // load in NodeJS context
-    nsactive(savens)
-    jsScripts[libpath]
-};
-
 
 /*
  * LoadComponentOnDemand
@@ -365,7 +318,7 @@ Uint8ArrayFromString = false;
 
 function comrInit(local manifest) {
     manifest = `(EncodeQuery, DecodeQuery, ContentTypeFromFileExt, UUID, VersionCheck, JsonParse,
-        JsonStringify, JsLoadScript, LoadComponentOnDemand, LiveExport, comrInit)
+        JsonStringify, LoadComponentOnDemand, LiveExport, comrInit)
 
     Naan.module.build(module.id, "common", closure(modobj, compobj) {
         compobj.manifest = manifest
@@ -373,8 +326,9 @@ function comrInit(local manifest) {
         modobj.exports.DecodeQuery = DecodeQuery
         modobj.exports.ContentTypeFromFileExt = ContentTypeFromFileExt
         modobj.exports.UUID = UUID
-        modobj.exports.JsLoadScript = JsLoadScript
         modobj.exports.LoadComponentOnDemand = LoadComponentOnDemand
+        letimport(module.owner.list.Util.exports.JsLoadScript)              // use the Util version
+        modobj.exports.JsLoadScript = JsLoadScript
         modobj.exports.LiveExport = LiveExport                              // allow others to create export updaters
         updateExports = LiveExport()                                        // export LiveImport() so we can update
 
@@ -481,13 +435,12 @@ function comrInit(local manifest) {
                 }
                 //
                 // MD5 functions
-                if symbol(NideBuild) {                                      // execute if we are not building
-                    JsLoadScript("frameworks/browser/spark-md5/spark-md5.min.js", "SparkMD5")
-                }
                 //
                 // hasMD5 in hex
                 HashMD5 = function browserMD5(data, raw) {
                     data = binaryFrom(data)
+                    if !wsg.SparkMD5
+                        JsLoadScript("frameworks/browser/spark-md5/spark-md5.min.js", "SparkMD5")
                     if xobject(data)
                         wsg.SparkMD5.ArrayBuffer.hash(data, raw)
                     else

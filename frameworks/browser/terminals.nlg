@@ -152,9 +152,9 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
 
         // onerror
         // An error occurred on the WebSocket connection.
+        // This can happen in normal operation when the connection times out.
         target.ws.onerror = function onerror(e) {
             pending.signal(list(Error("websocket failed", e)))
-            debuglog("ws error")
         }
         
         // onclose
@@ -655,6 +655,7 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
     //     Destroy the execution instance.
     
     target.destroy = function destroy() {
+        gWorkers[target.guid] = undefined
         target.execClosed(Error("instance destroyed"))
         track.delete(target)
         termDetach()
@@ -865,6 +866,10 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
             if inbound
                 inbound.active = active
         }
+        
+        connection.WriteLn = function WriteLn(text) {
+            term.WriteLn(text)
+        }
 
         connection.termDetach = function termDetach() {                     // disconnect the terminal
             db.detach(target)
@@ -921,7 +926,46 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         }
         target.execReset()                                                  // reset our parent class
     }
-    
+
+    // targetClose
+    //
+    //     Mark the target window as closed.
+    //
+    function targetClose(local conn) {
+        for conn in connected {
+            conn.db.detach(target)
+            conn.WriteLn("\x1b[90m\x1b[3m".concat("\ntarget closed", "\x1b[0m"))
+        }
+        target.execReset()
+        target.naancont = naancont = false
+    }
+
+    // setCheckStatus
+    //
+    //     Begin or end checking status on the worker to see if stopped responding. The challenge
+    // here is that we open vsite windows in the main thread, but there is no reliable event to learn
+    // when they are closed. The solution is to start checking if the window is closed after it gets
+    // a visibilityChange event to hidden. This terminates when the window gets marked closed or when
+    // it becomes visible again--which is quite unlikely unless someone uses the explicit hide/show
+    // window methods.
+    //
+    target.setCheckStatus = closure setCheckStatus(hidden, window) {
+        if hidden {
+            if !target.statusPoll
+                target.statusPoll = future(function() {
+                    while target.statusPoll {
+                        if window.closed {
+                            targetClose()
+                            target.statusPoll = false
+                            break
+                        } else
+                            sleep(100)                                      // check 10x/second
+                    }
+                }, 10)                                                      // start after 10 msec
+        } else
+            target.statusPoll = false
+    }
+
     // vsiteRefresh
     //
     //     The vsite upon which we are based has changed.
@@ -968,6 +1012,11 @@ closure termInstallVirtualWatcher(track, naancont) {
             target = findIDEtarget(track, msg.name, "NaanVsite", msg.naancont)
             if target
                 target.updateController()
+        }
+        else if msg.op == "VsiteVisibilityChange" {
+            target = findIDEtarget(track, msg.name, "NaanVsite", msg.naancont)
+            if target
+                target.setCheckStatus(msg.hidden, msg.window)
         }
     }
     

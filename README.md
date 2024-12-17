@@ -1,14 +1,14 @@
-**Naan**™
+**NaaN**™
 -----
 
-Naan is an async-first software platform for rapid development.
+NaaN is an async-first software platform for rapid development.
 
 #### Release:
-     **Naan for NPM** version **1.4.1+1**  
+     **NaaN for NPM** version **1.4.3+1**  
      Copyright (c) 2017-2024 Zulch Laboratories, Inc.
 
 #### Features
-- **Naan** runs in NodeJS and web browsers using JavaScript
+- **NaaN** runs in NodeJS and web browsers using JavaScript
 - Based on an asynchronous LISP-2 engine with persistent execution
 - The default **Lingo**™ surface language provides familiar Algol-style braces syntax
 - Fiber-based concurrent execution without async or await declarations
@@ -37,18 +37,18 @@ For use as a library in the current project:
 
     naan [options] [source file] [arguments]
 
-With no arguments Naan runs as an interactive REPL using the node.js terminal.  
+With no arguments NaaN runs as an interactive REPL using the node.js terminal.  
 It can also evaluate an expression or execute a source file.
 
 ##### Command line usage
 
     -e <expression>             evaluate an expression
     -i, --interactive           use REPL with -e or [source file]
-    --version                   print Naan version
-    --buildno                   print Naan version with build number
+    --version                   print NaaN version
+    --buildno                   print NaaN version with build number
     -h, --help                  print usage information
 
-Naan prints the results of evaluating each expression with the REPL, but not
+NaaN prints the results of evaluating each expression with the REPL, but not
 by default with an expression or source file. The interactive flag overrides
 this to print the result of each expression in all cases.
 
@@ -72,7 +72,7 @@ Fetch your public IP from a website (NodeJS version 18 or later):
 
 ##### Shell scripting
 
-When installed globally, Naan can be used for shell scripts with the [Shebang](https://en.wikipedia.org/wiki/Shebang_(Unix))
+When installed globally, NaaN can be used for shell scripts with the [Shebang](https://en.wikipedia.org/wiki/Shebang_(Unix))
 mechanism. For example, copy the following text to a file named helloworld:
 
     #!/usr/bin/env naan
@@ -89,7 +89,7 @@ The [NaanIDE](https://www.npmjs.com/package/@naanlang/naanide) installation incl
 Please email [Richard Zulch](mailto:naanlang@zulchlabs.com) with questions and comments.
 
 #### Dependencies:
-We gratefully acknowledge these software packages used with Naan:  
+We gratefully acknowledge these software packages used with NaaN:  
 - [jszip.js](http://stuartk.com/jszip) - read and write zip files  
 - [NodeJS-path](https://nodejs.org/) - NodeJS path utilities  
 - [PouchDB](https://pouchdb.com/) - synchronizing database  

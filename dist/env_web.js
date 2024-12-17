@@ -34,7 +34,7 @@ exports.NaanControllerWeb = function() {
     "use strict";
     /*jshint -W024 */
     var undefined;                                                          // JavaScript should make this a keyword
- 
+
     //
     // Persistent
     //
@@ -43,17 +43,11 @@ exports.NaanControllerWeb = function() {
         kStateFirstVersion = 200,                                           // increment when losing backwards compatbility
         kStateCurrentVersion = 200;                                         // increment when adding features
 
- 
+
     //
     // Environment
     //
-  
-    var pageLoading = true;                                                 // assume we are loading the page
 
-    window.addEventListener("load", function (e) {
-        pageLoading = false;
-    });
- 
     var querystrings = (function(a) {
         if (a === "") return {};
         var b = {};
@@ -67,12 +61,12 @@ exports.NaanControllerWeb = function() {
         }
         return b;
     })(window.location.search.substr(1).split('&'));
-   
-   
+
+
     //
     // Initialization
     //
- 
+
     var naanlib = new exports.Naanlib();
     var dontSaveUntilWorking;                                               // true when state loaded, must be reset to save state again
     var contSelf = this;                                                    // this is us, for access within nested functions
@@ -129,7 +123,7 @@ exports.NaanControllerWeb = function() {
     //
     // Read any pending Naan output and send to terminal.
     //
- 
+
     function takePending() {
         var outputq = replqueue;
         replqueue = false;
@@ -145,13 +139,13 @@ exports.NaanControllerWeb = function() {
     //==========================================================================
     // New Terminal Interface
     //--------------------------------------------------------------------------
-               
+
     //
     // StateGet
     //
     // Report the saved state we are keeping for the terminal.
     //
-    
+
     this.StateGet = function StateGet() {
         termlist.every(function(term) {
             var state;
@@ -170,20 +164,20 @@ exports.NaanControllerWeb = function() {
     //
     // Attach a terminal to our interpreter and immediately start sending it messages.
     //
-    
+
     this.Attach = function Attach(terminal) {
         var repdex = termlist.indexOf(terminal);
         if (repdex < 0)
             termlist.push(terminal);
         takePending();                                                      // output all pending terminal messages
     };
-    
+
     //
     // Detach
     //
     // Detach the terminal from the interpreter.
     //
-    
+
     this.Detach = function Detach(terminal) {
         var repdex = termlist.indexOf(terminal);
         if (repdex >= 0)
@@ -191,17 +185,17 @@ exports.NaanControllerWeb = function() {
         if (termlist.length === 0)
             replstate = terminal.StateSave();                               // save ultimate repl state
     };
-    
+
     //
     // Interrupt
     //
     // Interrupt the interpreter in response to a user request.
     //
-    
+
     this.Interrupt = function Interrupt(terminal) {
-        window.setTimeout(function () {
+        Promise.resolve().then(function () {
             naanlib.escape();
-        }, 0);
+        });
     };
 
     //
@@ -209,7 +203,7 @@ exports.NaanControllerWeb = function() {
     //
     // Enter line of text to instance.
     //
-    
+
     this.Return = function Return(text, terminal) {
         termlist.forEach(function(term) {
             if (term !== terminal)
@@ -240,13 +234,13 @@ exports.NaanControllerWeb = function() {
         });
         return (data);
     };
-    
+
     var nideListener;
     this.OnMessage = function OnMessage(proc) {
         nideListener = proc;
         return (proc);
     };
-    
+
     this.DispatchMessage = function DispatchMessage(data) {                 // "local" -> "remote"
         if (nideListener)
             setTimeout(function() {
@@ -267,7 +261,7 @@ exports.NaanControllerWeb = function() {
         debugListener = proc;
         return (proc);
     };
-    
+
     this.DispatchDebugger = function DispatchDebugger(data) {               // "local" -> "remote"
         if (debugListener)
             setTimeout(function() {
@@ -280,7 +274,7 @@ exports.NaanControllerWeb = function() {
     //
     // Report status to the terminal.
     //
-    
+
     setInterval(function() {
         var samples = naanlib.status(1);
         if (samples.length > 0)
@@ -297,29 +291,30 @@ exports.NaanControllerWeb = function() {
     //
     // Enter keystroke to instance.
     //
-    
+
     this.Keystroke = function Keystroke(text, keycode) {
         console.log("Naan keystroke mode not implemented");
     };
-    
+
     //
     // Dimensions
     //
     // Report terminal dimensions to instance.
     //
-    
+
     this.Dimensions = function Dimensions(rows, cols) {
         console.log("Naan terminal dimensions now (" + rows + ", " + cols + ")");
     };
-    
+
     //
     // VsiteRefresh
     //
     // Check if our underlying data has changed, and reload if needed.
     //
-    
+
     this.VsiteRefresh = function VsiteRefresh(url_origin) {
         if (vsiteName && window.location.href.startsWith(url_origin)) {
+            virtualClose();
             window.location.reload();                                       // we have changed underneath
             window.scroll(0,0);                                             // Chrome 106 had flood pants 🤓
             return (true);
@@ -330,7 +325,7 @@ exports.NaanControllerWeb = function() {
     //==========================================================================
     // Browser Console Terminal
     //--------------------------------------------------------------------------
-    
+
     // Commands:
     //      Naanlang.debug(<text>)          -- command line text entry
     //      Naanlang.int()                  -- interrupt and enter debugger
@@ -373,7 +368,7 @@ exports.NaanControllerWeb = function() {
             return (false);
         };
     }
-    
+
     //
     // debug
     //
@@ -429,7 +424,7 @@ exports.NaanControllerWeb = function() {
                     debugListener(msg.data);                                // target received a message
             }
         });
-        
+
         //
         // report messages back to opener
         //
@@ -437,7 +432,7 @@ exports.NaanControllerWeb = function() {
             window.opener.postMessage(msg, window.origin);
             return (msg);
         };
-                
+
         //
         // report messages back to opener
         //
@@ -459,7 +454,7 @@ exports.NaanControllerWeb = function() {
             };
             return (termSelf.OnMessage(msg));
         };
-        
+
         //
         // report status back to opener
         //
@@ -471,64 +466,47 @@ exports.NaanControllerWeb = function() {
             return (termSelf.OnMessage(msg));
         };
     }
- 
+
     //==========================================================================
     // Host Environment
     //--------------------------------------------------------------------------
- 
+
     //
     // SavePref
     //
     // Save a persistent preference object that can be retrieved in the future.
     //
-    
+
     this.SavePref = function SavePref(key, value) {
         return (prefs[key] = value);
     };
- 
+
     //
     // LoadPref
     //
     // Load a previously-saved preference object for future retrieval.
     //
-    
+
     this.LoadPref = function LoadPref(key) {
         return (prefs[key]);
     };
-    
+
     //
     // Working
     //
     // The application is working, so it is safe to save state.
     //
-    
+
     this.Working = function Working() {
         dontSaveUntilWorking = false;
     };
- 
-    var saveEvent = new Event("NaanSave");
- 
-    window.document.addEventListener("visibilitychange", function (e) {
-        if (window.document.visibilityState != "hidden")
-            return;
-        window.dispatchEvent(saveEvent);
-        saveLocal();
-    });
 
-    window.addEventListener("pagehide", function (e) {
-        window.dispatchEvent(saveEvent);
-        saveLocal();
-    });
-  
-    window.addEventListener("unload", function (e) {
-        window.dispatchEvent(saveEvent);
-        saveLocal();
-        virtualClose();
-    });
- 
-    window.addEventListener("beforeunload", function (e) {
-        window.dispatchEvent(saveEvent);
-        saveLocal();
+    window.document.addEventListener("visibilitychange", function (e) {
+        virtualVisibilityChange();
+        if (window.document.visibilityState == "hidden") {
+            window.dispatchEvent(new Event("NaanSave"));
+            saveLocal();
+        }
     });
 
     function makeState() {
@@ -548,24 +526,24 @@ exports.NaanControllerWeb = function() {
             statedoc.replstate = replstate;
         return (statedoc);
     }
- 
+
     function loadState(statedoc) {
         if (statedoc===undefined || statedoc.naan === undefined
             || statedoc.firstver > kStateCurrentVersion
             || statedoc.curversion < kStateFirstVersion
             || statedoc.licensee != "$Licensee$"
-            || statedoc.verstring != "$Version$")
+            || statedoc.verstring != "$Version$"
+            || !(naanstate = statedoc.naan))
         {
             localStorage.removeItem("NaanState_Hosted");
             return (false);
         }
-        naanstate = statedoc.naan;
         replstate = statedoc.replstate;                                     // get terminal state, if any
         if (typeof(statedoc.prefs) == "object")
             prefs = statedoc.prefs;
         return (true);
     }
- 
+
     function saveLocal() {
         /*jshint sub:true */
         if (dontSaveUntilWorking) {                                         // saved state is problematic
@@ -588,7 +566,7 @@ exports.NaanControllerWeb = function() {
         }
         return (false);
     }
-  
+
     function loadLocal() {
         try {
             /*jshint sub:true */
@@ -604,7 +582,7 @@ exports.NaanControllerWeb = function() {
         }
         return (false);
     }
-        
+
     function virtualOpen() {
         try {
             if (window.opener && window.opener.Naanlang) {
@@ -619,7 +597,7 @@ exports.NaanControllerWeb = function() {
         } catch (e) {
         }
     }
-    
+
     function virtualClose() {
         try {
             if (window.opener && window.opener.Naanlang) {
@@ -634,6 +612,22 @@ exports.NaanControllerWeb = function() {
         } catch (e) {
         }
         vsiteName = false;                                                  // window is going away
+    }
+
+    function virtualVisibilityChange() {
+        try {
+            if (window.opener && window.opener.Naanlang) {
+                window.opener.Naanlang.naancon.DispatchMessage({
+                    op: "VsiteVisibilityChange",
+                    name: vsiteName,
+                    naancont: contSelf,
+                    title: vsiteName + " $Version$",
+                    hidden: window.document.visibilityState == "hidden",
+                    window: window
+                });
+            }
+        } catch (e) {
+        }
     }
 
     /*jshint sub:true */
@@ -656,6 +650,7 @@ exports.NaanControllerWeb = function() {
             localStorage.removeItem("NaanState_Hosted");
             window.location.reload();
         }
+        naanstate = false;                                                  // reclaim memory
     }
 
     if (window.opener) {

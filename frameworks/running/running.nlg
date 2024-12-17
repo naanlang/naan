@@ -207,12 +207,26 @@ closure packageCoder(evalf, local coder) {
                     quote(x@\.tostring = function() { "{proxy ${nn}}" }),
                     quote(x@\.undefined = closure undef args {
                         let (result) {
-                            result = evalf(list(`\.execute\-method, objectID, args))
+                            result = evalf(list(`\.invoke\-method, objectID, args))
                             if result.0
                                 throw("remoting failure: ${ErrorString(result.0)}")
                             else
                                 result.1
                         } ()
+                    }),
+                    quote(x@\.\.undefined = function (key, local result) {
+                        result = evalf(list(`\.invoke\-method, objectID, list(`\.\.undefined, key)))
+                        if result.0
+                            throw("remoting failure: ${ErrorString(result.0)}")
+                        else
+                            result.1
+                    }),
+                    quote(x@\.\=undefined = function (key, value, local result) {
+                        result = evalf(list(`\.invoke\-method, objectID, list(`\.\=undefined, key, value)))
+                        if result.0
+                            throw("remoting failure: ${ErrorString(result.0)}")
+                        else
+                            result.1
                     }), `x)))
             } (ident.name, ident.objectID)
             coder.wmapEncoding[obj] = ident
@@ -225,11 +239,17 @@ closure packageCoder(evalf, local coder) {
     //
     // Invoke a local object method from the remote proxy, returning a result tuple.
     //
-    coder.invokeMethod = closure invokeMethod(objectID, args, local obj) {
+    coder.invokeMethod = closure invokeMethod(objectID, args, local obj, method) {
         obj = coder.mapDecoding[objectID]
-        if obj
-            eval(list(deref, obj, pop(args), args))
-        else
+        method = pop(args)
+        if obj {
+            if method == `\.\.undefined
+                obj[args.0]
+            else if method == `\.\=undefined
+                obj[args.0] = args.1
+            else
+                eval(list(deref, obj, method, args))
+        } else
             throw("remoting error: object ${objectID} not found")
     }
 

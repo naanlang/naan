@@ -230,17 +230,26 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //      <substitute text, one or more lines>
     //      [File EOF]
     //
+    // Special line starts:
+    //      # comment
+    //      \# line starts with #
+    //      \\ line starts with \
+    //
     // Note that the newlines before and after the substitute text are not included. This returns a
     // a dictionary of variables and replacement text. The defs argument is optional, and defines a
     // substitution dictionary applied to the replacement text defined in this file.
     //
-    function parseSubstitutionLines(lines, defs, local ignoregex, varegex, line, find, subs, curvar, sub) {
+    function parseSubstitutionLines(lines, defs,
+        local ignoregex, escapex, varegex, line, find, subs, curvar, sub) {
         subs = { }
         ignoregex = RegExp("^#")
+        escapex = RegExp("^\\\\(#|\\\\)")
         varegex = RegExp("^[$]([^$]+)[$]")
         for line in lines {
-            if ignoregex.exec(line)
-                continue
+            if ignoregex.test(line)
+                continue                                                        // comment
+            if escapex.test(line)
+                line = line.slice(1)                                            // not-a-comment escape
             if find = line.match(varegex) {
                 curvar = find[1]
                 subs[curvar] = ""
@@ -271,6 +280,11 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //      <substitute text, one or more lines>
     //      [File EOF]
     //
+    // Special line starts:
+    //      # comment
+    //      \# line starts with #
+    //      \\ line starts with \
+    //
     // Note that the newlines before and after the substitute text are not included. This returns a
     // standard `(error, subs) result tuple where subs is a dictionary of variables and replacement
     // text. The defs argument is optional, and defines a substitution dictionary applied to the
@@ -293,7 +307,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //
     function applySubstitutions(text, subs, local subbed) {
         subbed = { }
-        list(text.replace(RegExp("[$][-A-Za-z0-9_./()\\\\]+[$]", "g"), function(match, local subst) {
+        list(text.replace(RegExp("[$][^$\\s]+[$]", "g"), function(match, local subst) {
             subst = subs[match.slice(1,-1)]
             if subst {
                 subbed[match] = true
