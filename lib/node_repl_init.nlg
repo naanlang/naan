@@ -6,11 +6,11 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2018-2021 by Richard C. Zulch
+ * Copyright (c) 2018-2025 by Richard C. Zulch
  *
  */
 
-loglevel(2);
+loglevel(3);
 
 
 /*

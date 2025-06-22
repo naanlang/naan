@@ -642,6 +642,7 @@ closure workController(api, local workco) {
                 name: config.name
                 workerID: workerID
             }) }
+        list(false, worker)
     }
 
     // wsReceive

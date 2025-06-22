@@ -1,0 +1,32 @@
+/*
+ * serviceNexara.nlg
+ * serviceNexara
+ *
+ * Nexara speech recognition.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2025 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * senexInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function senexInit(local manifest) {
+    manifest = `(senexInit)
+    Naan.module.build(module.id, "serviceNexara", function(modobj, compobj) {
+        compobj.manifest = manifest
+        require("naanlib:frameworks/common").LiveImport()
+        nodeLib = require("naanlib:plugins/nodeLib/node_util.nlg")
+        if js.g
+            https = require("naanlib:frameworks/node/https_request.nlg")
+        else
+            https = require("naanlib:frameworks/browser/https_request.nlg")
+    })
+} ();

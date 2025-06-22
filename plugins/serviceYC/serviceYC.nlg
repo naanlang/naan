@@ -50,9 +50,8 @@ function seycInit(local manifest) {
     Naan.module.build(module.id, "serviceYC", function(modobj, compobj) {
         compobj.manifest = manifest
         require("naanlib:frameworks/common").LiveImport()
-        if js.g {
-            nodeHttp = js.r("http")
-            https = require("naanlib:frameworks/node/https_request.nlg") }
+        if js.g
+            https = require("naanlib:frameworks/node/https_request.nlg")
         else
             https = require("naanlib:frameworks/browser/https_request.nlg")
         module.exports.YcRequest = YcRequest

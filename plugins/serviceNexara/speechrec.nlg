@@ -1,0 +1,160 @@
+/*
+ * speechrec.nlg
+ * Nexara
+ *
+ *     Access to Nexara speech to text recognition.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2025 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * NexaraSpeechRec
+ *
+ * Speech recognition object.
+ *
+ */
+
+closure NexaraSpeechRec(local nxspr) {
+    global(https, nodeLib)
+    nxspr = new(object, this)
+    nxspr.recogURL = "https://api.nexara.ru/api/v1/audio/transcriptions"
+
+    // login
+    //
+    // creds:
+    //  {
+    //      apiKey:     <string>                // e.g. nx-xxxxx
+    //  }
+    //
+    nxspr.login = closure login(creds) {
+        nxspr.creds = creds
+        list(false, { ok: true })
+    }
+
+    // recog
+    //
+    // Recognize text from the specified audio.
+    //
+    // Available options are:
+    //  {
+    //      language:   <string>                // optional: e.g. "ru-RU", "en-US"
+    //      model:      <string>                // optional: e.g. "whisper-1"
+    //      debug:      <boolean>               // extra debug logging for https request
+    //  }
+    //
+    // This returns an Operation object containing the ID of the asynchronous recognition operation:
+    //  {
+    //      done:       true                    // recognition complete
+    //      createdAt:  <date>                  // when operation started
+    //      modifiedAt: <date>                  // last modified
+    //      response: {
+    //          "@type":    <string>            // gRPC type
+    //          chunks:     <array>             // array of chunks
+    //      }
+    //  }
+    //
+    nxspr.recog = closure recog(audioBlob, options, local start, params, form, error, data) {
+        start = Date()
+        params = {
+            language: options.language.substring(0,2) || undefined
+            model: options.model || "whisper-1"
+            response_format: "verbose_json",
+            timestamp_granularities: ["word", "segment"]
+            file: audioBlob
+        }
+        form = nodeLib.MultipartBody(params)
+        `(error, data) = https.HttpsApiRequest(nxspr.recogURL, {
+            method: "POST"
+            putdata: form.body
+            headers: [
+                list("Authorization", "Bearer ".concat(nxspr.creds.apiKey))
+                list("Content-Type", form.headers."Content-Type")
+                list("Content-Length", form.headers."Content-Length")
+            ]
+            debug: options.debug || undefined
+        })
+        if error
+            list(Error("NexaraSpeechRec.recog failed:", error))
+        else if !(data.segments.length > 0) {
+            debuglog("NexaraSpeechRec.recog: no valid segments returned.")
+            printline("Nexara response:", Dialect.print(new(data)))
+            list(Error("NexaraSpeechRec.recog empty result"))
+        } else {
+            if options.dump
+                printline(Dialect.print(new(data)))
+            list(false, {
+                done: true
+                createdAt: start
+                modifiedAt: Date()
+                response: nexaraToYCSK(data)
+            })
+        }
+    }
+    
+    // nexaraToYCSK
+    //
+    // Convert a Nexara response to a Yandex SpeechKit structure. Hey, it was first.
+    //
+    function nexaraToYCSK(resp,
+        local output, wordx, segment, chunk, word, wordet) {
+        output = {
+            \@type: "type.googleapis.com/yandex.cloud.ai.stt.v2.LongRunningRecognitionResponse"
+            chunks: []
+            language: resp.language
+        }
+        wordx = 0
+        for segment in resp.segments {
+            if segment.text == ""
+                continue                                                    // empty segment
+            chunk = {
+                channelTag: "1"
+                alternatives: [
+                    {
+                        words: []
+                        text: segment.text
+                    }
+                ]
+            }
+            for word in segment.text.split(" ") {
+                wordet = resp.words[wordx++]
+                if wordet.word != word {
+                    debuglog("nexaraToYCSK: expected ${word} but got ${wordet.word}")
+                    return (false)
+                }
+                chunk.alternatives.0.words.push({
+                    word: wordet.word
+                    startTime: wordet.start.toFixed(3).concat("s")
+                    endTime: wordet.end.toFixed(3).concat("s")
+                })
+            }
+            output.chunks.push(chunk)
+        }
+        output
+    }
+
+    // finis
+    nxspr
+}
+
+
+/*
+ * nexaraInit
+ *
+ *     Initialize the module.
+ *
+ */
+
+function nexaraInit(local manifest) {
+    manifest = `(NexaraSpeechRec, nexaraInit)
+
+    Naan.module.build(module.id, "speechrec", function(modobj, compobj) {
+        require("./serviceNexara.nlg")
+        compobj.manifest = manifest
+        modobj.exports.NexaraSpeechRec = NexaraSpeechRec
+    })
+
+} ();

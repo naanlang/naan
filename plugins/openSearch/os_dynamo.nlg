@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023 by Richard C. Zulch
+ * Copyright (c) 2023-2025 by Richard C. Zulch
  *
  */
 
@@ -65,7 +65,7 @@ closure OSDynIndexer(index, table, options,
     // Update ids into the database, returning a nonce signaled with error array.
     //
     closure updateRecordIDs(docs, ids, writeID) {
-        asyncArray(docs, 10, function(entry, index, cancel, local error) {
+        asyncArray(docs, 10, closure(entry, index, cancel, local error) {
             ignore(error)
             `(error) = table.updateRecord(
                 entry[table.hashKey],
@@ -78,11 +78,11 @@ closure OSDynIndexer(index, table, options,
     //
     // Batch index documents into OpenSearch, returning a nonce signaled with ids array.
     //
-    closure batchIndex(records, local pending, docs) {
+    closure batchIndex(records, local pending) {
         pending = new(nonce)
-        docs = records.map(function(record) {
+        docs = asyncArray(records, 10, closure(record) {
             options.converter(record)
-        })
+        }).wait()
         future(function(local error, ids) {
             `(error, ids) = index.write(docs)
             pending.signal(list(error, records, ids))

@@ -22,6 +22,7 @@ closure ExecutorBase(track, type, name, local exec) {
     exec = new(object, this)
     exec.type = type
     exec.name = name
+    exec.contexts = { }
     
     // execReset
     //
@@ -57,6 +58,18 @@ closure ExecutorBase(track, type, name, local exec) {
     // The specified message was received from the instance, so signal it.
     //
     exec.execReceived = closure execReceived(data, local pending) {
+        if data.reverse {
+            if !exec.contexts[data.contextID]
+                return                                                      // ignore unknown context
+            if !exec.reverseDispatch
+                exec.reverseDispatch = require("./taskexec.nlg").TaskDispatcher(function(data) {
+                    data.reverse = true
+                    exec.PostMessage(data)
+                }, exec.contexts[data.contextID].coder)
+            data.reverse = false
+            exec.reverseDispatch(data)
+            return
+        }
         pending = exec.pending[data.xid]
         if !pending {                                                       // not waiting on message
             if data.xmsg == "xready"
@@ -110,7 +123,7 @@ closure ExecutorBase(track, type, name, local exec) {
     // persistent reconnection. Currently this does not ever reclaim old contexts on the instance
     // end of things, but it should. ###
     //
-    exec.context = closure context(state, local error, retries, ms, delta, excon) {
+    exec.context = closure context(state, coder, local error, retries, ms, delta, excon) {
         retries = 0
         ms = milliseconds()
         delta = 1
@@ -127,8 +140,14 @@ closure ExecutorBase(track, type, name, local exec) {
             sleep(delta)
             if delta < 100
                 delta *= 2 }
-        excon = ExecutorContext(exec, state)
-        excon.register()
+        excon = ExecutorContext(exec, state, coder)
+        `(error) = excon.register()
+        if error
+            list(error)
+        else {
+            exec.contexts[excon.state.contextID] = excon
+            list(false, excon)
+        }
     }
 
     // attention
@@ -160,7 +179,7 @@ closure ExecutorBase(track, type, name, local exec) {
  *
  */
 
-closure ExecutorContext(exec, state, local context, coder, util) {
+closure ExecutorContext(exec, state, coder, local context, util) {
     global(apply)
     context = new(object, this)
     if !state || !state.contextID
@@ -168,7 +187,7 @@ closure ExecutorContext(exec, state, local context, coder, util) {
             contextID: UUID()
         }
     context.state = state
-    coder = packageCoder(evalf)
+    context.coder = coder || packageCoder(evalf)
     util = modlist().Util.exports
 
     // getState
@@ -208,7 +227,7 @@ closure ExecutorContext(exec, state, local context, coder, util) {
         pkg = util.pkgSave(`expr, roots, {
             nsignore: true
             comments: true
-            objectEncoder: coder.encodeObject
+            objectEncoder: context.coder.encodeObject
         })
         data = {
             contextID: state.contextID
@@ -224,7 +243,7 @@ closure ExecutorContext(exec, state, local context, coder, util) {
                 localroots: false
                 intern: "symbols"
                 execute: false
-                objectDecoder: coder.decodeObject
+                objectDecoder: context.coder.decodeObject
             })))
         else
             result

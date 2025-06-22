@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2024 by Richard C. Zulch
+ * Copyright (c) 2019-2025 by Richard C. Zulch
  *
  */
 
@@ -48,8 +48,8 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
     nlregex = RegExp("\\n", "g")
     target.workerID = options.workerID
     target.msgQueue = []
-    target.dispatcher = call(options.dispatcher, function(reply) { reply })
-        
+    target.dispatcher = call(options.dispatcher)
+
     // findWorker
     //
     function findWorker(testID, local instance) {
@@ -135,19 +135,20 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
 
         // dispatcher
         // Respond to a host request while preserving context to permit reply routing
-        closure dispatcher(message, local reply) {
-            reply = target.dispatcher(message.payload.data)
-            target.ws.send(window.JSON.stringify({
-                guid: api.guid
-                clientID: message.clientID
-                serverID: message.serverID
-                workerID: message.workerID
-                respOp: "msgout"
-                payload: {
-                    id: "targetout",
-                    data: reply
-                }
-            }))
+        closure dispatcher(message) {
+            target.dispatcher(message.payload.data, function(reply) {
+                target.ws.send(window.JSON.stringify({
+                    guid: api.guid
+                    clientID: message.clientID
+                    serverID: message.serverID
+                    workerID: message.workerID
+                    respOp: "msgout"
+                    payload: {
+                        id: "targetout",
+                        data: reply
+                    }
+                }))
+            })
         }
 
         // onerror
@@ -334,6 +335,7 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
     //
     
     target.debugWrite = function(text, level) {
+        text = text.replaceAll("\n", "\r\n")
         if (level >= 5)
             target.term.WriteLn(text, target.term.Cyan)                     // cyan for builtin logging
         else if (level >= 4)
@@ -596,6 +598,7 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
     //
     
     target.debugWrite = function(text, level) {
+        text = text.replaceAll("\n", "\r\n")
         if (level >= 5)
             target.term.WriteLn(text, target.term.Cyan)                     // cyan for builtin logging
         else if (level >= 4)

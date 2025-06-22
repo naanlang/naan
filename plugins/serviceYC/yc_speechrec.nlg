@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2024 by Richard C. Zulch
+ * Copyright (c) 2024-2025 by Richard C. Zulch
  *
  */
 
@@ -18,7 +18,8 @@
  *
  */
 
-closure YCSpeechRec(options, local ycspr) {
+closure YCSpeechRec(local ycspr) {
+    global(https)
     ycspr = new(object, this)
     ycspr.recogURL = "https://transcribe.api.cloud.yandex.net/speech/stt/v2/longRunningRecognize"
     ycspr.checkURL = "https://operation.api.cloud.yandex.net/operations/"
@@ -55,7 +56,7 @@ closure YCSpeechRec(options, local ycspr) {
     //      }
     //  }
     //
-    ycspr.startRecog = closure startRecog(audioURI, options, local error, data) {
+    ycspr.startRecog = closure startRecog(audioURI, options, local params, error, data) {
         params = {
             config: {
                 specification: {

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2024 by Richard C. Zulch
+ * Copyright (c) 2024-2025 by Richard C. Zulch
  *
  */
 
@@ -22,60 +22,12 @@ vmState = false;
  */
 
 closure VmControl(local ycvm) {
-    global(js, https, nodeHttp, vmState)
+    global(js, https, http, vmState)
     if vmState.ycvm
         return (vmState.ycvm)                                               // singleton
     ycvm = new(object, this)
     vmState = new(nonce)                                                    // don't save with state
     vmState.ycvm = ycvm
-
-    // httpLocalRequest
-    //
-    // Make a simple GET request for the Docker's 169.254.169.254 metadata interface. This is not
-    // supported by the standard NaaN framework HttpsApiRequest because it is HTTP and returns JSON
-    // without bothering to set a contentType advising this.
-    //
-    
-    closure httpLocalRequest(url, params, local pending, chunks, request) {
-        pending = new(nonce)
-        chunks = []
-        request = nodeHttp.request(url, params, closure (response) {
-            response.on("data", function (chunk) {
-                chunks.push(chunk)
-            })
-            response.on("end", function (local content, error) {
-                content = js.g.Buffer.concat(chunks)
-                if response.statusCode < 200 || response.statusCode >= 299 {    // 299 is "cancelled"
-                    debuglog("httpRequest status:", url, response.statusCode, "message:", content)
-                    pending.signal(list(Error("httpRequest statusCode:", url, response.statusCode, {
-                        status: response.statusCode
-                    }), false, { status: response.statusCode }))
-                    return
-                }
-                if response.complete {
-                    try {
-                        content = js.g.JSON.parse(content.toString())
-                    } catch {
-                        error = Error("httpRequest decode:", url, exception)
-                    }
-                }
-                else
-                    error = Error("httpRequest terminated prematurely:", url, response.statusCode)
-                pending.signal(list(error, content, {
-                    headers: response.headers
-                    status: response.statusCode
-                    contentType: response.headers["content-type"]
-                }))
-            })
-        })
-        request.on("error", function hre(error) {
-            debuglog("httpRequest error:", url, "error:", error)
-            error = Error("httpRequest failed:", url, error)
-            pending.signal(list(error))
-        })
-        request.end()
-        pending.wait()
-    }
 
     // getIdentityDoc
     //
@@ -89,10 +41,11 @@ closure VmControl(local ycvm) {
     closure getIdentityDoc(local error, idDoc) {
         if ycvm.idDoc
             return (list(false, ycvm.idDoc))
-        `(error, idDoc) = httpLocalRequest("http://169.254.169.254/computeMetadata/v1/instance/vendor/identity/document", {
+        `(error, idDoc) = http.HttpRequest("http://169.254.169.254/computeMetadata/v1/instance/vendor/identity/document", {
             headers: {
                 "Metadata-Flavor": "Google"
             }
+            json: true
         })
         if error
             list(error)
@@ -116,10 +69,11 @@ closure VmControl(local ycvm) {
         now = milliseconds()
         if ycvm.authDoc && ycvm.authDocExpire > milliseconds()
             return (list(false, ycvm.authDoc))                              // use cached credential
-        `(error, authDoc) = httpLocalRequest("http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token", {
+        `(error, authDoc) = http.HttpRequest("http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token", {
             headers: {
                 "Metadata-Flavor": "Google"
             }
+            json: true
         })
         if authDoc {
             expireTime = now + (authDoc.expires_in - 3600) * 1000           // give us 1 hour of margin
@@ -135,7 +89,7 @@ closure VmControl(local ycvm) {
         else
             list(false, authDoc)
     }
-    
+
     // authHeader
     //
     // Return authorization header for the VM to be used in API requests to YC, as a result tuple.
@@ -148,7 +102,42 @@ closure VmControl(local ycvm) {
         else
             list(false, list(`Authorization, "${authDoc.token_type} ${authDoc.access_token}"))
     }
-    
+
+    // getHostname
+    //
+    // Ask the VM for its FQDN.
+    //
+    //  curl -H Metadata-Flavor:Google 169.254.169.254/computeMetadata/v1/instance/hostname
+    //      tutorbe-1.ru-central1.internal
+    //
+    ycvm.getHostname = closure getHostname(local error, hostname) {
+        `(error, hostname) = http.HttpRequest("http://169.254.169.254/computeMetadata/v1/instance/hostname", {
+            headers: [ list("Metadata-Flavor", "Google") ]
+        })
+        if error
+            list(error)
+        else
+            list(false, hostname)
+    }
+
+    // getUserData
+    //
+    // Ask the VM for its user-data configuration.
+    //
+    //  curl -H Metadata-Flavor:Google 169.254.169.254/computeMetadata/v1/instance/hostname
+    //      #cloud-config
+    //      <...yaml...>
+    //
+    ycvm.getUserData = closure getUserData(local error, userData) {
+        `(error, userData) = http.HttpRequest("http://169.254.169.254/latest/user-data", {
+            headers: [ list("Metadata-Flavor", "Google") ]
+        })
+        if error
+            list(error)
+        else
+            list(false, userData)
+    }
+
     // shutdownVM
     //
     // Tell YC to shutdown our VM.
@@ -202,6 +191,7 @@ function ycvmInit(local manifest) {
     Naan.module.build(module.id, "yc_vm", function(modobj, compobj) {
         require("./serviceYC.nlg")
         compobj.manifest = manifest
+        http = require("naanlib:frameworks/node/http_request.nlg")
         module.exports.VmControl = VmControl
     })
 } ();

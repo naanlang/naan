@@ -1,4 +1,4 @@
-**NaaN for NPM** version **1.4.3+1** is released under the MIT License:
+**NaaN for NPM** version **1.4.4+1** is released under the MIT License:
 
 Copyright (c) 2017-2024 Zulch Laboratories, Inc.
 

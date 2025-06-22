@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2024 by Richard C. Zulch
+ * Copyright (c) 2021-2025 by Richard C. Zulch
  *
  */
 
@@ -19,27 +19,57 @@
  *
  */
 
-closure TaskDispatcher(replier, local contexts, gohome, coder, util) {
+closure TaskDispatcher(replier, coder, local contexts, gohome, util) {
     global()
     contexts = { }
     gohome = makeActivator()
-    coder = packageCoder(evalf)
     util = modlist().Util.exports
-
-    // sendEval
+    
+    // ContextCoder
     //
-    // Send an evaluation request to the original execution context.
+    // A context-specific coder allowing remote-initiated communication.
     //
-    closure evalf(expr) {
-        debuglog("TaskDispatcher doesn't yet implement reverse proxy objects")
-        list(Error("### reverse object proxy not implemented"))
+    closure ContextCoder(contextID, _guid, dynreply, local exec, error, context) {
+        contexts[contextID].coder = packageCoder(closure evalf(expr) {
+            if !exec {
+                exec = require("./executors.nlg").ExecutorBase(false, "reverser", "TD")
+                exec.PostMessage = closure(data) {
+                    if data.xmsg == "xstart" {                              // report ready locally
+                        data.xmsg = "xready"
+                        exec.execReceived(data)
+                    } else {
+                        data.reverse = true
+                        data._guid = _guid || undefined
+                        dynreply(data)
+                    }
+                    list(false)
+                }
+                contexts[contextID].execReceived = exec.execReceived        // needed for registered reply
+                `(error, context) = exec.context({
+                    contextID: contextID
+                }, contexts[contextID].coder)
+                if error {
+                    ErrorDebuglog("TaskDispatcher.ContextCoder failed:", error)
+                    exec = false
+                    return (list(error))
+                }
+            }
+            context.eval(expr)
+        })
     }
 
     // dispatcher
     //
     // Return a new task dispatcher.
     //
-    closure dispatcher(data, local reply, restorens, context, expr, roots, proc, args, result) {
+    closure dispatcher(data, dynreply, local reply, restorens, context, expr, roots, proc, args, result) {
+        if data.reverse {
+            data.reverse = false
+            contexts[data.contextID].execReceived(data)
+            return
+        }
+        if !dynreply
+            dynreply = replier
         reply = {
             xmsg: "error"
             xid: data.xid
@@ -62,6 +92,10 @@ closure TaskDispatcher(replier, local contexts, gohome, coder, util) {
                     namespace: nsactive()
                     activator: gohome
                 }
+                if coder
+                    context.coder = coder
+                else
+                    ContextCoder(data.contextID, data._guid, dynreply)
                 restorens()
                 reply.xmsg = "registered"
                 reply.contextID = data.contextID
@@ -85,11 +119,11 @@ closure TaskDispatcher(replier, local contexts, gohome, coder, util) {
                         intern: true                                        // intern symbols
                         localroots: true                                    // make roots local if needed to intern
                         execute: true                                       // execute auto-running procedures
-                        objectDecoder: coder.decodeObject
+                        objectDecoder: context.coder.decodeObject
                     })
                     expr = caar(expr)
                     if expr.0 == `\.invoke\-method
-                        expr = coder.invokeMethod(expr.1, expr.2)           // object method, args
+                        expr = context.coder.invokeMethod(expr.1, expr.2)   // object method, args
                     else
                         expr = evalactive(expr)                             // evaluate expression
                     reply.error = undefined
@@ -104,7 +138,7 @@ closure TaskDispatcher(replier, local contexts, gohome, coder, util) {
                     reply.result = util.pkgSave(`expr, roots, {
                         nsignore: true                                      // don't report namespace errors
                         comments: true
-                        objectEncoder: coder.encodeObject})                 // include comments
+                        objectEncoder: context.coder.encodeObject})         // include comments
                     if context.namespace !== nsactive().0
                     {                                                       // evaluation changed namespace
                         context.namespace = nsactive().0
@@ -154,7 +188,7 @@ closure TaskDispatcher(replier, local contexts, gohome, coder, util) {
         } finally {
             restorens()
         }
-        replier(reply)
+        dynreply(reply)
     }
 };
 

@@ -47,7 +47,8 @@
  */
 
 closure httpsApiReqOnce(url, options,
-    local urlq, reqOptions, putdata, item, xurl, pending, chunks, request) {
+    local urlq, reqOptions, putdata, error, item, xurl, pending, chunks, request) {
+    global(js, nodeHttps, nodeUrl)
     if options.query
         urlq = url.concat(EncodeQuery("?", options.query))
     else
@@ -126,7 +127,10 @@ closure httpsApiReqOnce(url, options,
                     debuglog("HttpsApiRequest status:", url, response.statusCode, "message:", content)
                 pending.signal(list(Error("HttpsApiRequest statusCode:", url, response.statusCode, {
                     status: response.statusCode
-                }), false, { status: response.statusCode }))
+                }), false, {
+                    headers: response.headers
+                    status: response.statusCode
+                }))
                 return
             }
             if response.complete {
@@ -234,28 +238,56 @@ closure sseParserFactory(message, local parser) {
  *
  */
 
-closure HttpsApiRequest(url, options, local parser, decoder, result) {
+closure HttpsApiRequest(url, options,
+    local delayf, parser, decoder, error, content, status) {
+    global(stringDecoder, common)
+    //
+    // defRetrier -- backoff and retry selected errors
+    //
+    function defRetrier(error, headers, local retryAfter, retryms, waitms) {
+        if member(error.status, `(408, 500, 502, 503, 504)) {               // retriable errors
+            retryAfter = headers["retry-after"]
+            if retryAfter {
+                retryms = toint(retryAfter) * 1000
+                if !retryms
+                    retryms = Date(retryAfter).getTime() - Date.now()
+                if retryms < 0
+                    retryms = false
+            }
+            if !delayf
+                delayf = common.ExbackFactory(12,30)                        // 12s max backoff, 30s deadline
+            waitms = delayf()
+            if !waitms || waitms < retryms
+                waitms = retryms
+            if options.debug
+                debuglog("HttpsApiRequest.defRetrier: wait ${waitms} msec using retry-after ${retryAfter}")
+            if waitms                                                       // return false to give up
+                sleep(waitms)                                               // return true from sleep to retry
+        }
+    }
+
+    options = merge({ retrier: defRetrier }, options)
     if options.sseHook {
         parser = sseParserFactory(options.sseHook)
         decoder = xnew(stringDecoder.StringDecoder, "utf8")
-        options = merge(options, {
+        options = merge({
             streamHook: function(chunk) {
                 if chunk
                     parser.write(decoder.write(chunk))                      // data arrived
                 else
                     parser.write(decoder.end())                             // end of data
             }
-        })
+        }, options)
     }
     loop {
-        result = httpsApiReqOnce(url, options)
-        if result.0 && result.0.status {                                    // check for retries
-            if !options.retrier(result.0)
+        `(error, content, status) = httpsApiReqOnce(url, options)
+        if error && error.status {                                          // check for retries
+            if !options.retrier(error, status.headers)
                 break
         } else
             break
     }
-    result
+    list(error, content, status)
 };
 
 
@@ -271,6 +303,7 @@ function https_nodeInit(local manifest) {
 
     Naan.module.build(module.id, "https_request", function(modobj, compobj) {
         require("./node.nlg")
+        common = require("../common/utils.nlg")
         compobj.manifest = manifest
         modobj.exports.HttpsApiRequest = HttpsApiRequest
     })

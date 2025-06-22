@@ -946,7 +946,7 @@ closure DynaTable(dyna, tablename, options, local table) {
     //      range:          <key-expression>                                // range of keys to retrieve
     //      filter:         <key-expression>                                // conditions for items to return
     //      reverse:        <boolean>                                       // reverse order
-    //      project:        <array>                                         // project only specified attributes
+    //      project:        <array> | `count                                // project only specified attributes
     //      paging:         <exclusive start key>                           // for paging; updated each call
     //      consistentRead: <boolean>                                       // true to use consistent read
     //      limit:          <number>                                        // maximum count of results
@@ -962,6 +962,7 @@ closure DynaTable(dyna, tablename, options, local table) {
             TableName: tablename
         }
         hashKey = table.hashKey
+        output = []
         if options.indexName {
             params.IndexName = options.indexName
             if options.indexHashKey
@@ -989,15 +990,23 @@ closure DynaTable(dyna, tablename, options, local table) {
         }
         if options.reverse
             params.ScanIndexForward = false
-        if options.project
+        if options.project == `count {
+            params.Select = "COUNT"
+            output = {
+                Count: 0
+                ScannedCount: 0
+            }
+        } else if options.project
             params.ProjectionExpression = options.project.join(", ")
         if options.paging
             params.ExclusiveStartKey = options.paging
         if options.consistentRead
             params.ConsistentRead = options.consistentRead
-        output = []
         `(error) = dynQueryPager(`query, params, options.limit, function(data) {
-            if data.Count > 0
+            if dictionary(output) {
+                output.Count += data.Count
+                output.ScannedCount += data.ScannedCount
+            } else if data.Count > 0
                 output = output.concat(dyna.conv.recordDynToNaan(data.Items))
             data.Count
         })
@@ -1016,7 +1025,7 @@ closure DynaTable(dyna, tablename, options, local table) {
     //  {
     //      index:          <string>                                        // index name in table
     //      filter:         <key-expression>                                // conditions for items to return
-    //      project:        <array>                                         // project only specified attributes
+    //      project:        <array> | `count                                // project only specified attributes
     //      paging:         <exclusive start key>                           // for paging; updated each call
     //      consistentRead: <boolean>                                       // true to use consistent read
     //      limit:          <number>                                        // maximum count of results
@@ -1040,15 +1049,23 @@ closure DynaTable(dyna, tablename, options, local table) {
             if error
                 return (list(Error("table.scanRecords filter:", error)))
         }
-        if options.project
+        if options.project == `count {
+            params.Select = "COUNT"
+            output = {
+                Count: 0
+                ScannedCount: 0
+            }
+        } else if options.project
             params.ProjectionExpression = options.project.join(", ")
         if options.paging
             params.ExclusiveStartKey = options.paging
         if options.consistentRead
             params.ConsistentRead = options.consistentRead
-        output = []
         `(error) = dynQueryPager(`scan, params, options.limit, function(data) {
-            if data.Count >= 0
+            if dictionary(output) {
+                output.Count += data.Count
+                output.ScannedCount += data.ScannedCount
+            } else if data.Count >= 0
                 output = output.concat(dyna.conv.recordDynToNaan(data.Items))
             data.Count
         })

@@ -25,6 +25,7 @@
  *      range:          <string>                // sets range header
  *      headers:        [`(key, value)]         // add header(s) to the request, overriding defaults
  *      keepalive:      <boolean>               // true to send data at unload
+ *      retrier:        <function>              // retry selected failures
  *      debug:          <boolean>               // log errors and status results
  *  }
  *
@@ -39,11 +40,35 @@
  */
 
 closure HttpsApiRequest(url, options,
-    local urlq, fetchOptions, putdata, item, error, response, 
+    local delayf, urlq, fetchOptions, putdata, item, error, response, 
         contentType, content, headers) {
-    global(window)
-    if !options
-        options = { }
+    global(window, common)
+    //
+    // defRetrier -- backoff and retry selected errors
+    //
+    function defRetrier(error, headers, local retryAfter, retryms, waitms) {
+        if member(error.status, `(408, 500, 502, 503, 504)) {               // retriable errors
+            retryAfter = headers["retry-after"]
+            if retryAfter {
+                retryms = toint(retryAfter) * 1000
+                if !retryms
+                    retryms = Date(retryAfter).getTime() - Date.now()
+                if retryms < 0
+                    retryms = false
+            }
+            if !delayf
+                delayf = common.ExbackFactory(12,30)                        // 12s max backoff, 30s deadline
+            waitms = delayf()
+            if !waitms || waitms < retryms
+                waitms = retryms
+            if options.debug
+                debuglog("HttpsApiRequest.defRetrier: wait ${waitms} msec using retry-after ${retryAfter}")
+            if waitms                                                       // return false to give up
+                sleep(waitms)                                               // return true from sleep to retry
+        }
+    }
+
+    options = merge({ retrier: defRetrier }, options)
     if options.query
         urlq = url.concat(EncodeQuery("?", options.query))
     else
@@ -92,16 +117,23 @@ closure HttpsApiRequest(url, options,
                 debuglog("HttpsApiRequest error:", url, "error:", error)
             return (list(Error("HttpsApiRequest fetch failed:", error, url)))
         }
+        headers = { }
+        response.headers.forEach(function(value, key) {
+            headers[key.toLowerCase()] = value
+        })
         if response.status < 200 || response.status >= 299 {                // 299 is "cancelled"
             if options.debug
                 debuglog("HttpsApiRequest status:", url, response.statusCode)
             error = Error("HttpsApiRequest status:", url, response.status, {
                 status: response.status
             })
-            if options.retrier(error)
+            if options.retrier(error, headers)
                 continue                                                    // optional retry/delay logic
             else
-                return (list(error, false, { status: response.status }))
+                return (list(error, false, {
+                    headers: headers
+                    status: response.status
+                }))
         } else
             break
     }
@@ -125,10 +157,6 @@ closure HttpsApiRequest(url, options,
         `(error, content) = await(response.arrayBuffer())
     else
         `(error, content) = await(response.text())
-    headers = { }
-    response.headers.forEach(function(value, key) {
-        headers[key.toLowerCase()] = value
-    })
     list(error, content, {
         headers: headers
         status: response.status
@@ -149,6 +177,7 @@ function https_browserInit(local manifest) {
 
     Naan.module.build(module.id, "https_request", function(modobj, compobj) {
         require("browser.nlg")
+        common = require("../common/utils.nlg")
         compobj.manifest = manifest
         modobj.exports.HttpsApiRequest = HttpsApiRequest
     })

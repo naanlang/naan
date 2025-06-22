@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2022 by Richard C. Zulch
+ * Copyright (c) 2020-2025 by Richard C. Zulch
  *
  */
 
@@ -135,8 +135,8 @@ RegisterTestCategory("JSinterop", [
     "        print(\"in-\", x, \"-\", nthl.0)\n"
     "    } }" ],
 
-    [ "Array(0,1,2,3,4,5,6,7,8,9,10).filter(function&(nth) { stacktrap(nth,function&() { print(\"in-\",nth, \" \") }) });",
-        { text: "in-0 in-1 in-nth in-nth in-nth in-nth in-nth in-nth in-nth in-nth in-nth" } ],
+    [ "Array(0,1,2,3,4,5,6,7,8,9,10).filter(closure(nth) { stacktrap(nth,function() { print('in-', nth, space) }) });",
+        { text: "in-0 in-1 in-2 in-3 in-4 in-5 in-6 in-7 in-8 in-9 in-10" } ],
         
     [ "loop { stacktrap(0,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],
     [ "loop { stacktrap(1,function&(x) { print(\"loop-\",x) }), break };", "loop-Dictionary{0}|{ }" ],

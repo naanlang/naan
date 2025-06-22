@@ -1,0 +1,103 @@
+/*
+ * http_request.nlg
+ *
+ *     Http operations for NodeJS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024-2025 by Richard C. Zulch
+ *
+ */
+
+
+/* HttpRequest
+ *
+ * Make a simple http request. This is not supported by the standard NaaN framework HttpsApiRequest
+ * because it is not SSL.
+ *
+ * Options:
+ *  {
+ *      method:         <string>                // HTTP method (defaults to GET)
+ *      headers:        <dictionary>            // key/data pairs
+ *      putdata:        <data>                  // data to put
+ *      json:           <boolean>               // ignore content-type of return and decode JSON
+ *  }
+ *
+ * The return is a result tuple comprising:
+ *      (<error>,                               -- false on success
+ *      <content>,                              -- returned data
+ *      {
+ *          status:     <integer>               -- http response status
+ *          headers:    <array>                 -- headers if available
+ *      })
+ *
+ */
+
+closure HttpRequest(url, options,
+    local pending, chunks, params, request) {
+    global(js, nodeHttp)
+    pending = new(nonce)
+    chunks = []
+    params = {
+        method: options.method || undefined
+        headers: options.headers || undefined
+    }
+    request = nodeHttp.request(url, params, closure (response) {
+        response.on("data", function (chunk) {
+            chunks.push(chunk)
+        })
+        response.on("end", function (local content, error) {
+            content = js.g.Buffer.concat(chunks)
+            if response.statusCode < 200 || response.statusCode >= 299 {    // 299 is "cancelled"
+                debuglog("httpRequest status:", url, response.statusCode, "message:", content)
+                pending.signal(list(Error("httpRequest statusCode:", url, response.statusCode, {
+                    status: response.statusCode
+                }), false, { status: response.statusCode }))
+                return
+            }
+            if response.complete {
+                content = content.toString()
+                if options.json
+                    `(error, content) = JsonParse(content)
+            }
+            else
+                error = Error("httpRequest terminated prematurely:", url, response.statusCode)
+            pending.signal(list(error, content, {
+                headers: response.headers
+                status: response.statusCode
+                contentType: response.headers["content-type"]
+            }))
+        })
+    })
+    request.on("error", function hre(error) {
+        debuglog("httpRequest error:", url, "error:", error)
+        error = Error("httpRequest failed:", url, error)
+        pending.signal(list(error))
+    })
+    if options.putdata {
+        if string(options.putdata)
+            request.write(options.putdata)
+        else
+            request.write(JSONstringify(options.putdata))
+    }
+    request.end()
+    pending.wait()
+};
+
+
+/*
+ * http_nodeInit
+ *
+ * Initialize HTTP request operations for NodeJS.
+ *
+ */
+
+function http_nodeInit(local manifest) {
+    manifest = `(HttpRequest, http_nodeInit)
+
+    Naan.module.build(module.id, "http_request", function(modobj, compobj) {
+        require("./node.nlg")
+        compobj.manifest = manifest
+        modobj.exports.HttpRequest = HttpRequest
+    })
+}();

@@ -1,0 +1,198 @@
+/*
+ * aws_vm.nlg
+ * serviceAws
+ *
+ * VM controller under AWS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2024-2025 by Richard C. Zulch
+ *
+ */
+
+vmState = false;
+
+/*
+ * VmControl
+ *
+ *     VM control object for AWS.
+ *
+ */
+
+closure VmControl(creds, local dokon) {
+    global(js, http, vmState)
+    if vmState.dokon
+        return (vmState.dokon)                                              // singleton
+    dokon = new(object, this)
+    vmState = new(nonce)                                                    // don't save with state
+    vmState.dokon = dokon
+
+    // detachVM
+    //
+    // Tell AWS to detach a VM from its scalability group. Returns a tuple with:
+    //  {
+    //      Activities: [
+    //          {
+    //              ActivityId: "STRING_VALUE",
+    //              AutoScalingGroupName: "STRING_VALUE",
+    //              Description: "STRING_VALUE",
+    //              Cause: "STRING_VALUE",
+    //              StartTime: new Date("TIMESTAMP"),
+    //              EndTime: new Date("TIMESTAMP"),
+    //              StatusCode: "PendingSpotBidPlacement" || "WaitingForSpotInstanceRequestId"
+    //                  || "WaitingForSpotInstanceId" || "WaitingForInstanceId" || "PreInService"
+    //                  || "InProgress" || "WaitingForELBConnectionDraining" || "MidLifecycleAction"
+    //                  || "WaitingForInstanceWarmup" || "Successful" || "Failed" || "Cancelled"
+    //                  || "WaitingForConnectionDraining",
+    //              StatusMessage: "STRING_VALUE",
+    //              Progress: Number("int"),
+    //              Details: "STRING_VALUE",
+    //              AutoScalingGroupState: "STRING_VALUE",
+    //              AutoScalingGroupARN: "STRING_VALUE",
+    //          }
+    //      ]
+    //  }
+    closure detachVM(instanceID, local error, ascSdk, params, asclient, response) {
+        `(error, ascSdk) = await(js.i("@aws-sdk/client-auto-scaling"))
+        if error
+            return (list(error))
+        params = { }
+        params.region = creds.region
+        params.credentials = {
+            accessKeyId:        creds.keyID
+            secretAccessKey:    creds.keySecret
+        }
+        if creds.endpoint
+            params.endpoint = creds.endpoint
+        asclient = xnew(ascSdk.AutoScalingClient, params)
+        `(error, response) = await(asclient.send(xnew(ascSdk.DetachInstancesCommand, {
+            AutoScalingGroupName: creds.ec2AsgName
+            InstanceIds: [ instanceID ]
+            ShouldDecrementDesiredCapacity: false
+        })))
+        list(error, response)
+    }
+
+    // terminateVM
+    //
+    // Tell AWS to terminate a VM, ours in point of fact. Returns a tuple with:
+    //  {
+    //      TerminatingInstances: [
+    //          {
+    //              InstanceId: "STRING_VALUE"
+    //              CurrentState: { // InstanceState
+    //                  Code: Number("int"),
+    //                  Name: "pending" || "running" || "shutting-down" || "terminated"
+    //                      || "stopping" || "stopped",
+    //              }
+    //              PreviousState: {
+    //                  Code: Number("int"),
+    //                  Name: "pending" || "running" || "shutting-down" || "terminated"
+    //                      || "stopping" || "stopped",
+    //              }
+    //          }
+    //      ]
+    //  }
+    //
+    closure terminateVM(instanceID, local error, ec2sdk, params, ec2client, response) {
+        `(error, ec2sdk) = await(js.i("@aws-sdk/client-ec2"))
+        if error
+            return (list(error))
+        params = { }
+        params.region = creds.region
+        params.credentials = {
+            accessKeyId:        creds.keyID
+            secretAccessKey:    creds.keySecret
+        }
+        if creds.endpoint
+            params.endpoint = creds.endpoint
+        ec2client = xnew(ec2sdk.EC2Client, params)
+        `(error, response) = await(ec2client.send(xnew(ec2sdk.TerminateInstancesCommand,
+            {  InstanceIds: [ instanceID ] })))
+        list(error, response)
+    }
+
+    // getHostname
+    //
+    // Ask the VM for its FQDN.
+    //
+    //  TOKEN="`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`"
+    //  curl -H "X-aws-ec2-metadata-token: $TOKEN" 'http://169.254.169.254/latest/meta-data/hostname'
+    //      => ip-172-31-80-96.ec2.internal
+    //
+    dokon.getHostname = closure getHostname(local error, token, hostname) {
+        `(error, token) = http.HttpRequest("http://169.254.169.254/latest/api/token", {
+            headers: {
+                "X-aws-ec2-metadata-token-ttl-seconds": "2160"
+            }
+            method: "PUT"
+        })
+        if !error
+            `(error, hostname) = http.HttpRequest("http://169.254.169.254/latest/meta-data/hostname", {
+                headers: {
+                    "X-aws-ec2-metadata-token": token
+                }
+            })
+        if error
+            list(error)
+        else
+            list(false, hostname)
+    }
+
+    // vmShutdown
+    //
+    // Get our AWS EC2 VM instance ID and then request that it be shut down.
+    //
+    // How to get auth token:
+    //  curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"
+	//      =>  AQAEAJHVrb_zRdju_A3tYBJLtKHsjej5GFVsDu1VuBCErP8MNVOr0Q==
+    //
+    // How to get instance-id:
+    //  curl -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id
+    //      =>  i-008dc3846da316a93
+    //
+
+    dokon.shutdown = closure shutdown(local error, token, instanceID, response) {
+        `(error, token) = http.HttpRequest("http://169.254.169.254/latest/api/token", {
+            headers: {
+                "X-aws-ec2-metadata-token-ttl-seconds": "2160"
+            }
+            method: "PUT"
+        })
+        if !error
+            `(error, instanceID) = http.HttpRequest("http://169.254.169.254/latest/meta-data/instance-id", {
+                headers: {
+                    "X-aws-ec2-metadata-token": token
+                }
+            })
+        if !error
+            `(error, response) = detachVM(instanceID)
+        if !error
+            `(error, response) = terminateVM(instanceID)
+        if error
+            list(error)
+        else
+            list(false, response)
+    }
+
+    // finis
+    dokon
+};
+
+
+/*
+ * vmConInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function vmConInit(local manifest) {
+    manifest = `(VmControl, vmConInit)
+    Naan.module.build(module.id, "aws_vm", function(modobj, compobj) {
+        require("./serviceAws.nlg")
+        compobj.manifest = manifest
+        http = require("naanlib:frameworks/node/http_request.nlg")
+        module.exports.VmControl = VmControl
+    })
+} ();

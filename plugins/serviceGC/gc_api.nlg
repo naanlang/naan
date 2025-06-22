@@ -83,6 +83,7 @@ closure GcApi(options, local gcapi, cacert, renew, access_token, expires_at) {
         `(error, data, status) = https.HttpsApiRequest(url, {
             putdata: put || undefined
             cacert: cacert || undefined
+            debug: options.debug || undefined
             headers: [
                 `(Accept, "application/json"),
                 list(`Authorization, "Bearer ".concat(access_token))

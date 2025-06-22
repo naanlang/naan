@@ -7,7 +7,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2024 by Richard C. Zulch
+ * Copyright (c) 2021-2025 by Richard C. Zulch
  *
  */
 
@@ -35,6 +35,7 @@ var cmd_file;
 var eval_text;
 var do_interactive;
 var cmd_text = ""
+    + "chns('Start');;\n"
     + `App.naanpath = '${ naanpath.replace(/\\/g, "\\\\") }';;\n`           // path/to/our naan library
     + `App.rootpath = '${ rootpath.replace(/\\/g, "\\\\") }';;\n`           // path/to/our package.json
     + "Naan.module.defineLoc('naanlib', App.naanpath);;\n"                  // defines "naanlib:" prefix for require
@@ -67,11 +68,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.4.3");
+        console.log("1.4.4");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.4.3+1");
+        console.log("1.4.4+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {

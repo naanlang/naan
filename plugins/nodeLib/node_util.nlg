@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2023 by Richard C. Zulch
+ * Copyright (c) 2021-2025 by Richard C. Zulch
  *
  */
 
@@ -13,12 +13,11 @@
 /*
  * MultipartBody
  *
- * column positioning:                          //                          //                      !
  *     Create a multipart Form body from the specified dictionary, returning a buffer. Any xobject in
  * the dictionary is coded as an octet. If you want a different filename, include an options object
  * that defines that filename.
  *
- *The result is a dictionary as follows:
+ *The return value is a dictionary as follows:
  *  {
  *      body: <Buffer>
  *      header: {
@@ -29,11 +28,17 @@
  *
  */
 
-function MultipartBody(dict, options, local boundary, parts, key, data, filename) {
+function MultipartBody(dict, options,
+    local boundary, parts, key, data, item, filename) {
     boundary = "xx-xx-xx-xx-xx"
     parts = []
     for `(key, data) in dict {
-        if xobject(data) {
+        if Array.isArray(data) {                                            // PHP-style arrays
+            for item in data
+                parts.push(xnew(js.g.Buffer.from, "--".concat(boundary, "\r\n",
+                    "Content-Disposition: form-data; name=\"", key, "[]",
+                    "\"; \r\n\r\n", item, "\r\n"), "utf8"))
+        } else if xobject(data) {                                           // binary file data
             if options[key]
                 filename = options[key]
             else
@@ -43,8 +48,7 @@ function MultipartBody(dict, options, local boundary, parts, key, data, filename
                 "Content-Type:application/octet-stream\r\n\r\n"), "utf8"))
             parts.push(xnew(js.g.Buffer.from, data, "binary"))
             parts.push(xnew(js.g.Buffer.from, "\r\n", "utf8"))
-        }
-        else {
+        } else {                                                            // ordinary data
             parts.push(xnew(js.g.Buffer.from, "--".concat(boundary, "\r\n",
                 "Content-Disposition: form-data; name=\"", key,
                 "\"; \r\n\r\n", data, "\r\n"), "utf8"))
@@ -165,8 +169,11 @@ function nodeUtilInit(local manifest) {
     Naan.module.build(module.id, "node_util", function(modobj, compobj) {
         require("nodeLib.nlg")
         compobj.manifest = manifest
+        modobj.exports.MultipartBody = MultipartBody
+        modobj.exports.EncodeQuery = EncodeQuery
         modobj.exports.JsonParse = JsonParse
         modobj.exports.JsonStringify = JsonStringify
+        modobj.exports.RandomBytes = RandomBytes
         modobj.exports.UUID = UUID
         function postload() {
             nodeFs = js.r("fs")

@@ -558,42 +558,11 @@ RegisterTestCategory("core", [
     [ "function testret x { loop { loop { return(77) } } };", "testret" ],
     [ "testret();", "77" ],
 
-
     //
-    // objects
+    // dictionaries
     //
-    
-    [ "new();", "false" ],
-    [ "testo=new(object);", "Object{0}" ],
-    [ "testo.a=3;", "3" ],
-    [ "testo;", "Object{1}" ],
-    [ "testo.b=4;", "4" ],
-    [ "b=a;", "a" ],
-    [ "testo.b;", "4" ],
-    [ "testo;", "Object{2}" ],
-    [ "totuple(testo);>", "((\"a\" . 3) (\"b\" . 4))" ],
-    [ "testo1=new(testo);", "Object{2}" ],
-    [ "totuple(testo1);>", "((\"a\" . 3) (\"b\" . 4))" ],
-    [ "testo1.b=5;", "5" ],
-    [ "testo.b;", "4" ],
-    [ "testo.\"b\";", "4" ],
-    [ "xget(testo,\"b\");", "4" ],
-    [ "xget(testo,b);", "3" ],              // b has value `a, and test.a is 3
-    [ "testo.f = function(x) { x+1 };>", "(function lambda (x) (+ x 1))" ],
-    [ "testo.f(5);", "6" ],
-    [ "apply(deref(testo, \"f\"), list(6));", "7" ],
-    
-    [ "testo.length = 5;", "5" ],
-    [ "testo.length;", "5" ],
-    [ "length(testo);", "4" ],
-    [ "xget(testo, length);", "5" ],
-    [ "xkeys(testo);>", "(\"a\" \"b\" \"f\" \"length\")" ],
-    [ "totuple(testo);>", "((\"a\" . 3) (\"b\" . 4) (\"f\" function lambda (x) (+ x 1)) (\"length\" . 5))" ],
 
-    [ "testo1.4=c;", "c" ],
-    [ "testo1.4;", "c" ],
-    
-    [ "this = true;", { errors: "can't modify NaanCore::this from Test-core" } ],
+    [ "b=a;", "a" ],                                                        // testing eval here
 
     [ "joe={};", "{ }" ],
     [ "joe.sam=function(x) { print(x, \"|\", keys(joe)) };>", "(function lambda (x) (print x \"|\" (keys joe)))" ],
@@ -636,6 +605,46 @@ RegisterTestCategory("core", [
     ["oo={true:a}; oo[1.0/3]=`b; oo;", "{ true: a }|b|{ true: a, 0.3333333333333333: b }"],
     ["merge(oo, list(1.0/3), {false:c});", "{ true: a, false: c }"],
     ["oo;", "{ true: a, 0.3333333333333333: b }"],
+
+    ["joe={a:3}; {b:joe} == {b:joe}", "{ a: 3 }|true"],
+    ["joe === joe", "true"],
+    ["{b:joe} === {b:joe}", "false"],
+
+
+    //
+    // objects
+    //
+    
+    [ "new();", "false" ],
+    [ "testo=new(object);", "Object{0}" ],
+    [ "testo.a=3;", "3" ],
+    [ "testo;", "Object{1}" ],
+    [ "testo.b=4;", "4" ],
+    [ "testo.b;", "4" ],
+    [ "testo;", "Object{2}" ],
+    [ "totuple(testo);>", "((\"a\" . 3) (\"b\" . 4))" ],
+    [ "testo1=new(testo);", "Object{2}" ],
+    [ "totuple(testo1);>", "((\"a\" . 3) (\"b\" . 4))" ],
+    [ "testo1.b=5;", "5" ],
+    [ "testo.b;", "4" ],
+    [ "testo.\"b\";", "4" ],
+    [ "xget(testo,\"b\");", "4" ],
+    [ "xget(testo,b);", "3" ],              // b has value `a, and test.a is 3
+    [ "testo.f = function(x) { x+1 };>", "(function lambda (x) (+ x 1))" ],
+    [ "testo.f(5);", "6" ],
+    [ "apply(deref(testo, \"f\"), list(6));", "7" ],
+    
+    [ "testo.length = 5;", "5" ],
+    [ "testo.length;", "5" ],
+    [ "length(testo);", "4" ],
+    [ "xget(testo, length);", "5" ],
+    [ "xkeys(testo);>", "(\"a\" \"b\" \"f\" \"length\")" ],
+    [ "totuple(testo);>", "((\"a\" . 3) (\"b\" . 4) (\"f\" function lambda (x) (+ x 1)) (\"length\" . 5))" ],
+
+    [ "testo1.4=c;", "c" ],
+    [ "testo1.4;", "c" ],
+    
+    [ "this = true;", { errors: "can't modify NaanCore::this from Test-core" } ],
 
     //
     // object getters/setters
