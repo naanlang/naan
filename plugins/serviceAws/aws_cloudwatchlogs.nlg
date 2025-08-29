@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2023 by Richard C. Zulch
+ * Copyright (c) 2021-2025 by Richard C. Zulch
  *
  */
 
@@ -19,6 +19,7 @@
  */
 
 closure CloudWatchLogs(local cwlogs) {
+    global(awsSDK)
     cwlogs = new(object, this)
 
     //

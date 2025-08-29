@@ -185,6 +185,7 @@ closure FSview(table, rootpath, local view) {
     //      emptyok: true           -- allow empty directory names (leading "/" or embdedded "//")
     //      md5: <hash>             -- existing file content must match hash
     //      writenew: true          -- write as a new file, with updated create time
+    //      cacheControl: <string>  -- set the cacheControl header
     
    closure dbWriteRecord(path, content, options, callback) {
         if !callback
@@ -247,9 +248,15 @@ closure FSview(table, rootpath, local view) {
                     path: path
                 })))
             if doc
-                `(error, data) = view.table.update(doc)                     // update existing record
+                `(error, data) = view.table.update(doc, {                   // update existing record
+                    metadata: metadata
+                    cacheControl: options.cacheControl
+                })
             else
-                `(error, data) = view.table.add(path, content, metadata)    // create new record
+                `(error, data) = view.table.add(path, content, {            // create new record
+                    metadata: metadata
+                    cacheControl: options.cacheControl
+                })
             if error
                 callback(error)
             else
@@ -553,6 +560,7 @@ closure FSview(table, rootpath, local view) {
     // available:
     //      exclusive: true         -- file must not already exist
     //      md5: <hash>             -- existing file content must match hash
+    //      cacheControl: <string>  -- set the cacheControl header (if supported by underlying storage)
     
     view.write = closure write(path, content, options, callback) {
         if !callback

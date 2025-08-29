@@ -252,6 +252,14 @@ closure MakePSMutil(fs, local util) {
     //      follow:     <boolean>           -- follow links instead of treating them as files
     //      idmode:     <boolean>           -- preserve id/mode where possible
     //      times:      <boolean>           -- preserve time where possible
+    //      cacheControl: [
+    //          {                           -- apply cacheControl to files matching regex
+    //              match: <regex-string>
+    //              flags: <regex-flags>    -- default "i" ignore case
+    //              cacheControl: <string>
+    //          }
+    //          ...
+    //      ]
     // }
     //
     // Limitations:
@@ -295,10 +303,13 @@ closure MakePSMutil(fs, local util) {
             if destpath == "."
                 destpath = ""                                               // joined empty strings
             `(error, stat) = fs.info(srcpath, fsopt)
-            if stat.type != "directory" && (!options.follow || stat.type != "symlink") {
+            if stat.type == "symlink" && options.follow && !fs.dirList(srcpath).0
+                stat.type = "directory"                                     // for our purposes this is a directory
+            if stat.type != "directory" {
                 copies.push({                                               // copy file or symlink 
                     source: srcpath
                     dest: destpath
+                    entry: entry
                 })
                 return (list(false, { ok: true }))                          // generic success not used
             }
@@ -346,10 +357,29 @@ closure MakePSMutil(fs, local util) {
             }).wait()
         }
         //
+        // Pass 3 - determine cache control values
+        //
+        let (regexes, item, file) {
+            regexes = new(options.cacheControl)
+            try {
+                for item in regexes
+                    item.regex = RegExp(item.match, item.flags || "i")
+            } catch {
+                ErrorDebuglog("PsmUtil.deepcopy: RegExp exception", exception)
+                regexes = []
+            }
+            for file in copies
+                for item in regexes
+                    if item.regex.test(file.entry) {
+                        file.cacheControl = item.cacheControl
+                        break
+                    }
+        } ()
+        //
         // Pass 3 - copy files and links
         //
         asyncArray(copies, 10, closure cpfiles(entry, 
-            local error, data, dest, instat, outstat) {
+            local error, data, dest, instat, outstat, foptions) {
             `(error, instat) = fs.info(entry.source, fsopt)
             if !error {
                 `(error, outstat) = outfs.info(entry.dest)
@@ -372,9 +402,13 @@ closure MakePSMutil(fs, local util) {
                         `(error, data) = outfs.symlink(data, entry.dest)
                 }
                 else {
-                    `(error, data) = fs.readFile(entry.source, { encoding: "binary"})
-                    if !error
-                        `(error, data) = outfs.writeFile(entry.dest, data, { encoding: "binary"})
+                    foptions = { encoding: "binary"}
+                    `(error, data) = fs.readFile(entry.source, foptions)
+                    if !error {
+                        if entry.cacheControl
+                            foptions.cacheControl = entry.cacheControl
+                        `(error, data) = outfs.writeFile(entry.dest, data, foptions)
+                    }
                     if !error && (options.idmode || options.times) {
                         if !options.idmode
                             instat.mode = instat.uid = instat.gid = false

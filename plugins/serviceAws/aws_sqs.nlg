@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023 by Richard C. Zulch
+ * Copyright (c) 2023-2025 by Richard C. Zulch
  *
  */
 
@@ -19,6 +19,7 @@
  */
 
 closure SqsMQ(sqs, queueUrl, local sqsq) {
+    global()
     sqsq = new(object, this)
 
     //
@@ -55,6 +56,7 @@ closure SqsMQ(sqs, queueUrl, local sqsq) {
  */
 
 closure SQS(local sqs) {
+    global(awsSDK)
     sqs = new(object, this)
 
     //

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2024 by Richard C. Zulch
+ * Copyright (c) 2024-2025 by Richard C. Zulch
  *
  */
 
@@ -68,9 +68,9 @@ closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
             }
         }
         if cwd
-            xlparams.execops = { cwd: cwd }
+            xlparams.spawnops = { cwd: cwd }
         else if options.cwd
-            xlparams.execops = { cwd: options.cwd }
+            xlparams.spawnops = { cwd: options.cwd }
         fs.execLines(cmd, xlparams, function(error, result) {
         	evalactive(list(`assign, `(compress, "$$"), report))            // assign to $$ in active namespace
             pending.signal(list(error, merge(result, report)))
@@ -80,7 +80,7 @@ closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
 
     // shellparser
     // intercept command-line parsing and look for a !shell escape
-    function shellparser(source, grammar, operators, local token) {
+    function shellparser(source, grammar, operators, local token, text) {
         token = source.tokenread()
         if token.atom == `! {
             source.tokenlast(true)                                          // "consume" the ! token

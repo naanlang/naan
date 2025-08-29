@@ -35,11 +35,11 @@ RegisterTestCategory("JSinterop", [
 
     [ "o(3);", {
         "dev": { errors: "xcall \"[object Object]\": TypeError: object.apply is not a function" }
-        "prod": { errors: "xcall \"[object Object]\": TypeError: r[3].apply is not a function" }
+        "prod": { errors: "xcall \"[object Object]\": TypeError: e[3].apply is not a function" }
     }[    "prod"]],
     [ "o(Number);", {
         "dev": { errors: "xcall \"[object Object]\": TypeError: object.apply is not a function" }
-        "prod": { errors: "xcall \"[object Object]\": TypeError: r[3].apply is not a function" }
+        "prod": { errors: "xcall \"[object Object]\": TypeError: e[3].apply is not a function" }
     }[    "prod"]],
     [ "Number(3);", "[Number 3]" ],
     [ "Number(3).toString();", "\"3\"" ],
@@ -158,6 +158,35 @@ RegisterTestCategory("JSinterop", [
     "    } }" ],
 
     [ "function&(top,local nth){ nth=0, loop { print(nth), closure(nth) { stacktrap(nth,function&(x) { print(\" loop-\",x,\"-\",nth) }) }(nth), if nth >= top break else nth = nth+1 }, }(9);",
-        "0 loop-Dictionary{0}-01 loop-Dictionary{0}-123456789 loop-true-2 loop-true-3 loop-true-4 loop-true-5 loop-true-6 loop-true-7 loop-true-8 loop-true-9|true" ]
+        "0 loop-Dictionary{0}-01 loop-Dictionary{0}-123456789 loop-true-2 loop-true-3 loop-true-4 loop-true-5 loop-true-6 loop-true-7 loop-true-8 loop-true-9|true" ],
+
+    //
+    // Callbacks
+    //
+
+    [ "function mycb() { mynon.wait(), 15 };", "mycb"],
+    [ "oocb=xnew()", "[object Object]" ],
+    [ "oocb.mycb=mycb.proc;>", "(function mycb false (`. mynon wait false) 15)" ],
+    [ "oocb.mycb();", "15" ],
+    [ "mynon = new(nonce);", "Nonce{3}" ],
+    [ "oocb.mycb();", "true" ],
+
+    [ "@\\.suspend = 7", "7" ],
+    [ "function mycb() { mynon.wait(), 16 };", "==> redefined: mycb|mycb"],
+    [ "oocb.mycb=mycb.proc;>", "(function mycb false (`. mynon wait false) 16)" ],
+    [ "oocb.mycb();", "7" ],
+
+    //
+    // JavaScript compiled functions
+    //
+    
+    [ "putproc(`arbyarb, 'return(_lib.pl(narg,nthf));');", "[Compiled arbyarb]" ],
+    [ "arbyarb(3,5,2,4);", "3524|4" ],
+
+    [ "putproc(`bobbuiltin, 'builtin: return(_lib.j2n(_lib.n2j(cx)+_lib.n2j(cy)+_lib.n2j(cz)));');", "[Compiled bobbuiltin]" ],
+    [ "bobbuiltin(1,2,3,4);", "6" ],
+
+    [ "putproc(`joemacro, 'macro: _lib.idle();return(_lib.j2n(_lib.n2j(args[1])(_lib.n2j(args[2][1]))));');", "[Compiled joemacro]" ],
+    [ "joemacro(function(x){x+1}, 8);", "9" ]
 
 ]);

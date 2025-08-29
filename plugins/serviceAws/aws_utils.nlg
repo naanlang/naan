@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021 by Richard C. Zulch
+ * Copyright (c) 2021-2025 by Richard C. Zulch
  *
  */
 
@@ -22,6 +22,7 @@
  */
 
 closure queryPager(apiobject, procname, params, xargs, doneCB, local pending, looping, result) {
+    global()
     if !apiobject[procname]
         return (list(Error("queryPager method undefined:", procname)))
     pending = new(nonce)
@@ -55,6 +56,7 @@ closure queryPager(apiobject, procname, params, xargs, doneCB, local pending, lo
  */
 
 function QueryPager args {
+    global()
     closure(local apiobject, procname, params, xargs, doneCB) {
         apiobject = pop(args)
         procname = pop(args)

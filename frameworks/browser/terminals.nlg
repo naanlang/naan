@@ -562,7 +562,7 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
             msg.data._guid = target.guid
             js.t.DispatchMessage(msg.data)
         }
-     }
+    }
     
     //
     // target.DebugCmd
@@ -764,14 +764,18 @@ closure WorkerToMain(local nideRunning, track) {
 /*
  * findIDEtarget
  *
- *     Find a target for our IDE that matches the specified name, workerID, and naancont.
+ *     Find a target for our IDE that matches the specified name, workerID, and naancont. Either the
+ * title or the naancont must match. The title will match but not the naancont if the window was
+ * closed/reloaded but we didn't get notified because browsers are annoying that way. Alternatively
+ * the naancont will match but not the title if we have updated the version.
  *
  */
 
-closure findIDEtarget(track, name, workerID, naancont, local target) {
+closure findIDEtarget(track, name, workerID, title, naancont, local target) {
     global()
     for target in track.enumlist()
-        if target.name == name && target.workerID == workerID && (!target.naancont || target.naancont === naancont)
+        if target.name == name && target.workerID == workerID
+            && (target.title == title || !target.naancont || target.naancont === naancont)
             return (target)
     false
 };
@@ -788,8 +792,10 @@ closure findIDEtarget(track, name, workerID, naancont, local target) {
 
 closure termIDE(track, name, workerID, naancont, title, local target, connected) {
     global(js, gWorkers)
-    target = findIDEtarget(track, name, workerID, naancont)
+    target = findIDEtarget(track, name, workerID, title, naancont)
     if target {                                                             // new naancont on existing target
+        if target.naancont && naancont !== target.naancont
+            target.targetClose()
         target.updateController(naancont)
         target.title = title
         track.update(target)
@@ -934,7 +940,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     //
     //     Mark the target window as closed.
     //
-    function targetClose(local conn) {
+    target.targetClose = function targetClose(local conn) {
         for conn in connected {
             conn.db.detach(target)
             conn.WriteLn("\x1b[90m\x1b[3m".concat("\ntarget closed", "\x1b[0m"))
@@ -1012,12 +1018,12 @@ closure termInstallVirtualWatcher(track, naancont) {
             target.attention()
         }
         else if msg.op == "VsiteClose" {
-            target = findIDEtarget(track, msg.name, "NaanVsite", msg.naancont)
+            target = findIDEtarget(track, msg.name, "NaanVsite", msg.title, msg.naancont)
             if target
                 target.updateController()
         }
         else if msg.op == "VsiteVisibilityChange" {
-            target = findIDEtarget(track, msg.name, "NaanVsite", msg.naancont)
+            target = findIDEtarget(track, msg.name, "NaanVsite", msg.title, msg.naancont)
             if target
                 target.setCheckStatus(msg.hidden, msg.window)
         }

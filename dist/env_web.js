@@ -550,7 +550,7 @@ exports.NaanControllerWeb = function() {
             localStorage.removeItem("NaanState_Hosted");
             return (false);
         }
-        if (querystrings["nosave"])
+        if ("nosave" in querystrings)
             return (false);
         var statedoc = makeState();
         var statestr = JSON.stringify(statedoc);
@@ -631,7 +631,7 @@ exports.NaanControllerWeb = function() {
     }
 
     /*jshint sub:true */
-    if (querystrings["restart"] || !loadLocal())
+    if ("restart" in querystrings || !loadLocal())
     {                                                                       // don't load state or can't load state
         naanlib.banner();
         var hostpath = window.location.origin.concat(naanlib.js.r("path").dirname(window.location.pathname));

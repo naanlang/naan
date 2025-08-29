@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2024 by Richard C. Zulch
+ * Copyright (c) 2020-2025 by Richard C. Zulch
  *
  */
 
@@ -22,6 +22,7 @@
  */
 
 closure dawsBucket(s3b, local bucket, s3) {
+    global(JSpath)
     bucket = new(object, this)
     s3 = s3b.s3
     bucket.name = s3b.bucketName
@@ -311,6 +312,7 @@ closure dawsBucket(s3b, local bucket, s3) {
  */
 
 closure dawsTable(database, path, tableOptions, local table) {
+    global(js, TextDecoder)
     table = new(object, this)
     table.type = database.type
     table.db = database
@@ -411,9 +413,10 @@ closure dawsTable(database, path, tableOptions, local table) {
 
     // add
     //
-    // Add a new record to the table with optional metadata. This will fail if the key already
-    // exists. The metadata is stored with the record and cannot be changed without calling update.
-    // Metadata keys cannot begin with underscore ("_").
+    // Add a new record to the table with options. This will fail if the key already exists. Optional
+    // metadata is stored with the record and cannot be changed without calling update. Metadata keys
+    // cannot begin with underscore ("_"). If optional cacheControl is not specified then the default
+    // tableOptions.cacheControl is used.
     //
     // The returned document, which can be used with update, has the following keys:
     //      key         - the key name of the record
@@ -421,26 +424,25 @@ closure dawsTable(database, path, tableOptions, local table) {
     //      md5         - the MD5 hash of the content
     //      <...>       - the various metadata keys
 
-    table.add = closure add(key, content, metadata, callback, local id, doc) {
+    table.add = closure add(key, content, options, callback, local id, doc) {
         if !callback
-            return (syncAdapter(add, key, content, metadata))
+            return (syncAdapter(add, key, content, options))
         id = makeID(key)
         if !string(id)
-            return (asyncResult(callback, id))                                 // error from makeID
-        if  metadata && !dictionary(metadata)
+            return (asyncResult(callback, id))                              // error from makeID
+        if  options.metadata && !dictionary(options.metadata)
             return (asyncResult(callback, Error("invalid arguments")))
-        if metadata
-            doc = new(metadata)                                             // start with metadata
+        if options.metadata
+            doc = new(options.metadata)                                     // start with metadata
         else
             doc = { }
         doc.key = key
         doc.id = id
         if content
             doc.content = content
-        metadata = metadata2s3(metadata)                                    // filter out any invalid metadata
         database.bucket.put(id, content, {
-            metadata: metadata
-            cacheControl: tableOptions.cacheControl
+            metadata: metadata2s3(options.metadata)                         // filter metadata for s3
+            cacheControl: options.cacheControl || tableOptions.cacheControl
         }, function(error, resp) {
             if error
                 error = Error("add failed", error, id, { status: error.status })
@@ -453,17 +455,17 @@ closure dawsTable(database, path, tableOptions, local table) {
 
     // update
     //
-    // Update a record in the table using the document previously returned by add or get.
+    // Update a record in the table using the document previously returned by add or get. Specify
+    // options to update those values, otherwise existing/default values are used.
 
-    table.update = closure update(doc, callback, local metadata) {
+    table.update = closure update(doc, options, callback) {
         if !callback
-            return (syncAdapter(update, doc))
+            return (syncAdapter(update, doc, options))
         if !doc._id || !doc._id.startsWith(table.s3prefix) || !doc._md5
             return (asyncResult(callback, Error("invalid argument")))
-        metadata = metadata2s3(doc)
         database.bucket.put(doc._id, doc.content, {
-            metadata: metadata
-            cacheControl: tableOptions.cacheControl
+            metadata: metadata2s3(options.metadata || doc)
+            cacheControl: options.cacheControl || tableOptions.cacheControl
         }, function(error, resp) {
             if error
                 error = Error("update failed", error, doc._id, { status: error.status })
@@ -519,7 +521,7 @@ closure dawsTable(database, path, tableOptions, local table) {
                     resp.content = readableStreamToArrayBuffer(resp.content)
                 else if jsTypedArray(resp.content)
                     resp.content = xnew(TextDecoder, "utf-8").decode(resp.content)
-                else if jsInstanceOf(resp.content, js.w.ReadableStream)
+                else if jsInstanceOf(resp.content, js.w.ReadableStream)     // for browsers only
                     resp.content = xnew(TextDecoder, "utf-8").decode(readableStreamToArrayBuffer(resp.content))
                 resp._id = id }
             callback(error, resp)

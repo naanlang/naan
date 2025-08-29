@@ -6,9 +6,29 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2021 by Richard C. Zulch
+ * Copyright (c) 2020-2025 by Richard C. Zulch
  *
  */
+
+
+/*
+ * clirRequester
+ *
+ *     Return an appropriate HttpsRequestApi client based on our environment.
+ *
+ */
+
+clirRequestApi = false;
+
+function clirRequester() {
+    if !clirRequestApi {
+        if js.w
+            clirRequestApi = require("naanlib:frameworks/browser/https_request.nlg").HttpsApiRequest
+        else
+            clirRequestApi = require("naanlib:frameworks/node/https_request.nlg").HttpsApiRequest
+    }
+    clirRequestApi
+};
 
 
 /*
@@ -20,7 +40,7 @@
  */
 
 function clirInit(local manifest) {
-    manifest = `(clirInit)
+    manifest = `(clirRequester, clirInit)
 
     Naan.module.build(module.id, "client", function(modobj, compobj) {
         require("../common/").LiveImport()

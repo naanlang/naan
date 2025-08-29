@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2022 by Richard C. Zulch
+ * Copyright (c) 2017-2025 by Richard C. Zulch
  *
  */
 
@@ -1041,6 +1041,8 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
         cmdargs.push(options.pattern)
         cmdargs.push(JSpath.resolve(rootpath, localpath))
         execOptions = { cmdargs: cmdargs }
+        if js.g.process.platform == "win32"                                 // to make "-i" work on Windows
+            execOptions.spawnops = { env: merge(js.g.process.env, { LC_ALL: 'en_US.UTF-8' }) }
         result = []
         lineRE = RegExp("([^:]*):([0-9]+):(.*)$")                           // <path>:<line-number>:<matching-text-line>
         if integer(options.maxCount)
@@ -1075,7 +1077,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     // has completed. Options are:
     //  {
     //      cmdargs:            -- array of string arguments to the command (see below)
-    //      execops:            -- optional exec options like cwd
+    //      spawnops:           -- optional spawn options like cwd
     //      errproc:            -- callback for stderr output lines, or false
     //      errLE:              -- string or RegExp for stderr line ending
     //      outproc:            -- optional callback for stdout output lines
@@ -1100,7 +1102,7 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     //
 
     files.execLines = closure execLines(cmdname, options, callback, 
-        local output, execops, spawn, linerErr, linerOut) {
+        local output, spawnops, spawn, linerErr, linerOut) {
         if !callback
             return (syncAdapter(execLines, cmdname, options))
         if !string(cmdname) || cmdname == ""
@@ -1109,11 +1111,11 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
             output = options.output
         else
             output = {}
-        if options.execops
-            execops = options.execops
+        if options.spawnops
+            spawnops = options.spawnops
         else
-            execops = { }
-        spawn = nodecp.spawn(cmdname, options.cmdargs, execops)
+            spawnops = { }
+        spawn = nodecp.spawn(cmdname, options.cmdargs, spawnops)
 
         // completed
         // execute callback only once

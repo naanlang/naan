@@ -26,6 +26,7 @@ var naanpath = path.join(__dirname, "..");                                  // p
 var rootpath = naanpath;                                                    // path to us, which is naan
 var envpath = jspath.resolve(naanpath, 'lib/env_node.js');                  // path to Naan loader
 
+
 /*
  * Process command-line arguments
  *
@@ -68,11 +69,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.4.4");
+        console.log("1.5.0");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.4.4+1");
+        console.log("1.5.0+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {
@@ -157,10 +158,27 @@ if (eval_text) {
 
 
 /*
+ * versionCheck
+ *
+ */
+
+function versionCheck(minver) {
+    var rxver = /([0-9]+)[.]([0-9]+)[.]([0-9]+)/;
+    minver = minver.match(rxver).map(function(x){ return(Number.parseInt(x)) });
+    var curver = process.version.match(rxver).map(function(x){ return(Number.parseInt(x)) });
+    return (minver[1] < curver[1] || minver[1] == curver[1] && (minver[2] < curver[2] || minver[2] == curver[2] && minver[3] <= curver[3]));
+}
+
+
+/*
  * Execute Naan
  *
  */
 
+if (!versionCheck("v20.10.0")) {
+    console.log(`naan: nodejs ${ process.version } too old, requires v20.10.0 or newer`);
+    process.exit(1);
+}
 var NaanNodeREPL = require(envpath);
 var naanrepl = new NaanNodeREPL(naanOptions);
 naanrepl.setDirectory(rootpath);

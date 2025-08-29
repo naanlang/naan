@@ -1,6 +1,6 @@
 {
     "name": "@naanlang/naan",
-    "version": "1.4.4",
+    "version": "1.5.0",
     "author": "Richard C. Zulch",
     "description": "Naan™ software platform",
     "main": "./lib/core/naanlib.js",

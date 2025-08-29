@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2024 by Richard C. Zulch
+ * Copyright (c) 2019-2025 by Richard C. Zulch
  *
  */
 
@@ -633,8 +633,17 @@ closure psmcFsConnector(psm, api, local connClassID, connector, watch) {
                 api = connector.apis[creds]
             else {
                 api = connector.apis[creds.urlName]
-                if !api                                                     // get API to remote server
-                    connector.apis[creds.urlName] = api = NideAPIclient(creds.urlName, creds.authSecret)
+                if !api {                                                   // create API to remote server
+                    connector.apis[creds.urlName] = api = APIClient({
+                        url: creds.urlName
+                        guid: creds.authSecret
+                        instanceID: creds.instanceID
+                    })
+                    if creds.instanceID != api.instanceID {                 // update our client instanceID
+                        creds.instanceID = api.instanceID
+                        `(error) = connector.vault.updateResource(resID, creds)
+                    }
+                }
             }
         }
         if error

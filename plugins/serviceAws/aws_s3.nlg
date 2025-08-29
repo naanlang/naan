@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2024 by Richard C. Zulch
+ * Copyright (c) 2020-2025 by Richard C. Zulch
  *
  */
 
@@ -22,6 +22,7 @@
  */
 
 closure S3bucket(s3, name, bucketOptions, local bucket) {
+    global()
     bucket = new(object, this)
     bucket.name = name
 
@@ -83,8 +84,6 @@ closure S3bucket(s3, name, bucketOptions, local bucket) {
     //  }
     //
     bucket.put = closure put(key, data, options, local params, pending) {
-        if !contentType
-            contentType = "application/octet-stream"
         params = {
             Bucket: bucket.name
             Key: key
@@ -246,6 +245,7 @@ closure S3bucket(s3, name, bucketOptions, local bucket) {
  */
 
 closure S3(local s3) {
+    global(awsSDK)
     s3 = new(object, this)
 
     //

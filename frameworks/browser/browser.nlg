@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2023 by Richard C. Zulch
+ * Copyright (c) 2020-2025 by Richard C. Zulch
  *
  */
 
@@ -33,7 +33,7 @@ closure FileReader(file, progress, local pending, freader, result) {
     freader.addEventListener("error", function(error) {
         pending.signal(list(error))
     })
-    freader.AddEventListener("progress", function(event) {
+    freader.addEventListener("progress", function(event) {
         if event.lengthComputable && event.total
             progress(toint((event.loaded * 100) / event.total))
         else

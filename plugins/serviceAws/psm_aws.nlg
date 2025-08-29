@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2024 by Richard C. Zulch
+ * Copyright (c) 2020-2025 by Richard C. Zulch
  *
  */
 
@@ -19,6 +19,7 @@
  */
 
 closure psmaConnector(psm, local connClassID, connector, watch) {
+    global(awsSDK)
     connClassID = "S3DB"
     require("./dbt_aws.nlg")
     connector = new(object, this)

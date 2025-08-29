@@ -4,8 +4,8 @@
 NaaN is an async-first software platform for rapid development.
 
 #### Release:
-     **NaaN for NPM** version **1.4.4+1**  
-     Copyright (c) 2017-2024 Zulch Laboratories, Inc.
+     **NaaN for NPM** version **1.5.0+1**  
+     Copyright (c) 2017-2025 Zulch Laboratories, Inc.
 
 #### Features
 - **NaaN** runs in NodeJS and web browsers using JavaScript
@@ -23,7 +23,7 @@ NaaN is an async-first software platform for rapid development.
 
 #### Installation
 
-Please ensure you have a recent version of [node.js](http://nodejs.org/). The minimum is `v16.20.2`
+Please ensure you have a recent version of [node.js](http://nodejs.org/). The minimum is `v20.10.0`
 
 For use everywhere as a command line app:
 
@@ -62,7 +62,7 @@ Define a function, call it, and return the length of the base-10 result. First r
 % naan -e "function factr(x,a){if x>0 factr(x-1,x*a) else a}(10000,1).length"
 35660
 ```
-Fetch your public IP from a website (NodeJS version 18 or later):
+Fetch your public IP from a website:
 
 ```
 % naan -e "new(await(await((js.g||js.w).fetch('https://api.ipify.org/?format=json')).1.json()).1)"

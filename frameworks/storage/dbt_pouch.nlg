@@ -7,7 +7,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2024 by Richard C. Zulch
+ * Copyright (c) 2017-2025 by Richard C. Zulch
  *
  */
 
@@ -76,21 +76,31 @@ closure dapoTable(database, rootpath, local table, prefix) {
 
     // add
     //
-    // Add a new record to the table with optional metadata. This will fail if the key already
-    // exists. Returns the new document record.
+    // Add a new record to the table with options. This will fail if the key already exists. Optional
+    // metadata is stored with the record and cannot be changed without calling update. Metadata keys
+    // cannot begin with underscore ("_").
+    //
+    // The returned document, which can be used with update, has the following keys:
+    //      key         - the key name of the record
+    //      content     - the body content stored under in the record
+    //      _md5        - the MD5 hash of the content
+    //      _length     - the length of the content
+    //      _id         - the PouchDB ID
+    //      _rev        - the PouchDB revision
+    //      <...>       - various metadata keys
 
-    table.add = closure add(key, content, metadata, callback, local id, doc) {
+    table.add = closure add(key, content, options, callback, local id, doc) {
         if !callback
-            return (syncAdapter(add, key, content, metadata))
+            return (syncAdapter(add, key, content, options))
         id = makeID(key)
         if !string(id)
             return (asyncResult(callback, id))                              // error from makeID
-        if metadata && !dictionary(metadata)
+        if  options.metadata && !dictionary(options.metadata)
             return (asyncResult(callback, Error("invalid arguments")))
         if !database.pouch
             return (asyncResult(callback, Error("database closed")))
-        if metadata {
-            doc = new(metadata)                                             // start with metadata
+        if options.metadata {
+            doc = new(options.metadata)                                     // start with metadata
             doc._rev = undefined }                                          // _rev not allowed in metadata
         else
             doc = { }
@@ -115,12 +125,13 @@ closure dapoTable(database, rootpath, local table, prefix) {
 
     // update
     //
-    // Update a record in the table using the document previously returned by add or get.
-    // This will fail if the record has been modified by someone else in the meantime.
+    // Update a record in the table using the document previously returned by add or get. Specify
+    // options to update those values, otherwise existing/default values are used. This will fail
+    // if the record has been modified by someone else in the meantime.
 
-    table.update = closure update(doc, callback) {
+    table.update = closure update(doc, options, callback) {
         if !callback
-            return (syncAdapter(update, doc))
+            return (syncAdapter(update, doc, options))
         if !doc._id || !doc._id.startsWith(table.prefix) || !doc._rev
             return (asyncResult(callback, Error("invalid argument")))
         if makeID(doc.key) != doc._id
@@ -130,6 +141,8 @@ closure dapoTable(database, rootpath, local table, prefix) {
         doc = new(doc)
         doc._md5 = undefined
         doc._length = undefined
+        if options.metadata
+            doc = merge(doc, options.metadata)
         database.pouch.put(doc, function(error, resp) {
             if error
                 error = Error("update failed", error)

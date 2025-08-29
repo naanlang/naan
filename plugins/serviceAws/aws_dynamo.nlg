@@ -1040,6 +1040,7 @@ closure DynaTable(dyna, tablename, options, local table) {
         params = {
             TableName: tablename
         }
+        output = []
         if options.index
             params.IndexName = options.index
         if options.filter {

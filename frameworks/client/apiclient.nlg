@@ -2,41 +2,50 @@
  * apiclient.nlg
  * Naanlib/frameworks/client
  *
- *     Access to Nide API with browser HTTP client.
+ *     Access to Nide API with specified HTTP client.
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2024 by Richard C. Zulch
+ * Copyright (c) 2017-2025 by Richard C. Zulch
  *
  */
 
 
 /*
- * NideAPIclient
+ * APIClient
  *
- *     Make an API client object for browsers.
+ *     Make an API client object.
+ *
+ * Options:
+ *  {
+ *      url:            <string>                // hostname or URL of the remote server
+ *      guid:           <string>                // shared secret for access to remote server
+ *      instanceID:     <string>                // optional UUID for our client; can be persisted by caller
+ *  }
  *
  */
 
-closure NideAPIclient(url, guid, apiRequester, local client) {
-    global()
+closure APIClient(options, local client, url, guid) {
+    global(App)
     client = new(object, this)
+    url = options.url
     if !url.match(RegExp("^https?:\/\/", "i"))
         url = "http://${url}"                                               // a protocol is required
     if url.slice(-1) != "/"
         url = url.concat("/")                                               // must end in "/"
     client.url = url
-    client.guid = guid
+    client.guid = options.guid
+    client.instanceID = options.instanceID || UUID()                        // our client's unique ID
     client.notifyAfter = 0
-    client.instanceID = UUID()                                              // our client's unique ID
+    client.requester = clirRequester()
 
     // clientRequest() - append our guid to the headers
 
-    closure clientRequest(url, options) {
-        options = merge(options)
-        if guid
-            options.headers = [list("x-naanlang-api-guid", guid)]
-        apiRequester(url, options)
+    closure clientRequest(url, reqops) {
+        reqops = merge(reqops)
+        if options.guid
+            reqops.headers = [list("x-naanlang-api-guid", options.guid)]
+        client.requester(url, reqops)
     }
 
     //
@@ -57,7 +66,7 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
             timeout: timeoutms
             after: client.notifyAfter
         })
-        `(error, content, extra) = clientRequest(url.concat(query))
+        `(error, content, extra) = clientRequest(url.concat(query), { retrier: false }) // don't retry inside
         if (error || extra.status != 200)
             cbStatus()
         else if (length(content) == 0)
@@ -76,8 +85,12 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
     // get
     //
 
-    client.get = closure get(path, options, local error, content, extra) {
-        `(error, content, extra) = clientRequest(url.concat(path))
+    client.get = closure get(path, options, local requrl, error, content, extra) {
+        if App.cache
+            requrl = url.concat(EncodeQuery(path.concat("?"), { naanver: App.cache }))
+        else
+            requrl = url.concat(path)
+        `(error, content, extra) = clientRequest(requrl)
         if !error && extra.status != 200
             error = Error("readFile failed: ".concat(extra.status), {
                     status: extra.status
@@ -153,12 +166,12 @@ closure NideAPIclient(url, guid, apiRequester, local client) {
 
 function apicInit(local manifest) {
 
-    manifest = `(NideAPIclient, apicInit)
+    manifest = `(APIClient, apicInit)
 
     Naan.module.build(module.id, "apiclient", function(modobj, compobj) {
         Naan.module.require("./client.nlg")
         compobj.manifest = manifest
-        modobj.exports.NideAPIclient = NideAPIclient
+        modobj.exports.APIClient = APIClient
     })
 
 } ();
