@@ -124,6 +124,7 @@ function nodrInit(local manifest) {
         throw("module frameworks/node cannot be used from a browser")
     Naan.module.build(module.id, "node", function(modobj, compobj) {
         require("../common/").LiveImport()
+        commonWatching = require("../common/watching.nlg")
         compobj.manifest = manifest
         function nodrReload() {
             nodecp = js.r("child_process")
@@ -139,5 +140,6 @@ function nodrInit(local manifest) {
         module.reload = nodrReload
         module.exports.NaanlangDir = NaanlangDir
         module.exports.NaanlangRC = NaanlangRC
+        module.exports.NodeStreamLiner = NodeStreamLiner
     })
 } ();

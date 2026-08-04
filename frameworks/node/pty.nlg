@@ -1,0 +1,346 @@
+/*
+ * pty.nlg
+ * Naanlib/frameworks/node
+ *
+ * Pseudo-terminal access for Linux, Windows, and MacOS.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * PtyManager
+ *
+ * Fork a process with a pseudo-terminal (pty). This returns a pty-process manager object that can be
+ * used to manage these processes. On the NodeJS main thread this instantiates the (not thread safe)
+ * node-pty library. On worker threads it creates a connection to the main thread to actually perform
+ * the work, including data transfers. More than one process can be created simultaneously. If this
+ * worker dies then its processes are killed.
+ *     There is one global PtyManager per thread, including the main thread. Spawn processes from
+ * your PtyManager instance and then kill them when done.
+ *
+ * This uses node-pty, with the API defined here:
+ *     https://github.com/microsoft/node-pty/blob/main/typings/node-pty.d.ts
+ *
+ */
+
+pty_instance = false;
+
+closure PtyManager() {
+    global(js, pty_instance)
+    if pty_instance
+        return
+
+    if js.k.isMainThread
+        pty_instance = ptyManagerMain()
+    else
+        pty_instance = ptyManagerWorker()
+};
+
+
+/*
+ * ptyManagerMain
+ *
+ * Manager of pty processes on the NodeJS main thread.
+ *
+ */
+
+closure ptyManagerMain(local ptym, pty) {
+    global(fs, os, js)
+    ptym = new(object, this)
+    ptym.workers = []
+
+    // install
+    //
+    // Install and/or update the node-pty package.
+    //
+    ptym.install = closure install(rootpath, local error, fs, output) {
+        if !rootpath
+            rootpath = js.d
+        debuglog("node-pty install at", rootpath)
+        `(error, fs) = Filesystem(rootpath)
+        `(error, output) = fs.execLines("npm", {
+            cmdargs: ["install", "--save", "@lydell/node-pty", "--prefix", js.d ]
+            execops: {
+                cwd: rootpath
+            }
+        })
+        if !error {
+            if output.exitCode != 0
+                error = Error("npm install exit code: ${output.exitCode}", {
+                    stderr: output.stderr.join("\n")
+                })
+        }
+        if error
+            list(error)
+        else
+            list(false, output.stdout.join("\n"))
+    }
+
+    // open
+    //
+    // Open the pty manager, installing if needed, returning an error.
+    //
+    ptym.open = closure open(local error, stdout) {
+        if !pty {
+            `(error, pty) = await(js.i("@lydell/node-pty"))
+            if error {
+                `(error, stdout) = install()
+                if !error
+                    `(error, pty) = await(js.i("@lydell/node-pty"))
+                if error
+                    return (list(Error("can't use node-pty", error)))
+            }
+        }
+        list(false, { ok: true })
+    }
+
+    // close
+    //
+    // Close the pty manager, killing any open spawned processes.
+    //
+    ptym.close = closure close() {
+        // ### kill any open spawned processes
+    }
+
+    // spawn
+    //
+    // Spawn a new pty process, returning a result tuple. If executable is omitted then a shell is
+    // spawned.
+    // 
+    // options:
+    //  {
+    //      workerGUID: <string>                // if specified, kills pty process when worker terminates
+    //  }
+    // 
+    //
+    ptym.spawn = closure spawn(executable, args, notify, options,
+        local ptySpawned, ptypro) {
+
+        if !executable {
+            if os.platform() == "win32"
+                executable = "powershell.exe"
+            else
+                executable = js.g.process.env.SHELL || "/bin/bash"          // default shell with safe fallback
+        }
+        if !array(args)
+            args = []
+        options = merge({
+            name: "xterm-color"
+            cols: 80
+            rows: 25
+            cwd: js.g.process.env.HOME
+            env: js.g.process.env
+        }, options)
+
+        ptySpawned = pty.spawn(executable, args, {                          // spawn the pty process
+            name: options.name
+            cols: options.cols
+            rows: options.rows
+            cwd: options.cwd
+            env: options.env
+        })
+
+        ptypro = ptyProcess(ptySpawned, notify)
+        ptym.workers.push({                                                 // track all pty processes
+            pid: ptySpawned.pid
+            workerGUID: options.workerGUID || undefined
+            ptySpawned: ptySpawned
+        })
+
+        ptySpawned.onExit(function(event, local ptydex) {
+            ptydex = ptym.workers.findIndex(function(item) {                // pty process died
+                ptySpawned.pid == item.pid
+            })
+            if ptydex >= 0
+                ptym.workers.splice(ptydex)
+            ptypro.killed(event)
+        })
+
+        if options.workerGUID
+            WorkerController().watcher.watch(
+                function(action, worker, local ptydex) {                    // worker-owner of pty process died
+                    if action == "terminated" {
+                        ptydex = ptym.workers.findIndex(function(item) {
+                            options.workerGUID == item.workerGUID
+                        })
+                        if ptydex >= 0 {
+                            ptySpawned.kill()
+                            ptym.workers.splice(ptydex)
+                        }
+                    }
+                })
+        list(false, ptypro)
+    }
+
+    // finis
+    ptym
+};
+
+
+/*
+ * ptyProcess
+ *
+ * A spawned pty process.
+ *
+ */
+
+closure ptyProcess(ptySpawned, notify, local ptyp) {
+    global(js)
+    ptyp = new(object, this)
+
+    // onData
+    //
+    // Data received.
+    //
+    ptySpawned.onData(function(data) {
+        notify.ptyData(data)
+    })
+
+    // killed
+    //
+    // Process was killed.
+    //
+    ptyp.killed = function killed(event) {
+        notify.ptyKilled(event)
+        ptySpawned = false
+    }
+
+    // write
+    //
+    // Write text or a buffer to the spawned process.
+    //
+    ptyp.write = closure write(textbuf) {
+        ptySpawned.write(textbuf)
+    }
+
+    // resize
+    //
+    // Tell pty that terminal size changed.
+    //
+    ptyp.resize = closure resize(cols, rows) {
+        ptySpawned.resize(cols, rows)
+    }
+
+    // clear
+    //
+    // Tell pty that terminal was cleared.
+    //
+    ptyp.clear = closure clear() {
+        ptySpawned.clear()
+    }
+
+    // kill
+    //
+    // Kill the spawned process.
+    //
+    ptyp.kill = closure kill(signame) {
+        ptySpawned.kill(signame)
+    }
+
+    // finis
+    ptyp
+};
+
+
+/*
+ * ptyManagerWorker
+ *
+ * Manager of pty processes on NodeJS worker threads.
+ *
+ */
+
+closure ptyManagerWorker(local ptyw, mainContext, mainPty) {
+    global(PtyManager)
+    ptyw = new(object, this)
+
+    // mainPtyManager
+    //
+    // Return (a proxy to) the main thread PtyManager.
+    //
+    closure mainPtyManager(local result, error, main) {
+        // evalPtyManager - executed remotely on the main thread
+        function evalPtyManager() {
+            require("naanlib:frameworks/node/pty.nlg").PtyManager()
+        }
+
+        if !mainContext {
+            `(error, main) = require("naanlib:frameworks/running/mainthread.nlg").MainThread()
+            if !error
+                `(error, mainContext) = main.context()
+            if error
+                return (list(error))
+        }
+        result = mainContext.evalq(evalPtyManager(), `(evalPtyManager))
+        while tuple(result) && !result.0
+            result = result.1                                               // peel off the wrappers
+        if !result
+            return (list(Error("PtyManager failed")))
+        list(false, result)
+    }
+
+    // open
+    //
+    // Open the pty manager.
+    //
+    ptyw.open = closure open(local error) {
+        `(error, mainPty) = mainPtyManager()
+        if mainPty
+            `(error) = mainPty.open()
+        if error
+            list(error)
+        else
+            list(false, { ok: true })
+    }
+
+    // close
+    //
+    // Close our pty manager and kill off our spawned processes.
+    //
+    ptyw.close = closure close() {
+        if !mainContext
+            return
+
+        // ### kill our spawned processes
+
+        mainContext = false
+    }
+
+    // spawn
+    //
+    // Spawn a new pty process, returning a result tuple. If executable is omitted then a shell is
+    // spawned.
+    //
+    ptyw.spawn = closure spawn(executable, args, notify, options) {
+        if mainPty
+            mainPty.spawn(executable, args, notify, options)
+        else
+            list(Error("ptyManagerWorker:spawn: not open"))
+    }
+
+    // finis
+    ptyw
+};
+
+
+/*
+ * ptyInit
+ *
+ *     Initialize the node module.
+ *
+ *
+ */
+
+function ptyInit(local manifest) {
+    manifest = `(PtyManager, ptyManagerMain, ptyProcess, ptyManagerWorker, ptyInit)
+
+    Naan.module.build(module.id, "pty", function(modobj, compobj) {
+        require("./filesystem.nlg")
+        require("./worker.nlg")
+        compobj.manifest = manifest
+        modobj.exports.PtyManager = PtyManager
+    })
+} ();

@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2021 by Richard C. Zulch
+ * Copyright (c) 2017-2026 by Richard C. Zulch
  *
  */
 
@@ -67,6 +67,85 @@ function dcaller(proc, lambdaOK, local x, found) {
             else if proc && x.1 == proc
                 proc = false }
     false
+};
+
+
+/*
+ * dwrapper
+ *
+ *     Wrap an object so that all calls in or out are logged.
+ *
+ */
+
+closure dwrapper(obj, name, local wrap, indents) {
+    indents = dwrapper@indents
+    if !indents {
+        dwrapper@indents = indents = unintern(`indents)
+        assign(indents, 0)
+    }
+    
+    wrap = new(object, dwrapper)
+
+    function indent(callin) {
+        debuglog("${spaces()}${callin} ==>")
+        assign(indents, indents.value+1)
+    }
+
+    function outdent(result) {
+        assign(indents, indents.value-1)
+        debuglog("${spaces()}<== ${result}", )
+        result
+    }
+
+    function spaces() {
+        "|   ".repeat(indents.value)
+    }
+
+    function swap(o) {
+        if tuple(o)
+            o.map(function(item){ item === wrap && name || item })
+        else if o === wrap
+            name
+        else
+            o
+    }
+
+    wrap@[".undefined"] = function trampoline args {
+        function (selector, arglist, result) {
+            indent("${name}.${selector}${swap(arglist)||'()'}")
+            try {
+                result = eval(list(`deref, obj, selector, arglist))
+                outdent(result)
+            } catch {
+                outdent("${selector}() exception: ${exception}")
+                result = mu()
+            }
+        } (args.0, args.-1)
+    }
+
+    wrap@["..undefined"] = function getter(selector) {
+        indent("${name}[${selector}]")
+        try {
+            result = obj[selector]
+            outdent(result)
+        } catch {
+            outdent("${selector}[] exception: ${exception}")
+            result = mu()
+        }
+    }
+
+    wrap@[".=undefined"] = function setter(selector, value) {
+        indent("${name}[${selector}] = ${swap(value)}")
+        try {
+            result = obj[selector] = value
+            outdent(result)
+        } catch {
+            outdent("${selector}[]= exception: ${exception}")
+            result = mu()
+        }
+    }
+
+    wrap
 };
 
 

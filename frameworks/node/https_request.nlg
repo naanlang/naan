@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2024 by Richard C. Zulch
+ * Copyright (c) 2021-2026 by Richard C. Zulch
  *
  */
 
@@ -123,12 +123,17 @@ closure httpsApiReqOnce(url, options,
             else
                 content = js.g.Buffer.concat(chunks)
             if response.statusCode < 200 || response.statusCode >= 299 {    // 299 is "cancelled"
-                if options.debug
+                if options.debug {
+                    content = content.toString()
                     debuglog("HttpsApiRequest status:", url, response.statusCode, "message:", content)
+                    if string(putdata)
+                        putdata = putdata.substr(0,250)
+                    debuglog("HttpsApiRequest putdata:", putdata)
+                }
                 pending.signal(list(Error("HttpsApiRequest statusCode:", url, response.statusCode, {
                     status: response.statusCode
                 }), false, {
-                    headers: response.headers
+                    headers: new(response.headers)
                     status: response.statusCode
                 }))
                 return

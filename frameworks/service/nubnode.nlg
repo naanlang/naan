@@ -1,0 +1,105 @@
+/*
+ * nubnode.nlg
+ * Naanlib/frameworks/service
+ *
+ * Nub for node worker access to IMP.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * NodeWorkerNub
+ *
+ * NodeWorkerNub provides an IMP interface that runs on node workers. This allows the worker to
+ * communicate with the IMP network and the main thread. The worker IMP must be created before this.
+ *
+ */
+
+closure NodeWorkerNub(imp, options, local nownub) {
+    global(App,js)
+    if App.workerNub
+        return (App.workerNub)                                              // singleton
+
+    options = merge({
+        name: "NodeWorkerNub"
+        type: "node-worker-nub"
+    }, options)
+    nownub = new(object, this)
+    nownub.instanceID = imp.us.instanceID || UUID()
+    nownub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher()
+
+    // impReceive
+    //
+    // Receive a remote request and reply to it.
+    //
+    nownub.impReceive = function impReceive(message, sourceID) {
+        if message.id == "targetin"
+            nownub.dispatcher(message.data, function(reply) {
+                nownub.sender(sourceID, {
+                    id: "targetout",
+                    data: reply
+                })
+            })
+    }
+            
+    // impUnknown
+    //
+    // Received an unknown destination notice from the other side.
+    //
+    nownub.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if !gateway
+            debuglog("NodeWorkerNub.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // message event
+    //
+    // Incoming data.
+    //
+    js.t.msgPort.on("message", function(msg) {
+        if msg.id == "naan-imp-node"
+            nownub.impconn.dispatch(new(msg.data))
+    })
+
+    // register our connects *after* the receivers are configured above
+
+    nownub.sender = imp.register(nownub, {
+        name: options.name
+        type: options.type
+        meta: options.meta || undefined
+        instanceID: nownub.instanceID
+        services: [ "naan-node-worker" ]
+    })
+    nownub.impconn = imp.requester(function(data) {
+        js.t.msgPort.postMessage({                                          // send to main
+            id: "naan-imp-node",
+            data: data
+        })
+        list(false, { sent: true })
+    })
+
+    // finis
+    
+    App.workerNub = nownub
+};
+
+
+/*
+ * nubnoInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function nubnoInit(local manifest) {
+    manifest = `(NodeWorkerNub, nubnoInit)
+
+    Naan.module.build(module.id, "nubnode", function(modobj, compobj) {
+        require("./service.nlg")
+        compobj.manifest = manifest
+        modobj.exports.NodeWorkerNub = NodeWorkerNub
+    })
+} ();

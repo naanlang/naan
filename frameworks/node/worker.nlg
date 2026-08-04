@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2024 by Richard C. Zulch
+ * Copyright (c) 2019-2026 by Richard C. Zulch
  *
  */
 
@@ -15,363 +15,375 @@
  *
  */
 
-gWorkers;
+gWorkerController = false;
 
 
 /*
- * workCurrent
+ * CurBot
  *
- *     Attach a remote terminal interface to the current NodeJS thread.
+ * Attach a remote terminal interface to the current NodeJS thread.
+ *
+ * Options:
+ *  {
+ *      name:           <string>                // target name, e.g. "Play"
+ *      type:           <string>                // target category, e.g. "Local"
+ *  }
  *
  */
 
-closure workCurrent(workco, workerID, startup, local current) {
-    global(js)
-    current = require("../running/executors.nlg").ExecutorBase(workco, workerID, startup.name)
-    current.workerID = workerID
-    current.name = startup.name
-    current.links = []
-    current.termif = xnew({
+closure CurBot(options, local curbot) {
+    global(App, js)
+    curbot = new(object, this)
+    curbot.topsubs = []
+    options = merge({
+        type: "Host"
+    }, options)
+    curbot.type = options.type
+    curbot.name = options.name
+
+    curbot.termif = xnew({
         textout:    ONtextOut.proc
         debugtext:  ONdebugText.proc
         status:     ONstatus.proc
         debugout:   ONdebugOut.proc
         messageout: ONmessageOut.proc
+        ioctl:      ONioctl.proc
     })
-    current.guid = 1
-    current.host = js.t                                                     // our magic Naan controller reference
-    
+    curbot.guid = 1
+    curbot.host = js.t                                                      // our magic Naan controller reference
+
+    curbot.instanceID = UUID()
+    curbot.sender = App.imp.register(curbot, {
+        name: curbot.name
+        type: curbot.type
+        instanceID: curbot.instanceID
+        services: ["naanide-server-main"]
+    })
+
+    // subscribe
+    //
+    // Add an InTop to our subscribers if not already known.
+    //
+    function subscribe(destID) {
+        if !curbot.topsubs.find(function(item) { item == destID }) {
+            curbot.topsubs.push(destID)
+            curbot.sender(destID, {
+                id: "workerDestID"
+                workerDestID: App.imp.us.instanceID                         // our remote responder
+            })
+        }
+    }
+
+    // unsubscribe
+    //
+    // Remove an InTop from our subscribers if present.
+    //
+    function unsubscribe(destID) {
+        curbot.topsubs = curbot.topsubs.filter(function(item) { item != destID })
+    }
+
+    // notifyAll
+    //
+    // Send the message to all our subscribers.
+    //
+    function notifyAll(message, exceptID, local topDestID) {
+        for topDestID in curbot.topsubs
+            if topDestID != exceptID
+                curbot.sender(topDestID, message)
+    }
+
+    // impReceive
+    //
+    // Received a payload.
+    //
+    curbot.impReceive = function impReceive(message, sourceID) {
+        // js.g.console.log("CurBot.impReceive(${sourceID}):\n", Dialect.print(new(message)))
+        if message.id == "destroy"
+            { }
+        else if message.id == "subscribe"
+            subscribe(sourceID)
+        else if message.id == "unsubscribe"
+            unsubscribe(sourceID)
+        else if message.id == "typed"
+            notifyAll(message, sourceID)
+        else {
+            message.data._guid = sourceID
+            curbot.host.DispatchMessage(message)
+        }
+    }
+
+    // impUnknown
+    //
+    // Received an unknown destination notice.
+    //
+    curbot.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if curbot.topsubs[unknownID] {                                      // did not have courtesy to unsubscribe!
+            unsubscribe(unknownID)
+            return
+        }
+        if !gateway
+            debuglog("CurBot.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
     // replyHook
     //
     //     Intercept the ReplyMessage function to see if we should handle it.
     //
     function replyHook(data) {
+        // js.g.console.log("CurBot.replyHook:\n", Dialect.print(new(data)))
+        // debuglog("CurBot.replyHook:\n", Dialect.print(new(data)))
+        /* ###
         if data._guid
             workco.uworkers[data._guid].msgport.postMessage({
                 id: "targetreceive"
                 data: data
             })
+        */
     }
-    current.host.OnReplyHook(replyHook.proc)
+    curbot.host.OnReplyHook(replyHook.proc)
 
     // ONtextOut
+    //
     // Process console text output by Naan.
-    
+    //
     function ONtextOut(text) {
-        sendAll({
+        notifyAll({
             id: "textout",
             text: text,
         })
     }
-    
+
     // ONdebugText
+    //
     // Process console debug text output by Naan.
-    
+    //
     function ONdebugText(text, level) {
-        sendAll({
+        notifyAll({
             id: "debugtext",
             text: text,
             level: level
         })
     }
-    
+
     // ONstatus
+    //
     // Process status update output by Naan.
-    
+    //
     function ONstatus(status) {
-        sendAll({
+        notifyAll({
             id: "status",
             status: status
         })
     }
-    
+
     // ONdebugOut
+    //
     // Process debugger output.
-    
+    //
     function ONdebugOut(data) {
-        sendAll({
+        notifyAll({
             id: "debugout",
             data: data
         })
     }
-    
+
     // ONmessageOut
+    //
     // Process message output.
-    
-    function ONmessageOut(data) {
-        if data._guid
-            return                                                          // already replied
-        current.execReceived(data)
-        sendAll({
-            id: "targetout",
-            data: data
+    //
+    function ONmessageOut(data, local _guid) {
+        if data._guid {
+            _guid = data._guid
+            data._guid = undefined
+            curbot.sender(_guid, {
+                id: "targetout",
+                data: data
+            })
+            return
+        }
+    }
+
+    // ONioctl
+    //
+    // Process ioctl.
+    //
+    function ONioctl(op, arg) {
+        notifyAll({
+            id: "ioctl",
+            op: op,
+            arg: arg
         })
     }
 
-    // removeLink
-    // Remove a link.
+    curbot.host.Attach(curbot.termif)
     
-    function removeLink(link) {
-        current.links = current.links.filter(function(item) {
-            !(item.link eq link)
-        })
-    }
-        
-    // exitNotify
-    // Notify all links that we have terminated.
-    
-    function exitNotify(exitCode, local link) {
-        workco.uworkers[current.guid] = undefined
-        for link in current.links
-            link.exitWorker(exitCode)
-    }
-    
-    // sendAll
-    // Send a message to all links.
-    
-    function sendAll(msg, local link) {
-        for link in current.links
-            link.responder(msg)
-    }
-
-    //
-    // attach
-    //
-    //     Attach a link.
-    //
-    
-    current.attach = function attach(link, responder) {
-        removeLink(link)
-        current.links.push({
-            link: link                                                      // a link to us
-            responder: responder                                            // link's responder
-        })
-        if current.links.length == 1
-            current.host.Attach(current.termif)                             // attached while one link is active
-    }
-    
-    //
-    // detach
-    //
-    //     Detach a link.
-    //
-    
-    current.detach = function detach(link) {
-        removeLink(link)
-        if current.links.length == 0
-            current.host.Detach(current.termif)                             // attached while one link is active
-    }
-
-    //
-    // target.PostMessage
-    //
-    //     Post a message to the main thread.
-    //
-    current.PostMessage = function PostMessage(data) {
-        js.t.DispatchMessage(data)
-        list(false, { posted: true })
-    }
-
-    //
-    // msgin
-    //
-    //     Send a message to the host interface.
-
-    current.msgin = function msgin(msg) {
-        current.host.DispatchMessage(msg)
-    }
-
-    //
-    // echo
-    //
-    //     Echo a message to the *other* links.
-
-    current.echo = function echo(msg, thislink, local linkref) {
-        for linkref in current.links
-            if !(linkref.link eq thislink)
-                linkref.responder(msg)
-    }
-
-    //
-    // vitalUpdate
-    //
-    //     Worker thread birth/death/enumeration.
-    
-    current.vitalUpdate = function vitalUpdate(msg) {
-        sendAll(msg)
-    }
+    curbot.subprocess = MakeSubProcessor(curbot)                            // Enable PTY subprocesses on our terminal
 
     // finis
-    current
+
+    curbot
 };
 
 
 /*
- * WorkerConnect
+ * NowBot
  *
- *     Return the existing web worker for a workerGUID, or false if it does not exist.
+ * Spawn a Naan worker in its own thread.
  *
- */
-
-function WorkerConnect(workerGUID) {
-    gWorkers[workerGUID]
-}
-
-
-/*
- * workMainProxy
- *
- *     Make a nodejs proxy representing the main thread. This runs inside the worker and allows it
- * to do remote execution with Main.
+ * Options:
+ *  {
+ *      name:           <string>                // target name, e.g. "Play"
+ *      type:           <string>                // target category, e.g. "Local"
+ *      startup:        <dictionary>            // startup options
+ *      topOriginID:    <string>                // so top can route to us through IMP
+ *  }
  *
  */
 
-closure workMainProxy(track, name, options, local target) {
-    global(js)
-    target = require("../running/executors.nlg").ExecutorBase(track, "mainProxy", name)
-    target.name = name
+closure NowBot(options, local nowbot, subChannel) {
+    global(App, js, threads, JSpath)
+    nowbot = new(object, this)
+    nowbot.topsubs = []
+    options = merge({
+        type: "node-worker"
+    }, options)
 
+    // options = { execArgv: ["--inspect-brk"] }                            // uncomment for NodeJS debugging
+    nowbot.thread = xnew(threads.Worker, JSpath.resolve(js.d, "lib/node_worker.js"), options)
+    subChannel = xnew(threads.MessageChannel)
+    nowbot.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
+    nowbot.msgport = subChannel.port2
+
+    nowbot.instanceID = UUID()
+    nowbot.sender = App.imp.register(nowbot, {
+        name: options.name
+        type: options.type
+        instanceID: nowbot.instanceID
+        services: ["node-worker"]
+    })
+
+    // If this NowBot is created remotely then we need to send a message from our new instanceID
+    // to the InTop origin so that it can send messages to us. The intermediate gateways save the
+    // route to allow replies.
+    if options.topOriginID && options.topOriginID != App.imp.us.instanceID
+        nowbot.sender(options.topOriginID)                                  // create route top->bottom
+
+    // subscribe
     //
-    // target.PostMessage
+    // Add an InTop to our subscribers if not already known.
     //
-    //     Post a message to the main thread.
-    //
-    target.PostMessage = function PostMessage(data) {
-        js.t.DispatchMessage(data)
-        list(false, { posted: true })
+    function subscribe(destID) {
+        if !nowbot.topsubs.find(function(item) { item == destID }) {
+            nowbot.topsubs.push(destID)
+            if nowbot.workerDestID {
+                App.imp.inform(nowbot.workerDestID, destID)                 // provide path to workerID
+                nowbot.sender(destID, {                                     // send to new subscriber
+                    id: "workerDestID"
+                    workerDestID: nowbot.workerDestID
+                })
+            }
+        }
     }
 
+    // unsubscribe
     //
-    // onreceive
+    // Remove an InTop from our subscribers if present.
     //
-    //     Process a received message from the main thread, typically in response.
-    //
-    function onreceive(data) {
-        target.execReceived(data)
+    function unsubscribe(destID) {
+        nowbot.topsubs = nowbot.topsubs.filter(function(item) { item != destID })
     }
+
+    // notifyAll
+    //
+    // Send the message to all our subscribers.
+    //
+    nowbot.notifyAll = function notifyAll(message, exceptID, local topDestID) {
+        for topDestID in nowbot.topsubs
+            if topDestID != exceptID
+                nowbot.sender(topDestID, message)
+    }
+
+    // impReceive
+    //
+    // Received a payload.
+    //
+    nowbot.impReceive = function impReceive(message, sourceID) {
+        if message.id == "destroy"
+            terminate()
+        else if message.id == "subscribe"
+            subscribe(sourceID)
+        else if message.id == "unsubscribe"
+            unsubscribe(sourceID)
+        else if message.id == "typed"
+            notifyAll(message, sourceID)
+        else {
+            if message.id == "keyline" && nowbot.keyin
+                nowbot.keyin(message.text)                                  // terminal keyboard -> pty subprocess
+            else
+                nowbot.msgport.postMessage(message)
+        }
+    }
+            
+    // impUnknown
+    //
+    // Received an unknown destination notice.
+    //
+    nowbot.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if nowbot.topsubs[unknownID] {                                      // did not have courtesy to unsubscribe!
+            unsubscribe(unknownID)
+            return
+        }
+        if !gateway
+            debuglog("NowBot.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // nowbot
+    //
+    // An exception occurred on the worker thread. Since Naan catches all exceptions this should
+    // not occur normally.
+    //
+    nowbot.thread.on("error", function onerror(error) {
+        debuglog("worker terminated with error", options.type, options.name, error)
+        notifyAll({
+            id: "terminated"
+            error: error
+        })
+        destroy()
+    })
+    
+    // onexit
+    //
+    // Note that the worker thread has terminated.
+    //
+    nowbot.thread.on("exit", function onexit(exitCode) {
+        notifyAll({
+            id: "terminated"
+            exitCode: exitCode
+        })
+        destroy()
+    })
     
     // destroy
     //
-    //     Destroy the execution instance.
+    // Ensure the worker is destroyed.
     //
-    target.destroy = function destroy() {
-        target.execClosed(Error("instance destroyed"))
-        track.delete(target)
+    nowbot.destroy = function destroy() {
+        terminate()
+        nowbot.thread = false
+        nowbot.impconn.close()
+        nowbot.impconn = false
+        App.imp.unregister(nowbot.instanceID)
     }
 
-    js.t.OnReceive(onreceive.proc)
-    track.add(target)
-
-    // finis
-
-    list(false, target)
-};
-
-
-/*
- * WorkerToMain
- *
- *     Connect our worker to the main thread, returning a result tuple with an executor representing
- * Main. Use this to create a context object for Main, allowing remote evaluation.
- *
- */
-
-closure WorkerToMain(local nideRunning, track) {
-    // mainProxy -- link tracker to main thread proxy
-    function mainProxy(track, name, options) {
-        workMainProxy(track, name, options)
-    }
-
-    if !js.g {
-        error = Error("WorkerToMain only available in node workers")
-        return (list(error))
-    }
-    nideRunning = require("naanlib:frameworks/running/executors.nlg")
-    track = nideRunning.ExecutorTracker()
-    track.register(mainProxy, "proxy")
-    track.spawn("proxy")                                                    // returns result tuple
-};
-
-
-/*
- * workThread
- *
- *     Spawn a Naan worker in its own thread.
- *
- */
-
-closure workThread(workco, workerID, startup, guid
-    local worker, options, subChannel, deathWatcher) {
-    global(js, threads, JSpath)
-    worker = require("../running/executors.nlg").ExecutorBase(workco, workerID, startup.name)
-    worker.name = startup.name
-    worker.workerID = workerID
-    worker.links = []
-    worker.guid = guid || UUID()
-
-    // create our worker thread
-
-    // options = { execArgv: ["--inspect-brk"] }                            // uncomment for NodeJS debugging
-    worker.thread = xnew(threads.Worker, JSpath.resolve(js.d, "lib/node_worker.js"), options)
-    subChannel = xnew(threads.MessageChannel)
-    worker.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
-    worker.msgport = subChannel.port2
-
-    // removeLink
-    // Remove a link.
-    
-    function removeLink(link) {
-        worker.links = worker.links.filter(function(item) {
-            !(item.link eq link)
-        })
-    }
-        
-    // exitNotify
-    // Notify all links that we have terminated.
-    
-    function exitNotify(exitCode, local link) {
-        workco.uworkers[worker.guid] = undefined
-        for link in worker.links
-            link.exitWorker(exitCode)
-        worker.links = []
-        deathWatcher(workerID)
-    }
-    
-    // sendAll
-    // Send a message to all links.
-    
-    function sendAll(msg, local link) {
-        for link in worker.links
-            link.responder(msg)
-    }
-
+    // NaaN message
     //
-    // onerror
+    // A message has been received from NaaN running on the worker thread.
     //
-    //     An exception occurred on the worker thread. Since Naan catches all exceptions this should
-    // not occur normally.
-
-    worker.thread.on("error", function onerror(error) {
-        debuglog("worker terminated with error", workerID, error)
-        exitNotify(-1)
-    })
-    
-    //
-    // onexit
-    //
-    //     Note that the worker thread has terminated.
-
-    worker.thread.on("exit", function onexit(exitCode) {
-        exitNotify(exitCode)
-    })
-
-    //
-    // naanmsg
-    //
-    //     A message has been received from Naan running on the worker thread.
-    
-    worker.msgport.on("message", function naanmsg(msg, local startmsg) {
-        if msg.id == "loaded" {
+    nowbot.msgport.on("message", function (msg, local startmsg) {
+        if msg.id == "naan-imp-node" {
+            nowbot.impconn.dispatch(new(msg.data))
+            return
+        } else if msg.id == "loaded" {
             startmsg = {
                 id: "start"
                 state: false                                                // resume state, if we have any
@@ -379,338 +391,197 @@ closure workThread(workco, workerID, startup, guid
                 dirpath: js.d
                 workerID: workerID
                 workerGUID: worker.guid
+                metadata: {
+                    mainInstanceID: App.imp.us.instanceID
+                    name: options.name
+                }
             }
-            if startup.initcmds
-                startmsg.altcmd = startup.initcmds.concat("\n")
-            if startup.dirpath
-                startmsg.dirpath = startup.dirpath
-            worker.msgport.postMessage(startmsg)
-            worker.links[0].responder({                                     // only send this to first link
-                id: "started"                                               // don't want multiple initializers
-            }) }
-        else if msg.id == "targetsend" {
-            msg.data._guid = worker.guid
+            if options.startup.initcmds
+                startmsg.altcmd = options.startup.initcmds.concat("\n")
+            if options.startup.dirpath
+                startmsg.dirpath = options.startup.dirpath
+            nowbot.msgport.postMessage(startmsg)
+            notifyAll({
+                id: "started"
+            })
+        } else if msg.id == "targetsend" {
+            msg.data._guid = nowbot.guid
             js.t.DispatchMessage({
                 id: "targetin"
                 data: msg.data
             }) }
-        else {
-            if msg.id == "status"
-                worker.lastStatus = milliseconds()
-            else if msg.id == "targetout"
-                worker.execReceived(msg.data)
-            sendAll(msg) }                                                  // default is just return message to the client
+        else if msg.id == "textout" && nowbot.naanin
+            nowbot.naanin(msg.text)                                         // naan output -> pty subprocess
+        else
+            notifyAll(msg)
     })
     
-    //
     // terminate
     //
-    //     Terminate this worker asap.
-    
-    worker.terminate = function terminate(local error, exitCode) {
-        `(error, exitCode) = await(worker.thread.terminate())
-        exitNotify(exitCode)
+    //  Terminate this worker asap.
+    //
+    nowbot.terminate = function terminate(local error, exitCode) {
+        if nowbot.thread
+            `(error, exitCode) = await(nowbot.thread.terminate())           // notified by on-error and on-exit
+        else
+            list(false, { terminated: true })                               // already terminated
     }
 
-    //
-    // attach
-    //
-    //     Attach a connection to our worker.
-    //
-    
-    worker.attach = function attach(link, responder) {
-        removeLink(link)
-        worker.links.push({
-            link: link                                                      // a link to us
-            responder: responder                                            // link's responder
-        })
-    }
-    
-    //
-    // detach
-    //
-    //     Detach a link from our worker.
-    //
-    
-    worker.detach = function detach(link) {
-        removeLink(link)
-    }
-
-    //
     // PostMessage
     //
-    //     Post a message to the main thread.
+    // Post a message to the worker thread.
     //
-    worker.PostMessage = function PostMessage(data) {
-        worker.msgport.postMessage({                                        // send data to worker
+    nowbot.PostMessage = function PostMessage(data) {
+        nowbot.msgport.postMessage({                                        // send data to worker
             id: "targetin",
             data: data
         })
         list(false, { posted: true })
     }
 
-    //
-    // msgin
-    //
-    //     Send a message to the worker thread.
-
-    worker.msgin = function msgin(msg) {
-        worker.msgport.postMessage(msg)
-    }
-    
-    //
-    // echo
-    //
-    //     Echo a message to the *other* links.
-
-    worker.echo = function echo(msg, thislink, local linkref) {
-        for linkref in worker.links
-            if !(linkref.link eq thislink)
-                linkref.responder(msg)
-    }
-    
-    //
-    // vitalWatch
-    //
-    //     Report our termination to the specified watcher.
-    
-    worker.vitalWatch = function vitalWatch(watcher) {
-        deathWatcher = watcher
-    }
+    nowbot.subprocess = MakeSubProcessor(nowbot)                            // Enable PTY subprocesses on our terminal
 
     // finis
-    worker
+
+    nowbot
 };
 
 
 /*
- * workLink
+ * NobBot
  *
- *     An object representing a specific connection and worker pair. Both workers and connections may
- * have multiple links. This allows a worker to communicate with multiple connections and allows
- * clients to create a new connection to talk with an existing worker.
+ * Create a remote interface like NowBot, but also provide messaging support for NodeWorkerNub inside
+ * the worker.
  *
  */
 
-closure workLink(workco, conn, worker, sender, local link) {
-    global()
-    link = new(object, this)
+closure NobBot(options, local nobbot)
+{
+    global(App)
+    nobbot = NowBot(options)
 
+    // informAll
     //
-    // closeConn
+    // Inform sourceID path to all our subscribers.
     //
-    // Note that the connection has closed.
-    //
-    
-    link.closeConn = function closeConn() {
-        worker.detach(link)                                                 // stop receiving updates from worker
-    }
-        
-    //
-    // exitWorker
-    //
-    // Note that the worker has exited.
-    //
-    
-    link.exitWorker = function exitWorker(exitCode) {
-        sender("terminated", [false, {
-            workerID: worker.workerID                                       // notify client they've lost a worker
-            exitCode: exitCode
-        }])
-        workco.closeLink(link, conn, worker.workerID)
-        worker.detach(link)
+    function informAll(sourceID, local topDestID) {
+        for topDestID in nobbot.topsubs
+            App.imp.inform(sourceID, topDestID)
     }
 
-    // initialize
-
-    worker.attach(link, function msgout(data) {
-        sender("msgout", data)
+    App.imp.addEventListener("active", function(event, info) {
+        if info.ourID == nobbot.instanceID {
+            nobbot.workerDestID = info.destID                               // handshake completed
+            informAll(nobbot.workerDestID)                                  // provide path to workerID
+            nobbot.notifyAll({                                              // send to subscribers
+                id: "workerDestID"
+                workerDestID: nobbot.workerDestID
+            })
+        }
     })
-    sender("linked", [false, {
-        workerID: worker.workerID                                           // notify client they've gained a worker
-    }])
+
+    nobbot.impconn = App.imp.responder(function(data) {
+        nobbot.msgport.postMessage({                                        // send to worker
+            id: "naan-imp-node"                                             // scoped for NodeWorkerNub
+            data: data
+        })
+        list(false, { sent: true })
+    }, {
+        ourID: nobbot.instanceID
+    })
 
     // finis
 
-    link
+    nobbot
 };
 
 
 /*
- * workController
+ * MakeSubProcessor
  *
- *     Controller for workers. This knows about all the workers and links. If a connection dies then
- * this tears down all links from the connection. If a worker dies then this tears down all links to
- * that worker.
+ * Method PTY subprocess capability to CurBot and NowBot. They also need these:
+ *
+ * function impReceive(message, sourceID) { ...
+ *      ...
+ *      if message.id == "keyline" && nowbot.keyin
+ *          execbot.keyin(message.text)                                     // terminal keyboard -> pty subprocess
+ *
+ * function naanmsg(msg, local startmsg) { ...
+ *      ...
+ *      else if msg.id == "textout" && nowbot.naanin
+ *          execbot.naanin(msg.text)                                        // naan output -> pty subprocess
+ *
+ * subprocess
+ *
+ *     Create a PTY subprocess and connect with the worker and terminal. You specify the path of
+ * the executable and the arguments. If no executable is specified then a shell is created. The
+ * return value is a result tuple with an object that can be used to kill or monitor the 
+ * subprocess.
+ *
+ * The subprocess can be connected in a variety of ways:
+ *
+ *                      term-keyboard   | term-display  | worker-in  | worker-out
+ * -------------------------------------|---------------|------------|-----------
+ * subprocess input         keyboard    |               |            |   pipe
+ * subprocess output                    | display | tee | pipe | tee |
+ *
+ * Options:
+ *  {
+ *      input:  false | "keyboard" | "pipe"
+ *      output: false | "display" | "pipe" | "tee"
+ *      spawn:  <PtyManager.spawn options>
+ *  }
  *
  */
 
-closure workController(api, local workco) {
-    global(gWorkers)
-    workco = new(object, this)
-    workco.serverID = "Workers"                                             // our serverID, used for communications
-    workco.workers = { }                                                    // dictionary of workers by workerID
-    workco.uworkers = { }                                                   // dictionary of workers by GUID
-    workco.links = new(weakmap)
-    api.Register(workco.serverID, workco)
-    
-    // addLinkForConnection
-    // Add a link for a connection under its workerID.
-    
-    function addLinkForConnection(conn, workerID, link, local iddict) {
-        iddict = workco.links[conn]
-        if !iddict
-            workco.links[conn] = iddict = { }
-        iddict[workerID] = link
-    }
-        
-    // deleteLinkForConnection
-    // Remove a link for a connection under its workerID, or false.
-    
-    function deleteLinkForConnection(conn, workerID) {
-        if workco.links[conn][workerID]
-            workco.links[conn][workerID] = undefined
-    }
+closure MakeSubProcessor(execbot) {
+    closure subprocess(
+        executable, args, options, local error, pty) {
 
-    // makeSender
-    // Sender factory for specified connection and message.
-    
-    closure makeSender(conn, message) {
-        function sender(respOp, payload) {
-            conn.send({
-                clientID: message.clientID
-                serverID: message.serverID
-                workerID: message.workerID
-                respOp: respOp
-                payload: payload
-            })
+        // ptyData - text has been returned from the subprocess
+        function ptyData(text) {
+            if options.output == "display" || options.output == "tee"
+                notifyAll({                                                 // send to display
+                    id: "textout",
+                    text: text
+                })
+            if options.output == "pipe" || options.output == "tee"
+                msg({                                                       // send to NaaN worker
+                    id: "keyline"
+                    text: text
+                })
         }
-    }
-    
-    // makeLink
-    // Link the specified message, connection and worker.
-    
-    function makeLink(message, conn, local worker, link) {
-        worker = workco.workers[message.workerID]
-        link = workLink(workco, conn, worker, makeSender(conn, message))
-        addLinkForConnection(conn, message.workerID, link)
-    }
-    
-    // termination
-    // Note that a worker has terminated.
-    
-    function termination(workerID) {
-        workco.current.vitalUpdate({
-            id: "termination",                                              // note a thread has gone away
-            workerID: workerID
-        })
-        workco.workers[workerID] = undefined                                // it's like this worker has never been
-    }
 
-    // spawn
-    //
-    //     Spawn a new worker with the specified configuration dictionary and optional GUID.
-    //
-    workco.spawn = closure spawn(workerID, config, guid, local worker) {
-        if !dictionary(gWorkers)
-            gWorkers = {}
-        worker = workco.workers[workerID]
-        if !worker {                                                        // create worker if needed
-            if workerID == "NideServer"
-                worker = workco.current = workCurrent(workco, workerID, config)
-            else
-                worker = workThread(workco, workerID, config, guid)
-            workco.uworkers[worker.guid] = worker
-            workco.workers[workerID] = worker
-            gWorkers[worker.guid] = worker }
-        if workerID == "NideServer"
-            workco.current.vitalUpdate({
-                id: "workerlist",                                           // send the initial list of workers
-                workers: let(workers, workerID, worker) {
-                    workers = { }
-                    for `(workerID, worker) in workco.workers
-                        workers[workerID] = {
-                            name: worker.name
-                        }
-                    workers
-                }()
-            })
-        else {
-            worker.vitalWatch(termination)
-            workco.current.vitalUpdate({
-                id: "spawned",                                              // note a new worker thread
-                name: config.name
-                workerID: workerID
-            }) }
-        list(false, worker)
-    }
-
-    // wsReceive
-    //
-    //     Process a message from the websocket API.
-    //
-    workco.wsReceive = function wsReceive(message, conn, local worker, link, error) {
-        if !message.workerID
-            error = Error("workerID required", message.workerOp)
-        else
-        {
-            worker = workco.workers[message.workerID]
-            link = workco.links[conn][message.workerID]
-            if message.workerOp == "msgin" {
-                if worker && message.payload {
-                    if !link
-                        makeLink(message, conn)                             // make sure we have a link for responses
-                    worker.msgin(message.payload) }                         // send message to worker
-                return }
-            else if message.workerOp == "echo" {
-                if worker && message.payload {
-                    if !link
-                        makeLink(message, conn)                             // make sure we have a link for responses
-                    worker.echo(message.payload, link) }                    // echo message to other links
-                return }
-            else if message.workerOp == "spawn" {
-                spawn(message.workerID, message.payload, message.workerGUID)
-                if !link
-                    makeLink(message, conn)                                 // make sure we have a link for responses
-                return }
-            else if message.workerOp == "terminate" {
-                if worker {
-                    if !link
-                        makeLink(message, conn)                             // make sure we have a link for responses
-                    worker.terminate() }                                    // echo message to other links
-                return }
-            error = Error("invalid parameters", message.workerOp, message.workerID)
+        // ptyKilled - the subprocess has terminated
+        function ptyKilled(event) {
+            if execbot.keyin === keyin
+                execbot.keyin = false
+            if execbot.naanin === naanin
+                execbot.naanin = false
         }
-        ErrorDebuglog("workController.wsReceive error:", error)
-    }
-    
-    //
-    // wsClose
-    //
-    //     Note that the connection with the client was closed.
-    //
-    
-    workco.wsClose = function wsClose(conn, local workerID, link) {
-        for workerID in workco.workers {
-            link = workco.links[conn][workerID]
-            if link
-                link.closeConn()
-            deleteLinkForConnection(conn, workerID)
+
+        // keyin - the terminal has generated text for the subprocess
+        function keyin(text) {
+            pty.write(text)
         }
-    }
-    
-    //
-    // closeLink
-    //
-    //     Note that a link with the worker has closed.
-    //
 
-    workco.closeLink = function closeLink(link, conn, workerID) {
-        deleteLinkForConnection(conn, workerID)
-    }
+        // naanin - NaaN worker has generated text for the subprocess
+        function naanin(text) {
+            pty.write(text)
+        }
 
-    // finis
-    workco
+        `(error, pty) = PtyManager().spawn(executable, args, {
+            ptyData: ptyData
+            ptyKilled: ptyKilled
+        }, options.spawn)
+        if error
+            return (list(error))
+        if options.input == "keyboard"
+            nowbot.keyin = keyin                                            // replace existing
+        else if options.input == "pipe"
+            execbot.naanin = naanin                                         // replace existing
+        list(false, pty)
+    }
 };
 
 
@@ -722,13 +593,12 @@ closure workController(api, local workco) {
  */
 
 function workInit(local manifest) {
-    manifest = `(workCurrent, WorkerConnect, workMainProxy, WorkerToMain, workThread, workLink,
-        workController, workInit)
+    manifest = `(CurBot, NowBot, NobBot, MakeSubProcessor, workInit)
     Naan.module.build(module.id, "worker", function(modobj, compobj) {
         require("./node.nlg")
         compobj.manifest = manifest
-        modobj.exports.WorkerController = workController
-        modobj.exports.WorkerConnect = WorkerConnect
-        modobj.exports.WorkerToMain = WorkerToMain
+        modobj.exports.CurBot = CurBot
+        modobj.exports.NowBot = NowBot
+        modobj.exports.NobBot = NobBot
     })
 }();

@@ -1,0 +1,28 @@
+/*
+ * service.nlg
+ * Naanlib/frameworks/service
+ *
+ *     Root component for services functionality.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * svcInit
+ *
+ * Initialize the service module.
+ *
+ */
+
+function svcInit(local manifest) {
+    manifest = `(svcInit)
+
+    Naan.module.build(module.id, "service", function(modobj, compobj) {
+        require("../common/common.nlg").LiveImport()
+        compobj.manifest = manifest
+    })
+} ();

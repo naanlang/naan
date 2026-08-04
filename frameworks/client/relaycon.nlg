@@ -2,11 +2,11 @@
  * relaycon.nlg
  * Naanlib/frameworks/client
  *
- * Control NaanIDE Server and browser clients from the command line.
+ * Remote control of NaaN execution instances through the IMP network.
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023-2024 by Richard C. Zulch
+ * Copyright (c) 2026 by Richard C. Zulch
  *
  */
 
@@ -17,33 +17,32 @@
  */
 
 execsMod;;                                      // running/executors module
-wsMod;;                                         // websocket module
 
 
 /*
  * RelayCon
  *
- *     A host controller for NaanIDE Server.
+ * Connect with an existing or new remote instance via IMP.
+ *
+ * Example usage:
+ *
+    comMod = require("naanlib:frameworks/client/relaycon.nlg")
+    relay = comMod.RelayCon(App.imp)
+    relay.clients()
+    // find desired instance
+    relay.context(<destID>)
  *
  * Options:
  *  {
- *      destID: <string>                        // client UUID or "server"
  *      name: <string>                          // internal identification
- *      config: {
- *          clientID: <string>                  // distinguishes clients
- *          serverID: <string>                  // subsystem on server (server destinations only)
- *          workerID: <string>                  // worker on server (server destinations only)
- *      }
- *      startup: <dictionary>                   // worker spawn init (server destinations only)
- *      wss: <boolean>                          // true to use secure connection
  *      debug: <boolean>                        // debug logging
  *  }
  *
  */
 
-closure RelayCon(host, secret, options, local relay, nlregex)
+closure RelayCon(imp, options, local relay, nlregex)
 {
-    global(App, execsMod, wsMod)
+    global(App, execsMod)
     relay = new(object, this)
     options = merge({
         name: "NaanIDE Server"
@@ -53,125 +52,71 @@ closure RelayCon(host, secret, options, local relay, nlregex)
         serverID: "Workers"
         workerID: "NideServer"
     }, options.config)
-    if options.destID != "server" {
-        relay.config.endServerID = relay.config.serverID
-        relay.config.serverID = "Relay"
-        relay.config.destID = options.destID
-        relay.config.workerID = undefined
-    }
+    relay.instanceID = UUID()
     relay.exec = execsMod.ExecutorBase(false, "Host", options.name)
     nlregex = RegExp("\\n", "g")
 
     // connect
     //
-    // Connect with the host if not already connected, returning a result tuple. When this connects
-    // it sends a "spawn" message, which establishes the connection with the server's "worker" which
-    // in the case of NideServer is just the main NodeJS process itself. It could also spawn a new
-    // worker thread, but we don't expose that functionality for the time being.
+    // Connect with the destination if not already connected.
     //
-    closure connect(local result) {
-        if relay.wscon
-            return (list(false, { connected: true }))
-        relay.guid = secret
-        relay.host = host                                                   // e.g. "localhost:8009"
-        relay.wscon = wsMod.WebSocket(host, {
-            wss: options.wss || undefined
-            onopen: onopen
-            onmessage: onmessage
-            onerror: onerror
-            onclose: onclose
-            query: undefined                                                // don't put secret on unsecure connections
-            querys: secret && EncodeQuery("?", { guid: secret })
+    relay.connect = closure connect(destID) {
+        if relay.curDestID
+            return (list(false, { connectedID: relay.curDestID }))
+        if !string(destID)
+            return (list(Error("invalid connect destination")))
+        relay.curDestID = destID
+
+        relay.sender = imp.register(relay, {
+            name: options.name
+            type: relay.config.workerID
+            instanceID: relay.instanceID
+            services: [ "term_client" ]
         })
-        result = relay.wscon.connect()
-        if !result.0
-            sendControl("spawn", { name: options.name })                    // ensure worker is connected
-        else if options.debug
-            ErrorDebuglog("WebSocket connect failed:", result.0)
-        result
-    }
 
-    // onopen
-    //
-    // The WebSocket connection has opened.
-    //
-    closure onopen(e, target, type, local spawner) {
-        if options.debug
-            debuglog("WebSocket onopen", relay.host, target, type, e.*)
-        spawner = new(options.startup)
-        spawner.name = options.name
-        if spawner
-            sendControl("spawn", spawner)
-    }
-
-    // onclose
-    //
-    // The WebSocket connection has closed.
-    //
-    closure onclose(e, code, reason) {
-        if options.debug && code != 1000 && code != 1001 && code != 1005
-            debuglog("WebSocket onclose", relay.host, code, reason, e.*)
-        relay.wscon = false
-        relay.exec.execClosed(Error("socket closed", e.code, e.reason))
-    }
-
-    // onerror
-    //
-    // The WebSocket connection has failed.
-    //
-    closure onerror(e) {
-        if options.debug
-            debuglog("WebSocket onerror", relay.host, e.*)
-        relay.exec.execFailed(Error("WebSocket onerror"))
-    }
-
-    // onmessage
-    //
-    // A WebSocket message was received.
-    //
-    closure onmessage(e, message, local msg) {
-        if options.debug && (message.relayOp || Array.isArray(message))
-            printline("Relay response:", Dialect.print(message))
-        if Array.isArray(message)
-            relay.exec.execFailed(message.0)                                // must be an error
-        else if message.respOp == "msgout" {
-            msg = message.payload
-            if msg.id == "spawned" || msg.id == "workerlist" || msg.id == "termination"
-                return (hostWorkerUpdate(msg))
-            if msg.id != "targetout" {
-                if msg.id == "status"
-                    relay.lastStatus = milliseconds() }
-            doMessage(msg) }
-        else if options.debug {
-            if message.respOp == "error"
-                debuglog("worker controller error:", ErrorString(message.payload[0]))
-            else if message.respOp == "linked"
-                debuglog("terminal linked")
-            else if message.respOp
-                debuglog("unknown host response message:", message.respOp)
+        function initWorker(local spawner) {
+            return // ###
+            relay.sender(relay.curDestID, {
+                init: {                                                     // initialize our worker (or main)...
+                    name: options.name
+                    workerID: relay.config.workerID
+                }
+            })
+            spawner = new(options.startup) || { }
+            spawner.name = options.name
+            // sendControl("spawn", spawner)
         }
+
+        initWorker()
+        list(false, { connectedID: relay.curDestID })
     }
 
-    // hostWorkerUpdate
+    // impUnknown
     //
-    //     New workers created/discovered on this host.
+    // Received an unknown destination notice from the other side.
     //
-    closure hostWorkerUpdate(msg) {
-        if options.debug {
-            if msg.id == "spawned"
-                debuglog("host worker spawned", msg.name, "(${msg.workerID})")
-            else if msg.id == "termination"
-                debuglog("host worker terminated", msg.workerID)
-            else if msg.id == "workerlist"
-                printline("host workers:", Dialect.print(msg.workers))
-        }
+    relay.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if !gateway
+            debuglog("RelayCon.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // impReceive
+    //
+    // Received a payload from the other side.
+    //
+    relay.impReceive = function impReceive(message, sourceID) {
+        if options.debug
+            printline("Relay response:", Dialect.print(new(message)))
+        if message.id == "status"
+            relay.lastStatus = milliseconds() 
+        doMessage(message)
     }
 
     // doMessage
     //
-    //     Process the specified undecoded message.
+    // Process the specified undecoded message.
     //
-    closure doMessage(msg) {
+    relay.doMessage = function doMessage(msg) {
         if msg.id == "targetout"
             relay.exec.execReceived(msg.data)
         else if msg.id == "debugout"
@@ -191,34 +136,23 @@ closure RelayCon(host, secret, options, local relay, nlregex)
                 debuglog("unknown host worker message:", msg.id)
         }
     }
-    
-    // sendControl
-    //
-    //     Send a message to the worker controller.
-    //
-    relay.sendControl = function sendControl(workerOp, payload) {
-        relay.wscon.send(merge({
-            guid: relay.guid
-            workerOp: workerOp
-            payload: payload
-        }, relay.config))
-    }
-    
+
     // send
     //
-    //     Send a message to the worker.
+    // Send a message to the worker.
     //
     relay.send = function send(msg) {
-        sendControl("msgin", msg)
+        relay.sender(relay.curDestID, msg)
     }
 
     // exec.PostMessage
     //
-    //     Post a message to the target, returning a result tuple with an error if the connection
-    // has closed.
+    // Post a message to the target, returning a result tuple with an error if the connection has
+    // closed.
     //
     relay.exec.PostMessage = function PostMessage(data, local result) {
-        result = connect()
+        if !relay.curDestID
+            return (list(Error("connection not open")))
         if result.0
             return (result)
         send({                                                              // send data to worker
@@ -230,27 +164,10 @@ closure RelayCon(host, secret, options, local relay, nlregex)
 
     // clients
     //
-    // Return an array of available clients (destination browsers) with which we can communicate, as
-    // a result tuple like the following array:
+    // Return an array of available clients (destination browsers) with which we can communicate.
     //
-    //  [
-    //      {
-    //          destID  : "52733f52-869b-4758-b553-611df95eb5fe",
-    //          address : { address: "::1", family: "IPv6", port: 8009 },
-    //          name    : "NaanIDE Server",
-    //          workerID: "NideServer" },
-    //      {
-    //          destID  : "ba4b7e69-abe5-4d13-b091-7abe833fd029",
-    //          address : { address: "::1", family: "IPv6", port: 8009 },
-    //          name    : "NaanIDE Server",
-    //          workerID: "NideServer" }
-    //  ]
-    //
-    relay.clients = closure clients(excon, local error) {
-        if !excon
-            `(error, excon) = context()
-        if excon
-            excon.evalq(App.api.Relays())
+    relay.clients = closure clients(destID) {
+        imp.discover(destID)
     }
     
     // context
@@ -268,10 +185,20 @@ closure RelayCon(host, secret, options, local relay, nlregex)
     //      context.rpc(test3, `(45))
     //      (rpc does JSON serialization)
     //  4. Call via RPC showing Date object conversion
-    //      context.rpc(test3)
+    //      context.rpc(test3, list(Date()))
     //      (JSON serializationn converts the date to an ISO string)
     //
-    relay.context = closure context() {
+    relay.context = closure context(destID, local result) {
+        if destID != relay.curDestID {
+            if relay.curDestID
+                close()
+            result = connect(destID)
+            if result.0
+                return (result)
+        }
+        connect(destID)
+        if imp.us.instanceID != destID
+            imp.inform(imp.us.instanceID, destID)                           // ensure our IMP is reachable by them
         relay.exec.context()
     }
     
@@ -280,8 +207,11 @@ closure RelayCon(host, secret, options, local relay, nlregex)
     //     Close the connection, though it can be reopened
     //
     relay.close = closure close() {
-        relay.wscon.close()
-        relay.wscon = false
+        if relay.curDestID {
+            imp.unregister(relay.instanceID)
+            relay.curDestID = false
+        }
+        list(false, { closed: true })
     }
 
     // finis
@@ -291,22 +221,18 @@ closure RelayCon(host, secret, options, local relay, nlregex)
 
 
 /*
- * hocoInit
+ * relayInit
  *
- *     Orchestrate using CsvJson in the console.
+ * Initialize the component.
  *
  */
 
-function hocoInit(local manifest) {
-    manifest = `(RelayCon, hocoInit)
+function relayInit(local manifest) {
+    manifest = `(RelayCon, relayInit)
 
     Naan.module.build(module.id, "relaycon", function(modobj, compobj) {
         require("./client.nlg")
         execsMod = require("../running/executors.nlg")
-        if js.w
-            wsMod = require("../browser/ws_client.nlg")
-        else
-            wsMod = require("../node/ws_client.nlg")
         compobj.manifest = manifest
         module.exports.RelayCon = RelayCon
     })

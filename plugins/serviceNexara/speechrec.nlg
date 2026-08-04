@@ -100,7 +100,7 @@ closure NexaraSpeechRec(local nxspr) {
     // Convert a Nexara response to a Yandex SpeechKit structure. Hey, it was first.
     //
     function nexaraToYCSK(resp,
-        local output, wordx, segment, chunk, word, wordet) {
+        local output, wordx, segment, chunk, syncerror, word, wordet, wordtrim, tstart) {
         output = {
             \@type: "type.googleapis.com/yandex.cloud.ai.stt.v2.LongRunningRecognitionResponse"
             chunks: []
@@ -120,14 +120,18 @@ closure NexaraSpeechRec(local nxspr) {
                 ]
             }
             for word in segment.text.split(" ") {
+                if word == ""
+                    continue                                                // ignore extra spaces
                 wordet = resp.words[wordx++]
-                if wordet.word != word {
-                    debuglog("nexaraToYCSK: expected ${word} but got ${wordet.word}")
-                    return (false)
+                wordtrim = wordet.word.trim()                               // detected word without spaces
+                tstart = wordet.start.toFixed(3).concat("s")
+                if !syncerror && wordtrim != word {
+                    syncerror = true
+                    debuglog("nexaraToYCSK: warning: at ${tstart} expected '${word}' but got '${wordtrim}'")
                 }
                 chunk.alternatives.0.words.push({
-                    word: wordet.word
-                    startTime: wordet.start.toFixed(3).concat("s")
+                    word: wordtrim
+                    startTime: tstart
                     endTime: wordet.end.toFixed(3).concat("s")
                 })
             }

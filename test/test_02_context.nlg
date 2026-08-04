@@ -265,5 +265,28 @@ RegisterTestCategory("context", [
     [ "closure Xx(y, local xx) { xx = new(object, this) };", "Xx" ],
     [ "x = Xx(33);", "{object Xx}" ],
     [ "car(x@\\.closure.proc.2.0)", "33" ],
-    [ "new(object, 3)@*", "false" ]
+    [ "new(object, 3)@*", "false" ],
+
+    //
+    // undefined objects
+    //
+    
+    [ "closure undef(local o) {\n"
+        "   o = new(object, undef)\n"
+        "   put(o,'.undefined', function udef args {\n"
+        "       print('udef:', args)\n"
+        "   })\n"
+        "   o\n"
+      "};", "undef" ],
+    [ "oo = undef();", "{object undef}"],
+    [ "closure(c) {\n"
+        "xset(c, joe2, macro mjoe args {\n"
+        "   printline(args)\n"
+        "   deref(c, joe, args)\n"
+        "})\n"
+      "}(oo);>", "(macro mjoe args (printline args) (deref c joe args))"],
+    [ "oo.joe(8,2+5);", "udef:(joe 8 7)|(joe, 8, 7)" ],
+    [ "oo.joe2(5,9+3);", "(5 (+ 9 3))|udef:(joe 5 (+ 9 3))|(joe, 5, 9+3)" ],
+    [ "dargs = list(3,quote(2+4));", "(3, 2+4)"],
+    [ "deref(oo, joe, dargs);", "udef:(joe 3 (+ 2 4))|(joe, 3, 2+4)"]
 ]);

@@ -1,0 +1,393 @@
+/*
+ * instances.nlg
+ * Naanlib/frameworks/browser
+ *
+ * Manage NaaN instances locally and remotely.
+ *
+ * NaaN instances are managed by a top/bottom pair of of objects. InBot (INstance BOTtom) objects
+ * reside in the same JavaScript environment (node/browser) as their worker and communicate with the
+ * appropriate env_xxx.js adapter for NaaN in that environment.
+ *
+ * Zero or more InTop objects connect to each InBot object via the IMP network, providing remote
+ * evaluation and terminal access services. Each InTop supports only one terminal simultaneously, but
+ * they can be attached and detached at any time.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * InTop
+ *
+ * Create an InTop executor for the specified InBot. The open and close methods select the specific
+ * InBot to be used. The design intent is to only connect to one InBot, but lifecycle and connection
+ * changes could theoretically change its instanceID. A terminal may attach and detach from this 
+ * object, but only one at a time. Create more InTops if you need terminals simultaneously. All of
+ * the ExecutorBase methods are available, such as `context()`.
+ *
+ * Options:
+ *  {
+ *      name:       <string>                    // target name, e.g. "Play"
+ *      type:       <string>                    // target category, e.g. "Local"
+ *      workerID:   <string>                    // target workerID
+ *      create:     <dictionary>                // creation parameters, if creation is desired
+ *  }
+ *
+ */
+
+closure InTop(track, options, local intop, nlregex, str, error) {
+    global(App)
+    intop = ExecutorBase(track, options.type, options.name)
+    intop.workerID = options.workerID || undefined
+    intop.msgQueue = []
+    nlregex = RegExp("\\n", "g")
+
+    // doMessage
+    //
+    // Process a message from our InBot.
+    //
+    intop.doMessage = function doMessage(msg) {
+        if msg.id == "textout"
+            intop.term.Write(msg.text.replace(nlregex, "\r\n"))
+        else if msg.id == "debugtext"
+            intop.debugWrite(msg.text, msg.level)
+        else if msg.id == "typed" {                                         // echo in dark-grey, italic
+            if intop.ioctl_echo == 1 {                                      // echo newline only
+                if str.firstIndexOf("\\n") >= 0
+                     intop.term.Write("\r\n")
+            } else if intop.ioctl_echo != 0
+                formatTyped(msg.text)
+        } else if msg.id == "targetout"
+            intop.execReceived(msg.data)
+        else if msg.id == "status"
+            intop.notify.execStatus(intop, msg.status)
+        else if msg.id == "debugout"
+            intop.debugger.debugData(intop, msg.data)
+        else if msg.id == "download"
+            { }
+        else if msg.id == "loaded"
+            { }
+        else if msg.id == "ioctl" {
+            if msg.op == "echo" {
+                intop.ioctl_echo = msg.arg                                  // control our typed echo
+                intop.term.EchoSet(msg.arg)                                 // echo arg: 0, 1, 2
+            } else if msg.op == "sane" {
+                intop.ioctl_echo = 2                                        // enable typed echo
+                intop.term.Sane()
+            } else if msg.op == "raw"
+                intop.term.SetRawMode(msg.arg)                              // enable/disable raw mode
+            else if msg.op == "keystroke"
+                intop.term.PutKey(msg.arg)                                  // simulate a keystroke
+        } else if msg.id == "error"
+            intop.execClosed(Error("instance error", msg.data))
+        else if msg.id == "terminated"
+            close()
+    }
+
+    // formatTyped
+    //
+    // Format typed text with distinctive style.
+    //
+    intop.formatTyped = function formatTyped(text, local str) {
+        str = text.replace(nlregex, "\r\n")
+        intop.term.Write("\x1b[90m\x1b[3m${str}\x1b[0m\n")
+    }
+
+    // impUnknown
+    //
+    // Received an unknown destination notice from the other side.
+    //
+    intop.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if !gateway
+            debuglog("InTop.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // impReceive
+    //
+    // Received a message from our InBot.
+    //
+    intop.impReceive = function impReceive(msg, sourceID) {
+        if msg.id == "workerDestID" {
+            intop.workerDestID = msg.workerDestID
+            return
+        } 
+        if msg.id != "targetout" {
+            if msg.id == "status" {
+                intop.lastStatus = milliseconds()
+                intop.execSetStatus(msg.status)
+            }
+            if intop.msgQueue {
+                if msg.id != "status"
+                    intop.msgQueue.push(msg)
+                return
+            }
+        }
+        intop.doMessage(msg)
+    }
+
+    // replInterrupt
+    //
+    // User interrupt from the keyboard.
+    //
+    intop.replInterrupt = function replInterrupt() {
+        intop.sender(intop.botDestID, {                                     // send interrupt to worker
+            id: "interrupt"
+        })
+    }
+
+    // replReturn
+    //
+    // Return key hit.
+    //
+    intop.replReturn = function replReturn(local text) {
+        text = intop.term.TakeText()
+        echotyped(text)
+        intop.sender(intop.botDestID, {                                     // send user-entered text to worker
+            id: "keyline",
+            text: text
+        })
+    }
+
+    // replRaw
+    //
+    // Raw character received.
+    //
+    intop.replRaw = function(str, origin) {
+        ioctl_event("raw-key", {                                            // send raw keystroke to worker
+            key: str
+            origin: origin
+        })
+    }
+
+    // replResize
+    //
+    // The terminal was resized.
+    //
+    intop.replResize = function(columns, rows) {
+        ioctl_event("term-resize", {                                        // send resize advice to worker
+            cols: columns
+            rows: rows
+        })
+    }
+
+    // echotyped
+    //
+    // Echo text to other terminals.
+    //
+    function echotyped(text) {
+        intop.sender(intop.botDestID, {
+            id: "typed"
+            text: text
+        })
+    }
+
+    // intop.KeyText
+    //
+    //     Send text to the worker, with optional echo to terminal.
+    //
+    intop.KeyText = function KeyText(text, echo) {
+        if echo {
+            text = text.trim()
+            echotyped(text)
+            intop.term.WriteLn(text)
+        }
+        intop.sender(intop.botDestID, {                                     // send text to worker
+            id: "keyline"
+            text: text
+        })
+    }
+
+    //
+    // ioctl_event
+    //
+    //     A terminal-initiated event.
+    //
+    intop.ioctl_event = function ioctl_event(msg, arg) {
+        intop.sender(intop.botDestID, {                                     // send ioctl event to worker
+            id: "ioctl-event",
+            msg: msg
+            arg: arg
+        })
+    }
+
+    // DebugCmd
+    //
+    //     Post a debug command to the worker.
+    //
+    intop.DebugCmd = function DebugCmd(data) {
+        intop.sender(intop.botDestID, {                                     // send data to worker
+            id: "debugin"
+            data: data
+        })
+    }
+
+    // PostMessage
+    //
+    // Post a message to the worker. This uses workerDestID if available, or the bottom itself
+    // otherwise. The former scenario covers use of NodeWorker where we want to send the packet all
+    // the way to the final destination. The second scenario covers the case that the bottom is
+    // communicating with the env_xxx.js code directly.
+    //
+    intop.PostMessage = function PostMessage(data, local destID) {
+        destID = intop.workerDestID || intop.botDestID
+        intop.sender(destID, {                                              // send data to worker
+            id: "targetin",
+            data: data
+        })
+        list(false, { posted: true })
+    }
+
+    // debugWrite
+    //
+    //     Write a debug message to the terminal.
+    //
+    intop.debugWrite = function(text, level) {
+        text = text.replaceAll("\n", "\r\n")
+        if (level >= 5)
+            intop.term.WriteLn(text, intop.term.Cyan)                       // cyan for builtin logging
+        else if (level >= 4)
+            intop.term.WriteLn(text, intop.term.Blue)                       // blue for Naan function logging
+        else if (level >= 3)
+            intop.term.WriteLn(text, intop.term.Red)                        // light red for warnings
+        else if (level >= 2)
+            intop.term.WriteLn(text, intop.term.Green)                      // green for Naan.debug.debuglog logging
+        else
+            intop.term.WriteLn(text, intop.term.Red+intop.term.Bold)        // heavy red for errors
+    }
+
+    // termAttach
+    //
+    //     A terminal was attached.
+    //
+    intop.termAttach = function termAttach(repl, db, notify, local msg) {
+        if !intop.msgQueue
+            return (list(Error("already attached")))
+        intop.sender(intop.botDestID, {
+            id: "attached",
+            guid: intop.instanceID
+        })
+        intop.term = repl
+        intop.debugger = db
+        intop.notify = notify
+        if intop.termSaved {
+            intop.term.StateLoad(intop.termSaved)
+            intop.termSaved = false }
+        else
+            intop.term.Reset()
+        intop.debugger.attach(intop)
+        intop.term.SetNotify(intop)
+        while intop.msgQueue.length > 0 {                                  // replay saved and new messages
+            for msg in intop.msgQueue.splice(0)
+                intop.doMessage(msg)
+        }
+        intop.msgQueue = false
+        intop.term.Focus()
+        intop
+    }
+
+    // termDetach
+    //
+    //     The terminal is being detached.
+    //
+    intop.termDetach = function termDetach() {
+        if intop.msgQueue
+            return (list(Error("already detached")))
+        intop.term.SetNotify()
+        intop.msgQueue = []
+        intop.debugger.detach(intop)
+        intop.termSaved = intop.term.StateSave()
+        intop.notify = false
+        intop.debugger = false
+        intop.term = false
+        intop.sender(intop.botDestID, {
+            id: "detached",
+            guid: intop.instanceID
+        })
+    }
+
+    // close
+    //
+    //     Close our access to the worker.
+    //
+    intop.close = function close() {
+        if !intop.instanceID
+            return
+        intop.sender(intop.botDestID, {
+            id: "unsubscribe"
+        })
+        intop.execClosed(Error("instance closed"))
+        track.delete(intop)
+        termDetach()
+        App.imp.unregister(intop.instanceID)
+        intop.instanceID = false
+    }
+
+    // destroy
+    //
+    //     Destroy the worker.
+    //
+    intop.destroy = function destroy() {
+        if intop.destroyed
+            return
+        intop.destroyed = true
+        intop.sender(intop.botDestID, {
+            id: "destroy",
+            guid: intop.instanceID
+        })
+        close()
+    }
+
+    // open
+    //
+    //     Open into the specified InBot destID, returning a result tuple.
+    //
+    intop.open = closure open(inbotID) {
+        if intop.destroyed
+            return (list(Error("InTop already destroyed")))
+        if intop.instanceID {
+            if inbotID != intop.botDestID
+                return (list(Error("InTop already open")))
+        } else
+            intop.instanceID = UUID()
+        intop.botDestID = inbotID
+        intop.sender = App.imp.register(intop, {
+            name: options.name
+            type: options.type
+            instanceID: intop.instanceID
+            services: [ "naan-executor" ]
+        })
+        `(error) = intop.sender(intop.botDestID, {
+            id: "subscribe"
+        })
+        if error
+            return(list(error))
+        track.add(intop)
+        list(false, { ok: true })
+    }
+
+    // finis
+
+    intop
+};
+
+
+/*
+ * instInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function instInit(local manifest) {
+    manifest = `(InTop, InBot, instInit)
+
+    Naan.module.build(module.id, "instances", function(modobj, compobj) {
+        require("./executors.nlg")
+        require("./running.nlg")
+        compobj.manifest = manifest
+        modobj.exports.InTop = InTop
+    })
+} ();

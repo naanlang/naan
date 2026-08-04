@@ -6,9 +6,14 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2024 by Richard C. Zulch
+ * Copyright (c) 2017-2026 by Richard C. Zulch
  *
  */
+
+
+// Globals
+
+serviceMod;;
 
 
 /*
@@ -25,18 +30,21 @@
  *      basePort:       <number>                // starting point for search
  *      gateway:        <string>                // websocket gateway URL
  *      statics:        [<string>, ...]         // search paths for static content
+ *      debug:          <boolean>               // verbose logging
  *  }
  *
  */
 
 closure APIServer(options, local server, chroot) {
-    global(App, JSpath, js, bodyParser, express, psmServerMod, workerMod)
+    global(App, serviceMod, JSpath, js, bodyParser, express, psmServerMod, workerMod)
     apisLoadLibs()
     server = new(object, this)
+    server.imp = App.imp
     server.app = express()
     server.guid = options.guid
     server.notifyq = []
     server.responseq = []
+    server.instanceID = UUID()
     options = merge({
         relpath: ""
         name: "NaanServer"
@@ -94,6 +102,7 @@ closure APIServer(options, local server, chroot) {
             return (result)
         }
         updatePort(port)
+
         if server.guid
             server.oururl = server.oururl.concat("?guid=", server.guid)
         App.api = server                                                    // used remotely by client/relaycon.nlg
@@ -107,6 +116,7 @@ closure APIServer(options, local server, chroot) {
             }
         } else                                                              // default is native websocket protocols
             server.ws = WebSocketServer(server)
+
         WesRelay(server)                                                    // registers as subsystem
         server.psm = psmServerMod.MakeServerPSM(server, options.name)
         `(error, hostfs) = server.psm.conns.NodeFS.connect("Host", "NideFS", list(""))
@@ -116,7 +126,9 @@ closure APIServer(options, local server, chroot) {
             return (list(error))
         }
         server.hostfs = hostfs
-        server.workco = workerMod.WorkerController(server)
+        server.workco = workerMod.WorkerController()
+        server.Register(server.workco.serverID, server.workco)
+
         list(false, port)
     }
 
@@ -431,15 +443,8 @@ closure WebSocketConn(wsgate, connID, local wsconn) {
     wsconn.msgin = closure msgin(message, local error) {
         if wsgate.guid && message.guid != wsgate.guid
             error = Error("unauthorized")
-        else if message.init {
-            if message.init.destID {
-                wsconn.relay = true
-                wsgate.subsystems.Relay.wsChangeDestID(conn, wsconn.info.destID, message.init.destID)
-            }
+        else if message.init
             wsconn.info = merge(wsconn.info, message.init)
-        }
-        else if message.respOp && wsgate.subsystems.Relay
-            wsgate.subsystems.Relay.wsReceive(message, wsconn)          // with respOp, must be a relay
         else if message.clientID && wsgate.subsystems[message.serverID]
             wsgate.subsystems[message.serverID].wsReceive(message, wsconn)
         else
@@ -510,11 +515,11 @@ closure WebSocketServer(server, local websocks) {
             websocks.subsystems[serverID].wsOpen(conn)                      // notify of our openings
     })
 
-    server.wss.on("error", function(error) {
+    websocks.wss.on("error", function(error) {
         ErrorDebuglog(Error("WebSocketServer: connection error", error))
     })
 
-    server.wss.on("close", function() {
+    websocks.wss.on("close", function() {
         debuglog("WebSocketServer has closed")
         websocks.closed = true                                              // note that we are closed
     })
@@ -557,37 +562,31 @@ closure WesCon(server, websocks, socket, request, local wescon) {
         destID: UUID()
         address: new(socket._socket.address())
     }
+    
+    wescon.impconn = server.imp.responder(function(data) {
+        if wescon.closed
+            return
+        socket.send(JSONstringify(data)),
+        list(false, { sent: true })
+    }, {
+        secret: server.guid
+        label: "api-client"
+    })
 
     // on message
     //
     // Incoming data.
     //
-    socket.on("message", closure onmessage(text, local message, error) {
-        try {
-            message = new(js.g.JSON.parse(text))
-            if server.guid && message.guid != server.guid
-                error = Error("unauthorized")
-            else if message.init {
-                if message.init.destID {
-                    wescon.relay = true
-                    websocks.subsystems.Relay.wsChangeDestID(wescon, wescon.info.destID, message.init.destID)
-                }
-                wescon.info = merge(wescon.info, message.init)
-            }
-            else if message.respOp && websocks.subsystems.Relay
-                websocks.subsystems.Relay.wsReceive(message, wescon)        // with respOp, must be a relay
-            else if message.clientID && websocks.subsystems[message.serverID]
-                websocks.subsystems[message.serverID].wsReceive(message, wescon)
-            else
-                error = Error("can't route message")
-        } catch {
-            if true
-                error = Error("can't decode message JSON", exception)
+    socket.on("message", closure(text, local error, message) {
+        `(error, message) = JsonParse(text)
+        if !error {
+            message = new(message)
+            if wescon.impconn.dispatch(message)
+                return
         }
-        if error
-            socket.send(JSONstringify([error]))
+        debuglog("socket message:", text)
     })
-        
+
     // on error
     //
     // Error has occurred on this connection.
@@ -607,219 +606,12 @@ closure WesCon(server, websocks, socket, request, local wescon) {
             code: code
             reason: reason
         }
+        wescon.impconn.destroy()
         websocks.closeConn(wescon)
     })
-    
-    // send
-    //
-    // Send a dictionary, which must have a clientID defined.
-    //
-    wescon.send = function send(message) {
-        if !message.clientID || !message.serverID
-            throw("Wescon.send: client and server IDs required")
-        if wescon.closed
-            list(Error("Socket connection closed", wescon.closed))
-        socket.send(JSONstringify(message)),
-        [false, {ok: true}]
-    }
 
     // finis
     wescon
-};
-
-
-/*
- * WesRelay
- *
- *     Web socket relay controller. This allows apiserver clients to discover each other and connect
- * for remote evaluation, etc. A source connection makes a request of a destination connection, and
- * the response is routed back to the original connection.
- *
- * This uses the following message fields for the requesting source:
- *     guid:            security token
- *     clientID:        defined by the source, this string defines where replies should be sent
- *     serverID:        "Relay"
- *     destID:          the destination connection
- *     endServerID:     the serverID to use at the destination
- * The message is modified with a virtual clientID to send to the destination, and then changed back
- * for return to the requester.
- *
- * To discover the available destination connections a source should use:
- *     clientID:        requester
- *     serverID:        "Relay"
- *     relayOp:         "getdests"
- * which returns:
- *     relayOp:         "destlist"
- *     destinations: [
- *          destID:     guid for the connection
- *          address:    socket port / family / ip address
- *          name:       <string>
- *          workerID:   id of destination worker
- *     ]
- * New and closed destinations are sent asynchronously to each source:
- *     relayOp:         "opened" / "closed"
- *     info: {
- *          destID:     guid for the connection
- *          address:    socket port / family / ip address
- *          name:       <string>
- *          workerID:   id of destination worker
- *      }
- *
- */
-
-closure WesRelay(server, local welay) {
-    global()
-    welay = new(object, this)
-    welay.serverID = "Relay"                                                // our serverID as a subsystem
-    welay.destIDs = { }                                                     // destination conns index
-    welay.virtualIDs = { }                                                  // virtual clientID index
-    welay.links = new(weakmap)                                              // source and dest connections
-    server.Register(welay.serverID, welay)
-    
-    // getVirtualID
-    // Return the virtual clientID for a requesting source/clientID and destination.
-    function getVirtualID(sconn, clientID, dconn, local sdict, ddict, vid) {
-        sdict = welay.links[sconn]
-        if !sdict
-            welay.links[sconn] = sdict = {
-                virtualIDs: { }
-            }
-        ddict = welay.links[dconn]
-        if !ddict
-            welay.links[dconn] = ddict = {
-                virtualIDs: { }
-            }
-        vid = ddict.virtualIDs[clientID]
-        if !vid {
-            sdict.virtualIDs[clientID] = vid = UUID()
-            welay.virtualIDs[vid] = {
-                sconn: sconn
-                dconn: dconn
-                clientID: clientID
-            }
-        }
-        vid
-    }
-
-    // addConnection
-    // Record a new connection as a possible destination.
-    function addConnection(conn) {
-        welay.destIDs[conn.info.destID] = conn
-    }
-
-    // removeConnection
-    // Cleanup for a closed connection, be it source or destination or both.
-    function removeConnection(conn, local vid, cdict, did, dconn) {
-        welay.links[conn] = undefined
-        for `(vid, cdict) in welay.virtualIDs
-            if cdict.sconn === conn || cdict.dconn === conn
-                welay.virtualIDs[vid] = undefined
-        for `(did, dconn) in welay.destIDs
-            if dconn === conn
-                welay.destIDs[did] = undefined
-    }
-    
-    // destList
-    // Make an array of destination connections, excluding the specified one.
-    //
-    welay.destList = function destList(conn, local output, did, dconn) {
-        output = []
-        for `(did, dconn) in welay.destIDs
-            if dconn !== conn && dconn.relay
-                output.push(dconn.info)
-        output
-    }
-
-    // wsReceive
-    //
-    //     Process a message from the websocket API.
-    //
-    welay.wsReceive = function wsReceive(message, sconn, local dconn, error, cdict) {
-        if message.relayOp == "getdests" {                                  // get destination list
-            message.relayOp = "destlist"
-            message.destinations = destList(sconn)
-            sconn.send(message)
-            return
-        }
-        else if message.destID && message.endServerID {                     // request from a source 
-            dconn = welay.destIDs[message.destID]
-            if !dconn
-                error = Error("destID or endServerID invalid", message.relayOp)
-            else {
-                message.serverID = message.endServerID
-                message.clientID = getVirtualID(sconn, message.clientID, dconn)
-                message.endServerID = undefined
-                message.destID = undefined
-                dconn.send(message)
-                return
-            }
-        }
-        else {                                                              // response from a destination
-            cdict = welay.virtualIDs[message.clientID]
-            dconn = cdict.sconn                                             // this is original source
-            if !cdict || !dconn
-                error = Error("cannot route reply", message.relayOp)
-            else {
-                message.endServerID = message.serverID
-                message.serverID = welay.serverID
-                message.clientID = cdict.clientID
-                message.destID = dconn.info.destID
-                dconn.send(message)
-                return
-            }
-        }
-        sconn.send({
-            serverID: message.serverID
-            clientID: message.clientID
-            respOp: "error"
-            payload: [error]
-        })
-    }
-
-    // wsOpen
-    //
-    //     Note that a new connection was opened.
-    //
-    welay.wsOpen = function wsOpen(conn) {
-        addConnection(conn)
-    }
-
-    // wsClose
-    //
-    //     Note that an existing connection was closed.
-    //
-    welay.wsClose = function wsClose(conn, local destID, sconn) {
-        removeConnection(conn)
-        if conn.relay
-            for `(destID, sconn) in welay.destIDs
-                sconn.send({
-                    serverID: welay.serverID
-                    clientID: "*"
-                    relayOp: "closed"
-                    info: conn.info
-                })
-    }
-
-    // wsChangeDestID
-    //
-    //     The destID has changed (via the client init message.)
-    //
-    welay.wsChangeDestID = function wsChangeDestID(conn, prevID, newID, local destID, sconn) {
-        welay.destIDs[prevID] = undefined
-        welay.destIDs[newID] = conn
-        conn.info.destID = newID
-        for `(destID, sconn) in welay.destIDs
-            if destID != newID
-                sconn.send({
-                    serverID: welay.serverID
-                    clientID: "*"
-                    relayOp: "opened"
-                    info: conn.info
-                })
-    }
-
-    // finis
-    welay
 };
 
 
@@ -840,7 +632,7 @@ function apisLoadLibs() {
 };
 
 function ApisInit(local manifest) {
-    manifest = `(APIServer, WebSocketGatewayServer, WebSocketConn, WebSocketServer, WesCon, WesRelay,
+    manifest = `(APIServer, WebSocketGatewayServer, WebSocketConn, WebSocketServer, WesCon,
         apisLoadLibs, ApisInit)
 
     Naan.module.build(module.id, "apiserver", function(modobj, compobj) {
@@ -851,4 +643,5 @@ function ApisInit(local manifest) {
     require("./filesystem.nlg")
     psmServerMod = require("./psm_server.nlg")
     workerMod = require("./worker.nlg")
+    serviceMod = require("naanlib:frameworks/service/imp.nlg")
 }();

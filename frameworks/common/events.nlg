@@ -1,0 +1,101 @@
+/*
+ * events.nlg
+ * naanlib/frameworks/common/events
+ *
+ *     A simple notification system replicating JS events.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Events
+ *
+ * Events objects provide a common protocol for adding/removing event listeners and sending events
+ * to them. Events are dispatched via a future, so they are asynchronous to the caller but invoked
+ * serially. Initialize this on an object to define the methods directly on it. 
+ *
+ */
+
+closure Events(target, local events, eventsdb) {
+    global()
+    if target
+        events = target
+    else
+        events = new(object, this)
+
+    // dispatch
+    //
+    // Dispatch the specified event, which will be sent to all listeners.
+    //
+    events.dispatchEvent = function dispatch args {
+        closure Event(type, args, local event) {
+            event = new(object, this)
+            event.type = type
+            event.target = target || undefined
+            event.timeStamp = milliseconds()
+            future(function(local listener) {
+                for listener in eventsdb[type]
+                    apply(listener.code, cons(event, args))
+            },0)
+        } (pop(args), args)
+    }
+
+    // addEventListener
+    //
+    // Add the specified function to the call list for events of the type.
+    //
+    events.addEventListener = function addEventListener(type, code, option) {
+        if !eventsdb[type]
+            eventsdb[type] = []
+        else if eventsdb[type].find(function(listener) { listener.code === code })
+            return                                                          // no duplicates
+        eventsdb[type].push({
+            code: code
+            option: option
+        })
+    }
+
+    // removeEventListener
+    //
+    // Remove the specified function from the call list for events of the type.
+    //
+    events.removeEventListener = function removeEventListener(type, code) {
+        eventsdb[type] = eventsdb[type].filter(function(listener) {
+            listener.code !== code
+        })
+    }
+    
+    // reset
+    //
+    // Reset the events list, which is done at construction time.
+    //
+    events.reset = function reset() {
+        eventsdb = {}
+    } ()
+
+    // finis
+    events
+};
+
+
+/*
+ * eventsInit
+ *
+ *     Initialize the component.
+ *
+ */
+
+function eventsInit(local manifest) {
+    manifest = `(Events, eventsInit)
+
+    Naan.module.build(module.id, "events", function(modobj, compobj) {
+        require("./common.nlg")
+        compobj.manifest = manifest
+        module.exports.Events = Events
+        updateExports()
+    })
+} ();

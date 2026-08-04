@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2024 by Richard C. Zulch
+ * Copyright (c) 2021-2026 by Richard C. Zulch
  *
  */
 
@@ -33,7 +33,6 @@ closure DebugNub(local nub, debug, paused) {
     nub.codemgr = CodeManager()
     nub.exenable = true
     nub.watches = []
-    nub.contIDs = new(weakmap)
     nub.stacks = { }
     nub.usage = { }
 
@@ -405,8 +404,17 @@ closure DebugNub(local nub, debug, paused) {
     // Get the location of a procdef.
     
     nub.procLoc = function procLoc(procdef, task, local comp, position) {
-        if !task
+        if !task {
+            if nub.procLocs[procdef]
+                return                                                      // use the cached value
             task = rrrest(procdef)
+            if task {
+                if !nub.procLocs
+                    nub.procLocs = new(weakmap)                             // make sure we have a weakmap
+                nub.procLocs[procdef] = procLoc(procdef, task)              // cache a new location
+                return
+            }
+        }
         comp = nub.codemgr.procComponent(procdef)
         position = comp.textpos(procdef, task)
         {
@@ -424,8 +432,11 @@ closure DebugNub(local nub, debug, paused) {
     
     nub.getContID = function getContID(cont, local contID, frames) {
         contID = nub.contIDs[cont]
-        if !contID
+        if !contID {
+            if !nub.contIDs
+                nub.contIDs = new(weakmap)                                  // make sure we have a weakmap
             nub.contIDs[cont] = contID = UUID()
+        }
         frames = cont.stacktrace().toarray
         if frames.slice(-1).0 == `interrupt
             frames.pop()
@@ -580,6 +591,8 @@ closure DebugNub(local nub, debug, paused) {
             frames = new(nub.stacks[contID])
         else
             frames = new(debug.frames)
+        if !array(frames)
+            return (false)                                                  // invalid frames array
         loop {
             if frames.length == 0
                 break

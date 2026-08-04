@@ -7,7 +7,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2025 by Richard C. Zulch
+ * Copyright (c) 2021-2026 by Richard C. Zulch
  *
  */
 
@@ -40,6 +40,10 @@ var cmd_text = ""
     + `App.naanpath = '${ naanpath.replace(/\\/g, "\\\\") }';;\n`           // path/to/our naan library
     + `App.rootpath = '${ rootpath.replace(/\\/g, "\\\\") }';;\n`           // path/to/our package.json
     + "Naan.module.defineLoc('naanlib', App.naanpath);;\n"                  // defines "naanlib:" prefix for require
+    + "App.imp = require('naanlib:frameworks/service/imp.nlg').Imp({\n"     // create an initial IMP, even if not useful
+    + "    name: 'NaaN'\n"
+    + "    type: 'cli-tool'\n"
+    + "});;\n"
     + "nodeparse('lib/node_repl_init.nlg');;\n"                             // REPL utility functions
     + "App.shell = require('naanlib:frameworks/node/shell.nlg').ShellConnect({ cwd: js.d });;\n";
 
@@ -69,11 +73,11 @@ process.argv.every((val, index) => {
         return (true);
     }
     if (val == "--version") {
-        console.log("1.5.0");
+        console.log("1.6.0");
         process.exit(0);
     }
     if (val == "--buildno") {
-        console.log("1.5.0+1");
+        console.log("1.6.0+1");
         process.exit(0);
     }
     if (val.substring(0,1) == "-") {

@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023-2024 by Richard C. Zulch
+ * Copyright (c) 2023-2026 by Richard C. Zulch
  *
  */
 
@@ -13,7 +13,7 @@
 /*
  * WebSocket
  *
- * Create a WebSocket client connection object using the existing HTTPS connection.
+ * Create a WebSocket client connection object.
  *
  * Required:
  *      host:       <string>                    // host:port

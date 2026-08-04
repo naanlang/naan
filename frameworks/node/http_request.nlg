@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2024-2025 by Richard C. Zulch
+ * Copyright (c) 2024-2026 by Richard C. Zulch
  *
  */
 
@@ -19,8 +19,9 @@
  *  {
  *      method:         <string>                // HTTP method (defaults to GET)
  *      headers:        <dictionary>            // key/data pairs
- *      putdata:        <data>                  // data to put
+ *      putdata:        <data>                  // data to put, either string or JSON
  *      json:           <boolean>               // ignore content-type of return and decode JSON
+ *      debug:          <boolean>               // log errors and status results
  *  }
  *
  * The return is a result tuple comprising:
@@ -34,13 +35,31 @@
  */
 
 closure HttpRequest(url, options,
-    local pending, chunks, params, request) {
+    local host, pending, chunks, params, request, headers, putdata) {
     global(js, nodeHttp)
+    try {
+        host = xnew(js.g.URL, url).host
+        if host.length < 3
+            return (Error("httpRequest: host empty"))
+    } catch {
+        return (Error("httpRequest:", exception))
+    }
     pending = new(nonce)
     chunks = []
+    headers = new(options.headers || [])                                    // modifiable copy or false
+    headers.push(list("Host", host))
+    putdata = options.putdata
+    if putdata {
+        if !string(putdata) {
+            putdata = JSONstringify(putdata)
+            headers.push(list('Content-Type', 'application/json'))
+        }
+        // set explicit content-length to avoid default chunked encoding
+        headers.push(list('Content-Length', putdata.length))
+    }
     params = {
         method: options.method || undefined
-        headers: options.headers || undefined
+        headers: headers || undefined
     }
     request = nodeHttp.request(url, params, closure (response) {
         response.on("data", function (chunk) {
@@ -49,7 +68,12 @@ closure HttpRequest(url, options,
         response.on("end", function (local content, error) {
             content = js.g.Buffer.concat(chunks)
             if response.statusCode < 200 || response.statusCode >= 299 {    // 299 is "cancelled"
-                debuglog("httpRequest status:", url, response.statusCode, "message:", content)
+                if options.debug {
+                    debuglog("httpRequest status:", url, response.statusCode, "message:", response.statusMessage)
+                    if string(putdata)
+                        putdata = putdata.substr(0,250)
+                    debuglog("httpRequest putdata:", putdata)
+                }
                 pending.signal(list(Error("httpRequest statusCode:", url, response.statusCode, {
                     status: response.statusCode
                 }), false, { status: response.statusCode }))
@@ -63,23 +87,20 @@ closure HttpRequest(url, options,
             else
                 error = Error("httpRequest terminated prematurely:", url, response.statusCode)
             pending.signal(list(error, content, {
-                headers: response.headers
+                headers: new(response.headers)
                 status: response.statusCode
                 contentType: response.headers["content-type"]
             }))
         })
     })
     request.on("error", function hre(error) {
-        debuglog("httpRequest error:", url, "error:", error)
+        if options.debug
+            debuglog("httpRequest error:", url, "error:", error)
         error = Error("httpRequest failed:", url, error)
         pending.signal(list(error))
     })
-    if options.putdata {
-        if string(options.putdata)
-            request.write(options.putdata)
-        else
-            request.write(JSONstringify(options.putdata))
-    }
+    if putdata
+        request.write(putdata)
     request.end()
     pending.wait()
 };

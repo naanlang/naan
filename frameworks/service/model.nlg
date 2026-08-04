@@ -1,0 +1,71 @@
+/*
+ * model.nlg
+ * Naanlib/frameworks/service
+ *
+ * Naan service model.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2023-2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * ServiceModel
+ *
+ * Model object for services, such as instance management. This is used to conceal architectural
+ * details from service users.
+ *
+ */
+
+closure ServiceModel(local model) {
+    global()
+    model = new(object, this)
+    model@\.class = new(object)
+
+    // add
+    //
+    // Add a location to our model with the specified name.
+    //
+    model@\.class.add = function add(name, local node) {
+        if !string(name) || name.trim() == ""
+            throw("ServiceModel.add: invalid name")
+        node = new(object)
+        node.id = name
+        node.parent = self
+        node@\.parent = self
+        self[name] = node
+        node
+    }
+    
+    // children
+    //
+    // List the ids of the children of the specified location, which is false for the root.
+    //
+    model@\.class.children = function children(parent) {
+        self.*.toarray.filter(function(id) { !id.startsWith(".") })
+    }
+
+    // finis
+
+    model
+};
+
+
+/*
+ * modelInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function modelInit(local manifest) {
+    manifest = `(ServiceModel, modelInit)
+
+    Naan.module.build(module.id, "model", function(modobj, compobj) {
+        require("./service.nlg")
+        compobj.manifest = manifest
+        modobj.exports.ServiceModel = ServiceModel
+    })
+} ();

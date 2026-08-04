@@ -1,0 +1,106 @@
+/*
+ * nubweb.nlg
+ * Naanlib/frameworks/service
+ *
+ * Nub for web worker access to IMP.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * WebWorkerNub
+ *
+ * WebWorkerNub provides an IMP interface that runs on web workers. This allows the worker to
+ * communicate with the IMP network and the main thread. The worker IMP must be created before this.
+ *
+ */
+
+closure WebWorkerNub(imp, options, local wonub) {
+    global(App,js)
+    if App.workerNub
+        return (App.workerNub)                                              // singleton
+
+    options = merge({
+        name: "WebWorkerNub"
+        type: "web-worker-nub"
+    }, options)
+    wonub = new(object, this)
+    wonub.instanceID = imp.us.instanceID || UUID()
+    wonub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher()
+
+    // impReceive
+    //
+    // Receive a remote request and reply to it.
+    //
+    wonub.impReceive = function impReceive(message, sourceID) {
+        if message.id == "targetin"
+            wonub.dispatcher(message.data, function(reply) {
+                wonub.sender(sourceID, {
+                    id: "targetout",
+                    data: reply
+                })
+            })
+    }
+            
+    // impUnknown
+    //
+    // Received an unknown destination notice from the other side.
+    //
+    wonub.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if !gateway
+            debuglog("WebWorkerNub.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // message event
+    //
+    // Incoming data.
+    //
+    js.w.addEventListener("message", function message(e, local msg) {
+        msg = new(e.data)
+        if msg.scope == "naan-imp-web"
+            wonub.impconn.dispatch(msg.data)
+    })
+
+    // register our connects *after* the receivers are configured above
+
+    wonub.sender = imp.register(wonub, {
+        name: options.name
+        type: options.type
+        meta: options.meta || undefined
+        instanceID: wonub.instanceID
+        services: [ "naan-web-worker" ]
+    })
+    wonub.impconn = imp.requester(function(data) {
+        js.w.postMessage({                                                  // send to main
+            scope: "naan-imp-web",
+            data: data
+        })
+        list(false, { sent: true })
+    })
+
+    // finis
+    
+    App.workerNub = wonub
+};
+
+
+/*
+ * nubweInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function nubweInit(local manifest) {
+    manifest = `(WebWorkerNub, nubweInit)
+
+    Naan.module.build(module.id, "nubweb", function(modobj, compobj) {
+        require("./service.nlg")
+        compobj.manifest = manifest
+        modobj.exports.WebWorkerNub = WebWorkerNub
+    })
+} ();

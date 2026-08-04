@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2023 by Richard C. Zulch
+ * Copyright (c) 2020-2026 by Richard C. Zulch
  *
  */
 
@@ -427,22 +427,22 @@ closure TrackServiceWorkers(track, pubID, pubVersion, callback, local error) {
     `(error, serviceWorker) = ScopedServiceWorker(pubID, pubVersion, callback)
     if error
         ErrorDebugLog("TrackServiceWorkers: cannot load service worker", error)
-    track.register(TrackedScope, "V-Site")
+    track.register("V-Site", TrackedScope)
     serviceWorker
 };
 
 
 /*
- * workInit
+ * worksInit
  *
  *     Initialize the debugger page.
  *
  */
 
-function workInit(local manifest) {
+function worksInit(local manifest) {
 
     manifest = `(ServiceWorker, ScopedServiceWorker, findTrackedScope, TrackedScope,
-        TrackServiceWorkers, workInit)
+        TrackServiceWorkers, worksInit)
 
     Naan.module.build(module.id, "workers", function(modobj, compobj) {
         require("./browser.nlg")

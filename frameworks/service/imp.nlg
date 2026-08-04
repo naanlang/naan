@@ -1,0 +1,736 @@
+/*
+ * imp.nlg
+ * Naanlib/frameworks/service/imp
+ *
+ * Instance Message Processor (IMP)
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Imp
+ *
+ * The IMP network processes messages amongst instances, ensuring that any two instances can
+ * communicate with each other through intermediaries if not directly. Each IMP has a unique UUID
+ * that identifies it to the rest of the network.
+ *
+ * us:
+ *  {
+ *      name:           <string>                // name string for our instance
+ *      type:           <string>                // type string for our instance
+ *      instanceID:     <string>                // our UUID, which should be persistent
+ *      meta:           <dictionary>            // data about our IMP, e.g. IP address or host name
+ *  }
+ *
+ */
+
+closure Imp(us, local imp) {
+    global()
+    imp = new(object, this)
+    imp.us = us = merge({                                                   // start with rando defaults
+        name: "imp-generic"
+        type: "imp-type"
+    }, us)
+    if !us.instanceID
+        us.instanceID = UUID()
+    imp.direct = { }                                                        // direct-connected destinations
+    imp.pipes = { }                                                         // piped connections to destinations
+    imp.gateways = { }                                                      // routing gateways for next hop
+    imp.discovering = []                                                    // nonces for current discoveries
+    imp.unknowns = { }                                                      // unknown ID notices we have sent
+
+    // send_hello
+    // Send an hello request to the other side.
+    function send_hello(destID, local dest, message) {
+        dest = imp.pipes[destID]
+        message = {
+            id:     "imp-hello"
+            from:   us.instanceID
+            secret: dest.secret
+            name:   us.name
+            type:   us.type
+            meta:   us.meta || undefined
+        }
+        if !dest.idsymbol
+            message.to = destID                                             // must match
+        dest.sendconn(message)
+        dest.state = `hello
+    }
+
+    // validate_destination
+    // Check the handshake destination, returning true iff unique
+    function validate_destination(fakeID, realID, local dest) {
+        if fakeID == realID
+            return (true)
+        dest = imp.pipes[realID]
+        if dest && dest.state != `closed
+            return (false)
+        dest = imp.pipes[fakeID]
+        if !dest.idsymbol
+            return (false)
+        assign(dest.idsymbol, realID)
+        dest.idsymbol = undefined
+        dest.destID = realID
+        imp.pipes[realID] = dest
+        imp.pipes[fakeID] = undefined
+        return (true)
+    }
+
+    // disp_hello
+    // Dispatch an hello request from destID.
+    function disp_hello(message, destID, local dest, reject) {
+        if imp.direct[message.from] {                                       // wasteful, I think
+            debuglog("Imp.disp_hello: ignoring hello from direct:", message.from)
+            return
+        }
+        if message.to && message.to != us.instanceID {                      // required uuid mismatch
+            debuglog("Imp.disp_hello: ignoring hello from ${message.from} to ${message.to}, we are ${us.instanceID}")
+            return
+        }
+        if message.secret != imp.pipes[destID].secret {                     // invalid hello secret
+            debuglog("Imp.disp_hello: ${message.from}: incoming secret ${message.secret} doesn't match our secret")
+            return
+        }
+        dest = imp.pipes[message.from]
+        if destID != message.from {                                         // educate pipe on his real destID
+            dest = imp.pipes[destID]
+            if !dest || !dest.idsymbol {
+                debuglog("Imp.disp_hello: hello ${message.from} sequencing error")
+                return
+            }
+            if validate_destination(destID, message.from) {
+                destID = message.from
+                if imp.gateways[destID] {
+                    debuglog("Imp.disp_hello: pipe ${destID} promoted from indirect ${imp.gateways[destID]}")
+                    imp.gateways[destID] = undefined
+                }
+            } else
+                reject = "duplicate"
+        }
+        dest.name = message.name
+        dest.type = message.type
+        dest.meta = message.meta || undefined
+        dest.sendconn({
+            id:         "imp-active"
+            from:       us.instanceID
+            to:         message.from
+            name:       us.name
+            type:       us.type
+            meta:       us.meta
+            defaultID:  dest.info.defaultID || undefined
+            reject:     reject || undefined
+        })
+        dest.state = `active                                                // responder now active
+        dest.handshake.signal(list(false, destID))
+    }
+
+    // disp_active
+    // Dispatch an active response from the other side.
+    function disp_active(message, destID, local dest) {
+        if message.to != us.instanceID
+            return                                                          // somehow not for us
+        dest = imp.pipes[destID]
+        if dest.state != `hello {
+            debuglog("Imp.disp_active: wrong sequence for state", dest.state)
+            return
+        }
+        if message.reject {                                                 // we were rejected
+            debuglog("Imp.disp_active: duplicate requesterID", message.to, "(${message.name} / ${message.type})")
+            dest.handshake.signal(list(Error("duplicate requesterID", message.to)))
+            return
+        }
+        if !validate_destination(destID, message.from) {                    // we are rejecting them
+            debuglog("Imp.disp_active: duplicate responderID", message.from, "(${message.name} / ${message.type})")
+            dest.handshake.signal(list(Error("duplicate responderID", message.from)))
+            return
+        }
+        destID = message.from
+        dest.name = message.name
+        dest.type = message.type
+        dest.meta = message.meta || undefined
+        dest.defaultID = message.defaultID
+        dest.state = `active                                                // both sides now active
+        if message.defaultID
+            imp.gateways[message.defaultID] = destID                        // how to get there
+        dest.handshake.signal(list(false, destID))
+    }
+
+    // send_direct
+    //
+    // Send a message to a registered direct-connect destination.
+    //
+    function send_direct(dest, sourceID, destID, message) {
+        if message.pay
+            dest.obj.impReceive(message.pay, sourceID)                      // payload received
+        else if message.unknownID
+            dest.obj.impUnknown(message.unknownID, sourceID, message.gateway)   // unknown destID reported
+        else if message.found
+            disc_done(message)                                              // complete waiting discovery requests
+        else
+            { }                                                             // empty message; just a ping
+    }
+    
+    // send_unknown
+    //
+    // Send a message notifying about an unknown destID. This is done only once per id/sender.
+    //
+    function send_unknown(sourceID, unknownID, message, local key) {
+        key = "${sourceID}+${unknownID}"
+        if imp.unknowns[key]
+            return
+        imp.unknowns[key] = 1
+        if !message.unknownID {                                             // if not already sending unknown...
+            message = new(message)
+            message.pay = undefined
+            message.unknownID = unknownID
+            if send_message(us.instanceID, sourceID, message).0
+                debuglog("Imp.send_unknown: silent unknown destID", unknownID)  // log instead of silence
+        }
+    }
+
+    // send_message
+    //
+    // Send a message from any sourceID to any destID, returning a result tuple. If the destination
+    // is unknown then the message is returned to the sender with no payload and `unknownID defined, 
+    // and the sender is the IMP node that first noticed the destID was undefined.
+    //
+    closure send_message(sourceID, destID, message, local dest, hopID) {
+        if sourceID == destID || !sourceID || !destID || !message {
+            debuglog("Imp.send_message: invalid parameters", sourceID, destID, message)
+            return (list(Error("invalid send parameters")))                 // invalid
+        }
+        dest = imp.direct[destID]
+        if dest {                                                           // send to direct connect
+            if imp.direct[sourceID] || us.instanceID == sourceID {          // direct -> direct
+                message = JSONparse(JSONstringify(message))                 // pretend normal comm link
+                future(function() { send_direct(dest, sourceID, destID, message) }, 0)
+            } else
+                send_direct(dest, sourceID, destID, message)                // incoming from pipe
+            return (list(false, { ok: true }))
+        } else if message.to == us.instanceID {
+            disc_done(message)                                              // complete waiting discovery requests
+            return (list(false, { ok: true }))
+        }
+        hopID = destID
+        while !(dest = imp.pipes[hopID])
+            if !(hopID = imp.gateways[hopID])                               // gateway knowledge is relative
+                break                                                       // chain is incomplete
+        if !dest {
+            if imp.gateways[destID] {                                       // previously routed
+                message.gateway = imp.gateways[destID]
+                imp.gateways[destID] = undefined
+            }
+            send_unknown(sourceID, destID, message)
+            return (list(Error("unknown destination", destID)))
+        }
+        dest.sendconn(merge(message, {                                      // send it out pipe link
+            id:         "imp-xfer"
+            from:       sourceID
+            to:         destID
+        }))
+        return (list(false, { ok: true }))
+    }
+
+    // disp_xfer
+    // Dispatch on xfer packet received from the other side.
+    function disp_xfer(message, peerID, local peer) {
+        peer = imp.pipes[peerID]
+        if peer.state != `active
+            return                                                          // not active
+        check_gateway(message.from, peerID)                                 // update our gateway knowledge
+        if message.discover {
+            if message.to == us.instanceID || imp.direct[message.to] {      // we are handling this
+                if message.to == us.instanceID
+                    message.found = disc_dests(message.discover)            // querying this IMP
+                else
+                    message.found = []                                      // querying a leaf
+                message.to = message.from
+                message.from = us.instanceID
+                message.discover = undefined                                // remove from response
+            }
+        } else if message.found                                             // filter and forward results
+            message.found = disc_redirect(message.found)
+        else if message.unknownID
+            imp.gateways[message.unknownID] = undefined                     // cleanup for obsolete connection
+        send_message(message.from, message.to, message)
+    }
+
+    // dispatch
+    //
+    // Handle an incoming message over pipe, returning true iff it is our message.
+    //
+    function dispatch(message, destID, local proc) {
+        if !message
+            return (false)
+        if !imp.pipes[destID] {
+            debuglog("Imp.dispatch: ${destID} invalid")
+            return (false)                                                  // not open
+        }
+        proc = {
+            "imp-hello":    disp_hello
+            "imp-active":   disp_active
+            "imp-xfer":     disp_xfer
+        }[message.id]
+        if proc {
+            call(proc, message, destID)
+            true
+        }
+    }
+
+    // check_gateway
+    // Update our gateway with new information.
+    function check_gateway(fromID, peerID, local hopID) {
+        if fromID == peerID
+            return
+        hopID = imp.gateways[fromID]
+        if !hopID || hopID != peerID {
+            if hopID != peerID && false                                     // ### logging disabled
+                debuglog("Imp.check_gateway: fromID ${fromID} hopID ${hopID} now ${peerID}")
+            imp.gateways[fromID] = peerID                                   // our gateway to fromID is peerID
+        }
+    }
+
+    // disc_dests
+    // Return an array of our discovery destinations.
+    function disc_dests(local output, uuid, dest) {
+        output = []
+        for `(uuid, dest) in imp.direct
+            output.push({
+                destID:     uuid
+                name:       dest.name
+                type:       dest.type
+                meta:       dest.meta || undefined
+                services:   dest.info.services
+                direct:     us.instanceID                                   // direct IMP owner
+            })
+        for `(uuid, dest) in imp.pipes
+            output.push({
+                destID:     uuid
+                name:       dest.name
+                type:       dest.type
+                meta:       dest.meta || undefined
+                services:   dest.info.services
+                pipe:       us.instanceID
+            })
+        output
+    }
+
+    // disc_redirect
+    // Update an array of destination descriptors to prefer ours
+    function disc_redirect(found, local output, item) {
+        output = []
+        for item in found {
+            if item.direct                                                  // don't change direct
+                { }
+            else if imp.direct[item.destID]
+                || imp.pipes[item.destID] && !item.direct && !imp.gateways[item.destID]
+                item.route = us.instanceID                                  // we are better route
+            output.push(item)
+            check_gateway(item.destID, item.route || item.direct || item.pipe)  // ensure we can route to each one
+        }
+        output
+    }
+    
+    // disc_done
+    // Complete any nonces for a discovery that has finished (response or unknown)
+    function disc_done(message, local waiter) {
+        for waiter in imp.discovering {
+            if waiter.destID == message.from
+                waiter.signal(list(false, message.found))
+            else if waiter.destID == message.unknownID
+                waiter.signal(list(Error("unknown destination:", waiter.destID)))
+            else
+                continue
+            waiter.complete = true
+        }
+        imp.discovering = imp.discovering.filter(function(waiter) {
+            !waiter.complete
+        })
+    }
+
+    // pipe_start
+    //
+    // Start a connection for either requester or responder.
+    //
+    // A pipe connection has begun. The IMP will use the specified sender, and the returned
+    // dispatcher should be called for incoming messages. The dispatcher returns true if the message
+    // is recognized as an IMP message, or false otherwise. Call the dispatcher with message false
+    // (no arguments) to destroy and forget the connection.
+    //
+    // We may not know the destID of the far end until we complete the hello/active handshake. There
+    // can also be multiple handshakes proceeding in parallel, in the case of a server responder.
+    // This makes a temporary destID and then replaces it after the real destID becomes known.
+    //
+    closure pipe_start(conn_sender, info, initiator, local destID, dest, service) {
+
+        // dispatcher - dispatch a message
+        function dispatcher(message) {
+            dispatch(message, destID)
+        }
+
+        // sender - send a message, resturning result tuple
+        function sender(message, senderID, local result) {
+            if !imp.pipes[destID]
+                return (list(Error("connection destroyed")))                // cannot open
+            if !senderID
+                senderID = us.instanceID
+            result = wait()                                                 // wait for handshake to complete
+            if result.0
+                return (result)
+            send_message(senderID, destID, {
+                pay: message
+            })
+        }
+
+        // wait - wait for handshake and return destID in result tuple
+        function wait() {
+            dest.handshake.wait()
+        }
+
+        // open - the underlying connection has opened/reopened
+        function open() {
+            dest.handshake.reset()
+            dest.state = `connected
+            future(function() {
+                wait()
+                info.destID = destID
+                info.defaultID = dest.defaultID || undefined
+                info.name = dest.name
+                info.type = dest.type
+                info.meta = dest.meta
+                imp.dispatchEvent("active", info)
+            }, 0)
+            if initiator
+                send_hello(destID)                                          // start the handshake
+            imp.dispatchEvent("opening", info)
+        }
+
+        // close - the underlying connection has closed
+        function close() {
+            dest.handshake.signal(list(Error("connection closed")))
+            dest.state = `closed
+            if !initiator
+                dest.destID = undefined                                     // ### reset for non-persistent clients
+            imp.dispatchEvent("closed", info)
+        }
+
+        // destroy - close and forget the connection
+        function destroy() {
+            if dest.state != `closed
+                close()
+            imp.pipes[destID] = undefined
+            imp.dispatchEvent("destroyed", info)
+        }
+
+        if info
+            info = new(info)
+        else
+            info = { }
+        dest = {
+            conn: ImpConn(dispatcher, sender, wait, open, close, destroy)
+            handshake: new(nonce)
+            sendconn: conn_sender
+            state: `closed
+            secret: info.secret || undefined
+            info: info
+        }
+        dest.info.secret = undefined                                        // no need to spread it around
+        if initiator
+            service = "imp-pipe-req"
+        else
+            service = "imp-pipe-res"
+        if array(dest.info.services)
+            dest.info.services.unshift(service)
+        else
+            dest.info.services = [ service ]
+        destID = info.destID
+        if !destID {
+            destID = UUID()                                                 // temporary destID to be updated
+            dest.idsymbol = quote(destID)
+        }
+        imp.pipes[destID] = dest
+        if !info.delayOpen
+            open()                                                          // open immediately
+        
+        dest.conn
+    }
+
+    // requester
+    //
+    // Start a requester connection and initiate the handshake. The IMP will use the specified
+    // sender, and returns an ImpConn object. The destID can be omitted to update the actual value
+    // from the far end. Specifying destID makes it a requirement, so the connection request will
+    // be ignored if wrong. This will use an existing connection to the same destination if known.
+    //
+    // info:
+    //  {
+    //      secret:     <string>                // must match responder
+    //     [destID:     <string>]               // if specified, must match responder
+    //      delayOpen:  <boolean>               // true to start closed; open() required later
+    //  }
+    //
+    imp.requester = function requester(sender, info, local dest) {
+        if info.destID && (dest = imp.pipes[info.destID])
+            return (dest.conn)
+        imp.dispatchEvent("requester", info)
+        pipe_start(sender, info, true)
+    }
+
+    // responder
+    //
+    // Start a responder connection and wait for the handshake. The IMP will use the specified
+    // sender and returns an ImpConn object. When a responder for the same destination already exists
+    // then this new responder becomes the default, with a new connection object. Here be dragons.
+    //
+    // info:
+    //  {
+    //      secret:     <string>                // must match responder
+    //     [defaultID:  <string>]               // optional default direct object provided to requester
+    //      delayOpen:  <boolean>               // true to start closed; open() required later
+    //  }
+    //
+    imp.responder = function responder(sender, info) {
+        imp.dispatchEvent("responder", info)
+        pipe_start(sender, info)
+    }
+
+    // register
+    //
+    // Register a directly-connected destination. The destobj may have two methods invoked:
+    //      obj.impReceive(payload, sourceID)                               // received payload from sourceID
+    //      obj.impUnknown(unknownID, sourceID)                             // recipient unknownID failed by sourceID
+    // The return value is a custom sender function for sending a payload to a destination:
+    //      sender(destID, payload)                                         // send payload to destID
+    //
+    // info:
+    //  {
+    //      instanceID: <string>                // direct object ID
+    //      name:       <string>
+    //      type:       <string>
+    //      meta:       <dictionary>
+    //      services:   [<string>, ... ]        // services provided by this destination
+    //  }
+    //
+    imp.register = function register(destobj, info, local instanceID) {
+        if !string(info.name, info.type)
+            debuglog("Imp.register: info.name and info.type must be strings")
+        if info.meta && !dictionary(info.meta)
+            debuglog("Imp.register: info.meta must be a dictionary if specified")
+        instanceID = info.instanceID
+        if !string(instanceID) || imp.direct[instanceID] {
+            instanceID = UUID()
+            debuglog("Imp.register: instanceID ${info.instanceID} invalid or in use - replaced with ${instanceID}")
+        }
+        imp.direct[info.instanceID] = {
+            destID: info.instanceID
+            name: info.name
+            type: info.type
+            meta: info.meta || undefined
+            obj: destobj
+            info: info
+        }
+        imp.dispatchEvent("registered", info, destobj)
+        closure (sourceID) {                                                // return a custom sender function
+            function sender(destID, payload) {
+                if !payload
+                    payload = undefined                                     // just a ping
+                send_message(sourceID, destID, {
+                    pay: payload
+                })
+            }
+        } (info.instanceID)
+    }
+
+    // unregister
+    //
+    // Unregister a directly-connected destination.
+    //
+    imp.unregister = function unregister(uuid, local dest) {
+        dest = imp.direct[uuid]
+        if !dest {
+            debuglog("Imp.unregister: ${uuid} does not exist")
+            return
+        }
+        imp.dispatchEvent("unregistered", dest.info, dest.obj)
+        imp.direct[uuid] = undefined
+    }
+
+    // registered
+    //
+    // Return the registered direct object for a uuid, or false.
+    //
+    imp.registered = function registered(uuid) {
+        imp.direct[uuid]
+    }
+
+    // discover
+    //
+    // Discover the available destinations at a certain point. The result is an array of destination
+    // descriptors:
+    //
+    //  [{
+    //      destID:     uuid
+    //      name:       dest.name
+    //      type:       dest.type
+    //      meta:       dest.meta
+    //      direct:     ownerID                 // direct IMP owner, or
+    //      pipe:     destID                    // pipe IMP, but not both
+    //  }...]
+    //
+    imp.discover = closure discover(destID, local error, pending, timeout, result) {
+        if !destID || destID == us.instanceID
+            return (list(false, disc_dests(1)))                             // report this IMP itself
+        if imp.direct[destID]
+            return (list(false, []))                                        // direct objects don't report
+        `(error) = send_message(us.instanceID, destID, {
+            discover: 1
+        })
+        if error
+            return (list(error))
+        pending = imp.discovering.find(function(waiter) { waiter.destID == destID })
+        if !pending {                                                       // need new discovery for destID
+            pending = new(nonce)
+            pending.destID = destID
+            imp.discovering.push(pending)
+            timeout = future(function() {
+                imp.discovering = imp.discovering.filter(function(waiter) {
+                    waiter.destID !== pending.destID
+                })
+                pending.signal(list(Error("discovery timeout:", destID)))
+            }, 5000)
+        }
+        result = pending.wait()
+        timeout.cancel()
+        result
+    }
+    
+    // inform
+    //
+    // Inform the destination that the source is available via the current IMP. This explicit path
+    // routing is needed when you want the destination to be able to send to the source. For example,
+    // you might follow this by enclosing the sourceID in a payload sent to the destination. The
+    // sourceID must be known to this IMP. The result is an error tuple.
+    //
+    imp.inform = closure inform(sourceID, destID) {
+        if !imp.direct[sourceID] && !imp.pipes[sourceID] && !imp.gateways[sourceID]
+            return (list(Error("unknown sourceID:", sourceID)))
+        send_message(sourceID, destID, { })                                 // just a ping
+    }
+
+    // check_us
+    // Report anything wrong with our identity.
+    function check_str(field) {
+        if !string(us[field]) || us[field].length == 0
+            debuglog("Imp: invalid us.${field}:", us[field])
+    }
+
+    check_us(`name)
+    check_us(`type)
+    check_us(`instanceID)
+    Events(imp)
+
+    // finis
+
+    imp
+};
+
+
+/*
+ * ImpConn
+ *
+ * Imp connection objects.
+ *
+ */
+
+closure ImpConn(dispatcher, sender, wait, open, close, destroy,
+    local impco) {
+    global()
+    impco = new(object, this)
+
+    impco.dispatch = dispatcher.proc
+    impco.send = sender.proc
+    impco.wait = wait.proc
+    impco.open = open.proc
+    impco.close = close.proc
+    impco.destroy = destroy.proc
+
+    // finis
+
+    impco
+};
+
+
+/*
+ * DebugImp
+ *
+ * Make a debugging IMP that optionally logs activity. Set imp.debug on and off as you wish.
+ *
+ */
+
+closure DebugImp(us, local imp) {
+    imp = Imp(us)
+    // imp.debug = true
+
+    if imp.debug {
+        debuglog("new Imp: ${imp.us.instanceID} (${imp.us.name} :${imp.us.type})")
+        if imp.us.meta
+            debuglog("    meta:", Dialect.print(new(imp.us.meta)))
+    }
+    imp.addEventListener("active", function(event, info) {
+        if imp.debug {
+            debuglog("Imp: active connection with ${info.destID} (${info.name} :${info.type})")
+            if info.defaultID
+                debuglog("    redirected to ${info.defaultID}")
+            if info.meta
+                debuglog("    meta:", Dialect.print(new(info.meta)))
+        }
+    })
+    imp.addEventListener("opening", function(event, info) {
+        if imp.debug
+            debuglog("Imp: opening ${info.destID || "unknown"}")
+    })
+    imp.addEventListener("closed", function(event, info) {
+        if imp.debug
+            debuglog("Imp: closed ${info.destID} (${info.name} :${info.type})")
+    })
+    imp.addEventListener("destroyed", function(event, info) {
+        if imp.debug
+            debuglog("Imp: destroyed ${info.destID} (${info.name} :${info.type})")
+    })
+    imp.addEventListener("registered", function(event, info) {
+        if imp.debug
+            debuglog("Imp: registered ${info.instanceID} (${info.name} :${info.type})")
+    })
+    imp.addEventListener("unregistered", function(event, info) {
+        if imp.debug
+            debuglog("Imp: unregistered ${info.instanceID} (${info.name} :${info.type})")
+    })
+
+    // finis
+
+    imp
+};
+
+
+/*
+ * impInit
+ *
+ * Initialize the IMP component.
+ *
+ */
+
+function impInit(local manifest) {
+    manifest = `(Imp, ImpConn, DebugImp, impInit)
+
+    Naan.module.build(module.id, "imp", function(modobj, compobj) {
+        require("./service.nlg")
+        require("../common/events.nlg")
+        compobj.manifest = manifest
+        module.exports.Imp = Imp
+        module.exports.DebugImp = DebugImp
+    })
+} ();

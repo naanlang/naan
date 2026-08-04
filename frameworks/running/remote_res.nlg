@@ -1,0 +1,89 @@
+/*
+ * remote_res.nlg
+ * Naanlib/frameworks/running
+ *
+ * Responder for providing remote services.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * RemoteResponder
+ *
+ * Make a generic IMP remoting target with optional destID.
+ *
+ * Options:
+ *  {
+ *      name:       <string>                    // name of this responder
+ *      type:       <string>                    // type of this responder
+ *  }
+ *
+ */
+
+closure RemoteResponder(destID, options, local remo, name)
+{
+    global(App)
+    options = merge({
+        name: "Remote Nub"
+        type: "Remote Responder"
+    }, options)
+    remo = ExecutorBase(App.nide.track, "remote-responder", name)
+    remo.dispatcher = TaskDispatcher()
+    remo.instanceID = destID || UUID()
+    remo.sender = App.imp.register(remo, {
+        name: options.name
+        type: options.type
+        instanceID: remo.instanceID
+        services: [ "naan-remote-responder" ]
+    })
+
+    // impUnknown
+    //
+    // Received an unknown destination notice from the other side.
+    //
+    remo.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if !gateway
+            debuglog("RemoteResponder.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // impReceive
+    //
+    // Received a payload from the other side.
+    //
+    remo.impReceive = closure impReceive(message, sourceID) {
+        remo.dispatcher(message.data, function(reply) {
+            remo.sender(sourceID, {
+                id: "targetout",
+                data: reply
+            })
+        })
+    }
+
+    // finis
+
+    remo
+};
+
+
+/*
+ * remresInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function remresInit(local manifest) {
+    manifest = `(RemoteResponder, remresInit)
+
+    Naan.module.build(module.id, "remote_res", function(modobj, compobj) {
+        require("./executors.nlg")
+        require("./taskexec.nlg")
+        require("../service/imp.nlg")
+        compobj.manifest = manifest
+        modobj.exports.RemoteResponder = RemoteResponder
+    })
+} ();

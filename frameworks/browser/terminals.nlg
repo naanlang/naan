@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2025 by Richard C. Zulch
+ * Copyright (c) 2019-2026 by Richard C. Zulch
  *
  */
 
@@ -19,6 +19,69 @@ gWorkers;
 
 
 /*
+ * ioctl terminal control and events
+ *
+ * Example "raw" mode:
+ *
+    // rawTest
+    // echo typed keystrokes in BOLD until Control-C stops it.
+    //
+    closure rawTest(local dokey) {
+        dokey = xnew(function(msg, arg) {
+            if arg.key == "\x03" {
+                js.t.ioctl("raw", false)
+                js.t.ioctl_remove_listener("raw-key", dokey)
+            }
+            else
+                print("\x1b[1m${arg.key}\x1b[22m")
+        })
+        js.t.ioctl_add_listener("raw-key", dokey)
+        js.t.ioctl("raw", true)
+    };
+    
+    rawTest();
+ *
+ *
+ * Example echo control:
+ *
+    js.t.ioctl("echo", 0)                       // no echo at all
+    js.t.ioctl("echo", 1)                       // echo newlines (best for hiding REPL commands)
+    js.t.ioctl("echo", 2)                       // normal echo
+
+    js.t.ioctl("sane")                          // restore echo and raw
+ *
+ *
+ * Example simulated keystrokes:
+ *
+    future(function(){ js.t.ioctl("keystroke", "joe") }, 10);               // "joe" in keyboard buffer
+ *
+ *
+ * Example terminal resize notification:
+ *
+    doresize = xnew(function(msg, dim) { printline("(${dim.cols}, ${dim.rows})")})
+    js.t.ioctl_add_listener("term-resize", doresize);
+ *
+ *
+ * Example terminal connection notification:
+ *
+    // add removable listener:
+    listener = xnew(function(msg,arg) { debuglog("listener:", msg, arg) });
+    js.t.ioctl_add_listener("term-attach", listener);
+    js.t.ioctl_add_listener("term-detach", listener);
+
+    // remove the listeners:
+    js.t.ioctl_remove_listener("term-attach", listener);
+    js.t.ioctl_remove_listener("term-detach", listener);
+ *
+ * Note that js.t.ioctl(...) controls the *terminal* even if attached to a different instance. But
+ * ioctl event listeners are attached to an *instance* regardless of what terminal is connected.
+ * But in general it does the "right thing" for multiple terminals on a single instance, and when
+ * switching among instances.
+ *
+ */
+
+
+/*
  * TermHost
  *
  *     Make an Nide API Server debugger target.
@@ -27,387 +90,95 @@ gWorkers;
  *  {
  *      type: <string>                          // target category, e.g. "Host", "api.yyy.com"
  *      workerID: <string>                      // kind of worker in server subsystem
- *      dispatcher: <tuple>                     // dispatcher function for incoming messages
  *      startup: <dictionary>                   // startup options
- *      clientID: <string>                      // (rare) our identification on client
- *      serverID: <string>                      // (rare) server subsystem for us
  *  }
  *
  */
 
-closure TermHost(track, api, name, options, local target, nlregex, xtarg)
+closure TermHost(track, name, options,
+    local relay, error, destID, target, xc)
 {
-    global(window)
+    global(App)
+
+    // findHostInstance
+    //
+    // Find the host instance name/type, or create new remote worker. The default for no name/type is
+    // the server itself.
+    //
+    function findHostInstance(relay, name, type, local error, found, dest, worker) {
+        `(error, found) = relay.clients()
+        if !error {
+            dest = found.find(function(item) { item.name == "NaanIDE Server" && item.type == "Server IMP" })
+            if !dest
+                error = Error("cannot locate host")
+        }
+        if !error
+            `(error, found) = relay.clients(dest.destID)
+        if !error {
+            if name && type {
+                dest = found.find(function(item) { item.name == name && item.type == type })
+                if dest
+                    return (list(false, dest.destID))                       // found worker
+            }
+            if !name || !type {                                             // find main instance
+                dest = found.find(function(item) { item.name == "NaanIDE Server" && item.type == "NaaN Server" })
+                if !dest
+                    return (list(Error("cannot locate NaanIDE Server")))
+                else
+                    return (list(false, dest.destID))
+            }
+            dest = found.find(function(item) { item.name == "NaanIDE Server" && item.type == "Node Remote" })
+            if !dest
+                return (list(Error("cannot locate NaanIDE Server Remote")))
+            `(error, xc) = relay.context(dest.destID)
+            if !error {
+                `(error) = xc.evalq(chns("node"))
+                if error
+                    return (list(Error("cannot switch namespace", error)))
+            }
+            if !error
+                closure (options) {
+                    `(error, worker) = xc.evalq(NobBot(options), `(options))
+                }({
+                    name: name
+                    type: options.type
+                    startup: options.startup
+                    topOriginID: App.imp.us.instanceID
+                })
+            if error
+                error = Error("cannot spawn remote instance", error)
+            else
+                return (list(false, worker.instanceID))
+        }
+        list(error)
+    }
+
     options = merge({
         type: "Host"
-        workerID: "myDebugWorker"
-        clientID: "DebugWorkers"
-        serverID: "Workers"
     }, options)
-    target = require("../running/executors.nlg").ExecutorBase(track, options.type, name)
-    nlregex = RegExp("\\n", "g")
+
+    target = findIDEtarget(track, name, options.workerID)
+    if target
+        return (list(false, target))                                        // already exists
+
+    relay = require("naanlib:frameworks/client/relaycon.nlg").RelayCon(App.imp)
+    if options.workerID == "NideServer"                                     // server main thread
+        `(error, destID) = findHostInstance(relay)
+    else
+        `(error, destID) = findHostInstance(relay, name, options.type)
+    relay.close()
+    if error
+        return (list(error))
+
+    target = require("../running/instances.nlg").InTop(track, {
+        name: name
+        type: options.type
+    })
     target.workerID = options.workerID
-    target.msgQueue = []
-    target.dispatcher = call(options.dispatcher)
 
-    // findWorker
-    //
-    function findWorker(testID, local instance) {
-        for instance in track.instances {
-            if instance.executor.hostWorkerMatch(api, testID)
-                return (instance.executor)
-        }
-        false
-    }
-
-    // connect
-    // Connect with the host if not already connected.
-    closure connect(local url, pending) {
-        if target.ws
-            return(list(false, { connected: true }))
-        try {
-            url = xnew(window.URL, api.url)
-        } catch {
-            return(list(Error("invalid URL ${api.url}", exception)))
-        }
-        if url.protocol == "https:"
-            url.protocol = "wss:"
-        else
-            url.protocol = "ws:"
-        target.ws = xnew(window.WebSocket, url.href)
-        pending = new(nonce)
-
-        // onopen
-        // The WebSocket connection is now open.
-        target.ws.onopen = function onopen(e, local info, spawner) {
-            info = {
-                name: name
-                workerID: target.workerID
-            }
-            if options.dispatcher
-                info.destID = api.instanceID                                // valid destination for relay
-            target.ws.send(window.JSON.stringify({
-                guid: api.guid
-                init: info
-            }))
-            spawner = new(options.startup) || { }
-            spawner.name = name
-            sendControl("spawn", spawner)
-            pending.signal(list(false, { ok: true }))
-        }
-
-        // onmessage
-        // A message was received from the worker via WebSockets.
-        target.ws.onmessage = function onmessage(e, message, local msg) {
-            try {
-                message = new(window.JSON.parse(e.data))
-            } catch {
-                if true {
-                    debuglog("can't decode incoming ws message:", exception)
-                    return }
-            }
-            if message.respOp == "msgout" {
-                msg = message.payload
-                if msg.id == "spawned" || msg.id == "workerlist" || msg.id == "termination"
-                    return (hostWorkerUpdate(msg))
-                if msg.id != "targetout" {
-                    if msg.id == "status" {
-                        target.lastStatus = milliseconds()
-                        target.execSetStatus(msg.status)
-                    }
-                    if target.msgQueue {
-                        if msg.id != "status"
-                            target.msgQueue.push(msg)
-                        return  } }
-                target.doMessage(msg) }
-            else if message.respOp == "error"
-                debuglog("worker controller error:", ErrorString(message.payload[0]))
-            else if message.respOp == "linked"
-                future(function termLinked(){
-                    if !target.written
-                        target.term.WriteLn("(reconnected)")
-                }, 1000).run()
-            else if message.workerOp == "msgin" && message.payload.id == "targetin"
-                dispatcher(message)                                         // request from Host
-            else if message.respOp || message.id
-                debuglog("unknown host response message:", message.respOp || message.id)
-        }
-
-        // dispatcher
-        // Respond to a host request while preserving context to permit reply routing
-        closure dispatcher(message) {
-            target.dispatcher(message.payload.data, function(reply) {
-                target.ws.send(window.JSON.stringify({
-                    guid: api.guid
-                    clientID: message.clientID
-                    serverID: message.serverID
-                    workerID: message.workerID
-                    respOp: "msgout"
-                    payload: {
-                        id: "targetout",
-                        data: reply
-                    }
-                }))
-            })
-        }
-
-        // onerror
-        // An error occurred on the WebSocket connection.
-        // This can happen in normal operation when the connection times out.
-        target.ws.onerror = function onerror(e) {
-            pending.signal(list(Error("websocket failed", e)))
-        }
-        
-        // onclose
-        // The WebSocket connection was closed.
-        target.ws.onclose = function onclose(e) {
-            if e.code != 1000 && e.code != 1001 && e.code != 1005 && e.code != 1006
-                debuglog("ws close:", e.code, e.reason)
-            target.execClosed(Error("socket closed", e.code, e.reason))
-            target.ws = false
-        }
-        
-        pending.wait()
-    }
-    
-    //
-    // hostWorkerUpdate
-    //
-    //     New workers created/discovered on this host.
-    //
-    function hostWorkerUpdate(msg, local localID, worker) {
-        if msg.id == "spawned" {
-            if !findWorker(msg.workerID)
-                TermHost(track, api, msg.name, { type: options.type, workerID: msg.workerID })
-        }
-        else if msg.id == "termination"
-            track.delete(findWorker(msg.workerID))
-        else if msg.id == "workerlist" {
-            for `(localID, worker) in msg.workers
-                if !findWorker(localID)
-                    TermHost(track, api, worker.name, { type: options.type, workerID: localID })
-        }
-    }
-        
-    //
-    // hostWorkerMatch
-    //
-    //     True iff the specified information matches us.
-    //
-    target.hostWorkerMatch = function hostWorkerMatch(testApi, testID) {
-        testApi === api && testID == target.workerID
-    }
-
-    //
-    // doMessage
-    //
-    //     Process the specified undecoded message.
-    target.doMessage = function doMessage(msg) {
-        if msg.id == "textout" {
-            target.written = true
-            target.term.Write(msg.text.replace(nlregex, "\r\n")) }
-        else if msg.id == "debugtext" {
-            target.written = true
-            target.debugWrite(msg.text, msg.level) }
-        else if msg.id == "targetout"
-            target.execReceived(msg.data)
-        else if msg.id == "started"
-            { }
-        else if msg.id == "typed"
-            target.term.Write(msg.text.replace(nlregex, "\r\n"))
-        else if msg.id == "status"
-            target.statusCB(target, msg.status)
-        else if msg.id == "debugout"
-            target.debugger.debugData(target, msg.data)
-        else
-            debuglog("unknown host worker message:", msg.id)
-    }
-    
-    //
-    // sendControl
-    //
-    //     Send a message to the worker controller.
-
-    target.sendControl = function sendControl(workerOp, payload) {
-        target.ws.send(window.JSON.stringify({
-            guid: api.guid
-            clientID: options.clientID
-            serverID: options.serverID
-            workerID: target.workerID
-            workerOp: workerOp
-            payload: payload
-        }))
-    }
-    
-    //
-    // send
-    //
-    //     Send a message to the worker.
-    
-    target.send = function send(msg) {
-        sendControl("msgin", msg)
-    }
-
-    //
-    // oninterrupt
-    //
-
-    function oninterrupt() {
-        send({                                                              // send interrupt to worker
-            id: "interrupt"
-        })
-    }
-
-    //
-    // onreturn
-    //
-
-    function onreturn(local text) {
-        text = target.term.TakeText()
-        echotext(text)
-        send({                                                              // send user-entered text to worker
-            id: "keyline",
-            text: text
-        })
-    }
-    
-    // echotext
-    //
-    //     Echo text to other terminals.
-    
-    function echotext(text) {
-        sendControl("echo", {                                               // send user-entered text to worker
-            id: "typed",
-            text: "\x1b[90m\x1b[3m".concat(text, "\x1b[0m\n")               // dark-grey, italic
-        })
-    }
-    
-    // target.KeyText
-    //
-    //     Send text to the worker, with optional echo to terminal.
-    
-    target.KeyText = function KeyText(text, echo) {
-        if echo {
-            target.term.WriteLn(text.trim())
-            echotext(text.trim())
-        }
-        send({                                                              // send user-entered text to worker
-            id: "keyline",
-            text: text
-        })
-    }
-
-    //
-    // target.PostMessage
-    //
-    //     Post a message to the target.
-    //
-
-    target.PostMessage = function PostMessage(data, local result) {
-        result = connect()
-        if result.0
-            return (result)
-        send({                                                              // send data to worker
-            id: "targetin",
-            data: data
-        })
-        list(false, { posted: true })
-    }
-    
-    //
-    // target.DebugCmd
-    //
-    //     Post a debug command to the target.
-    //
-
-    target.DebugCmd = function DebugCmd(data) {
-        connect()
-        send({                                                              // send debug command to worker
-            id: "debugin",
-            data: data
-        })
-    }
-
-    //
-    // target.debugWrite
-    //
-    //     Write a debug message to the repl.
-    //
-    
-    target.debugWrite = function(text, level) {
-        text = text.replaceAll("\n", "\r\n")
-        if (level >= 5)
-            target.term.WriteLn(text, target.term.Cyan)                     // cyan for builtin logging
-        else if (level >= 4)
-            target.term.WriteLn(text, target.term.Blue)                     // blue for Naan function logging
-        else if (level >= 3)
-            target.term.WriteLn(text, target.term.Red)                      // light red for warnings
-        else if (level >= 2)
-            target.term.WriteLn(text, target.term.Green)                    // green for Naan.debug.debuglog logging
-        else
-            target.term.WriteLn(text, target.term.Red+target.term.Bold)     // heavy red for errors
-    }
-
-    //
-    // termAttach
-    //
-    //     A terminal and/or debugger was attached to our instance.
-    
-    target.termAttach = function termAttach(repl, db, statusCB, local msg) {
-        target.term = repl
-        target.debugger = db
-        target.statusCB = statusCB
-        if target.termSaved {
-            target.term.StateLoad(target.termSaved)
-            target.termSaved = false }
-        else
-            target.term.Reset()
-        target.debugger.attach(target)
-        while target.msgQueue.length > 0 {
-            for msg in target.msgQueue.splice(0)                            // all current messages
-                target.doMessage(msg)
-        }
-        target.msgQueue = false
-        target.term.On("interrupt", oninterrupt.proc)
-        target.term.On("return", onreturn.proc)
-        target.term.Focus()
-        connect()                                                           // ensure we are connected
-        target
-    }
-        
-    //
-    // termDetach
-    //
-    //     The terminal is being deattached from our instance.
-    
-    target.termDetach = function termDetach(repl, db) {
-        target.term.On("interrupt")
-        target.term.On("return")
-        target.msgQueue = []
-        target.debugger.detach(target)
-        target.termSaved = target.term.StateSave()
-        target.term.Reset()
-        target.statusCB = false
-        target.debugger = false
-        target.term = false
-    }
-        
-    // destroy
-    //
-    //     Destroy the execution instance.
-    
-    target.destroy = function destroy() {
-        track.delete(target)
-        termDetach()
-        sendControl("terminate", { })
-        target.ws.close(1000)                                               // 1000: normal close
-    }
-
-    xtarg = findWorker(target.workerID)
-    if xtarg
-        return (list(false, xtarg))                                         // already exists
-    track.add(target)
-    connect()                                                               // connect right away to start receiving messages
+    `(error) = target.open(destID)
+    if error
+        return (list(Error("cannot create InTop", error)))
 
     // finis
 
@@ -424,14 +195,13 @@ closure TermHost(track, api, name, options, local target, nlregex, xtarg)
  *  {
  *      workerID: <string>                      // kind of worker in server subsystem
  *                                              // "NaanIDE" for local IDE
- *                                              // "NaanIDE-Debug" for browser debug target
  *      startup: <dictionary>                   // startup options
  *      type: <string>                          // (rare) target category, e.g. "Local"
  *  }
  *
  */
 
-closure TermLocal(track, name, options, local target, nlregex, listener)
+closure TermLocal(track, name, options, local target, worker, inbot, error)
 {
     global(js, window, gWorkers)
     if !dictionary(gWorkers)
@@ -442,322 +212,32 @@ closure TermLocal(track, name, options, local target, nlregex, listener)
     if options.workerID == "NaanIDE" {
         if !js.t
             return (list(Error("Cannot access Local IDE executor")))
-        termInstallVirtualWatcher(track, js.t)
+        termInstallVirtualWatcher(track, window)
         return (termIDE(track, name, options.workerID, js.t))               // connect to IDE execution instance itself
     }
-    target = require("../running/executors.nlg").ExecutorBase(track, options.type, name)
-    nlregex = RegExp("\\n", "g")
-    target.workerID = options.workerID
-    target.msgQueue = []
-    if options.workerID == "NaanIDE-Debug" {
-        target.worker = window.open(window.location.href, "_blank")
-        target.worker.addEventListener("beforeunload", function(e) {        // our target is closing
-            destroy()
-        })
-        window.addEventListener("beforeunload", function(e) {               // we are closing
-            // ### tell target we are closing (if needed)
-        })
-        listener = window
-        target.guid = 1
-    } else {
-        if not window.Worker
-            return (list(Error("Local environment does not support workers")))
-        target.worker = xnew(window.Worker, "env_webworker.js")
-        listener = target.worker
-        target.guid = UUID()
-    }
-    gWorkers[target.guid] = target
 
-    // onmessage
-    // A message was received from the worker.
-    
-    listener.addEventListener("message", function(e, msg) {
-        msg = new(e.data)
-        if msg.id == "termination" {
-            destroy()
-            return }
-        else if msg.id != "targetout" && msg.id != "loaded" {
-            if msg.id == "status" {
-                target.lastStatus = milliseconds()
-                target.execSetStatus(msg.status)
-            }
-            if target.msgQueue {
-                if msg.id != "status"
-                    target.msgQueue.push(msg)
-                return  } }
-        target.doMessage(msg)
+    target = findIDEtarget(track, name, options.workerID)
+    if target
+        return (list(false, target))                                        // already exists
+
+    worker = xnew(window.Worker, "env_webworker.js")
+    inbot = NubBot(worker, {
+        name: name
+        type: options.workerID
+        startup: options.startup
     })
-
-    // onerror
-    // The worker had an error.
-    
-    target.worker.addEventListener("error", function(e) {
-        debuglog("TermLocal worker error:", e.message)
-        target.execClosed(Error("instance error", e.message))
+    target = require("../running/instances.nlg").InTop(track, {
+        name: name
+        type: options.type
+        workerID: options.workerID
     })
-
-    //
-    // oninterrupt
-    //
-
-    function oninterrupt() {
-        target.worker.postMessage({                                         // send interrupt to worker
-            id: "interrupt"
-        })
-    }
-
-    //
-    // onreturn
-    //
-
-    function onreturn() {
-        target.worker.postMessage({                                         // send user-entered text to worker
-            id: "keyline",
-            text: target.term.TakeText()
-        })
-    }
-        
-    // target.KeyText
-    //
-    //     Send text to the worker, with optional echo to terminal.
-    
-    target.KeyText = function KeyText(text, echo) {
-        if echo
-            target.term.WriteLn(text.trim())
-        target.worker.postMessage({                                         // send text to worker
-            id: "keyline",
-            text: text
-        })
-    }
-
-    //
-    // doMessage
-    //
-    //     Process the specified undecoded message.
-
-    target.doMessage = function doMessage(msg) {
-        if msg.id == "textout"
-            target.term.Write(msg.text.replace(nlregex, "\r\n"))
-        else if msg.id == "debugtext"
-            target.debugWrite(msg.text, msg.level)
-        else if msg.id == "targetout"
-            target.execReceived(msg.data)
-        else if msg.id == "status"
-            target.statusCB(target, msg.status)
-        else if msg.id == "debugout"
-            target.debugger.debugData(target, msg.data)
-        else if msg.id == "download"
-            FileDownload(xnew(window.File, msg.bits, msg.name, msg.options))
-        else if msg.id == "loaded" {
-            if !target.started
-                target.worker.postMessage({
-                    id: "start",
-                    state: false                                            // resume state, if we have any
-                    altcmd: options.startup.initcmds
-                    workerID: target.workerID
-                    workerGUID: target.guid
-                })
-            target.started = true
-        } else if msg.id == "targetsend" {
-            msg.data._guid = target.guid
-            js.t.DispatchMessage(msg.data)
-        }
-    }
-    
-    //
-    // target.DebugCmd
-    //
-    //     Post a debug command to the target.
-    //
-
-    target.DebugCmd = function DebugCmd(data) {
-        target.worker.postMessage({                                         // send data to worker
-            id: "debugin"
-            data: data
-        })
-    }
-
-    //
-    // target.PostMessage
-    //
-    //     Post a message to the target, if it has registered a listener.
-    //
-
-    target.PostMessage = function PostMessage(data) {
-        target.worker.postMessage({                                         // send data to worker
-            id: "targetin",
-            data: data
-        })
-        list(false, { posted: true })
-    }
-    
-    //
-    // target.debugWrite
-    //
-    //     Write a debug message to the repl.
-    //
-    
-    target.debugWrite = function(text, level) {
-        text = text.replaceAll("\n", "\r\n")
-        if (level >= 5)
-            target.term.WriteLn(text, target.term.Cyan)                     // cyan for builtin logging
-        else if (level >= 4)
-            target.term.WriteLn(text, target.term.Blue)                     // blue for Naan function logging
-        else if (level >= 3)
-            target.term.WriteLn(text, target.term.Red)                      // light red for warnings
-        else if (level >= 2)
-            target.term.WriteLn(text, target.term.Green)                    // green for Naan.debug.debuglog logging
-        else
-            target.term.WriteLn(text, target.term.Red+target.term.Bold)     // heavy red for errors
-    }
-    
-    //
-    // termAttach
-    //
-    //     A terminal was attached to our instance.
-    
-    target.termAttach = function termAttach(repl, db, statusCB, local msg) {
-        target.term = repl
-        target.debugger = db
-        target.statusCB = statusCB
-        if target.termSaved {
-            target.term.StateLoad(target.termSaved)
-            target.termSaved = false }
-        else
-            target.term.Reset()
-        target.debugger.attach(target)
-        while target.msgQueue.length > 0 {
-            for msg in target.msgQueue.splice(0)                            // all current messages
-                target.doMessage(msg)
-        }
-        target.msgQueue = false
-        target.term.On("interrupt", oninterrupt.proc)
-        target.term.On("return", onreturn.proc)
-        target.term.Focus()
-        target
-    }
-        
-    //
-    // termDetach
-    //
-    //     The terminal is being deattached from our instance.
-    
-    target.termDetach = function termDetach() {
-        target.term.On("interrupt")
-        target.term.On("return")
-        target.msgQueue = []
-        target.debugger.detach(target)
-        target.termSaved = target.term.StateSave()
-        target.statusCB = false
-        target.debugger = false
-        target.term = false
-    }
-    
-    // destroy
-    //
-    //     Destroy the execution instance.
-    
-    target.destroy = function destroy() {
-        gWorkers[target.guid] = undefined
-        target.execClosed(Error("instance destroyed"))
-        track.delete(target)
-        termDetach()
-        target.worker.terminate()                                           // kill without saving
-        target.worker = false
-    }
-
-    track.add(target)
+    `(error) = target.open(inbot.instanceID)
+    if error
+        return (list(Error("cannot create InTop", error)))
 
     // finis
 
     list(false, target)
-};
-
-
-/*
- * WorkerConnect
- *
- *     Return the existing web worker for a workerGUID, or false if it does not exist.
- *
- */
-
-function WorkerConnect(workerGUID) {
-    gWorkers[workerGUID]
-};
-
-
-/*
- * termMainProxy
- *
- *     Make a browser proxy representing the main thread. This runs inside the worker and allows it
- * to do remote execution with Main.
- *
- */
-
-closure termMainProxy(track, name, options, local target) {
-    global(js)
-    target = require("../running/executors.nlg").ExecutorBase(track, "mainProxy", name)
-    target.name = name
-
-    //
-    // target.PostMessage
-    //
-    //     Post a message to the main thread.
-    //
-    target.PostMessage = function PostMessage(data) {
-        js.t.DispatchMessage(data)
-        list(false, { posted: true })
-    }
-
-    //
-    // onreceive
-    //
-    //     Process a received message from the main thread, typically in response.
-    //
-    function onreceive(data) {
-        target.execReceived(data)
-    }
-    
-    // destroy
-    //
-    //     Destroy the execution instance.
-    //
-    target.destroy = function destroy() {
-        target.execClosed(Error("instance destroyed"))
-        track.delete(target)
-    }
-
-    js.t.OnReceive(onreceive.proc)
-    track.add(target)
-
-    // finis
-
-    list(false, target)
-};
-
-
-/*
- * WorkerToMain
- *
- *     Connect our worker to the main thread, returning a result tuple with an executor representing
- * Main. Use this to create a context object for Main, allowing remote evaluation.
- *
- */
-
-closure WorkerToMain(local nideRunning, track) {
-    // mainProxy -- link tracker to main thread proxy
-    function mainProxy(track, name, options) {
-        termMainProxy(track, name, options)
-    }
-
-    if !js.s {
-        error = Error("WorkerToMain only available in browser workers")
-        return (list(error))
-    }
-    nideRunning = require("naanlib:frameworks/running/executors.nlg")
-    track = nideRunning.ExecutorTracker()
-    track.register(mainProxy, "proxy")
-    track.spawn("proxy")                                                    // returns result tuple
 };
 
 
@@ -806,6 +286,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     target.title = title
     target.workerID = workerID
     target.naancont = naancont
+    naancont.ioctl_open(ioctl_callback.proc)
     connected = []
     
     // replyHook
@@ -818,6 +299,20 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
                 id: "targetreceive"
                 data: data
             })
+    }
+
+    // ioctl_callback
+    //
+    //     Ioctl from our instance.
+    //
+    function ioctl_callback(op, arg) {                                      // where ioctls go when they have nowhere to go
+        debuglog("no-terminal ioctl:", op, arg)
+    }
+
+    // ioctl_event
+    //
+    target.ioctl_event = function ioctl_event(msg, arg) {
+        naancont.ioctl_event(msg, arg)
     }
 
     // target.DebugCmd
@@ -841,15 +336,16 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     //
     // Create a closure for an attaching terminal.
     //
-    target.termAttach = closure termAttach(term, db, statusCB, local connection, inbound) {
+    target.termAttach = closure termAttach(term, db, notify, local connection, jsterm, inbound) {
         connection = new(object, this)
+        jsterm = term.jsAcquire()                                           // termIDE must be direct
 
         function oninterrupt() {
             naancont.Interrupt(inbound)
         }
 
         function onreturn() {
-            naancont.Return(term.TakeText(), inbound)
+            naancont.Return(jsterm.TakeText(), inbound)
         }
     
         function onstatus(status) {
@@ -867,7 +363,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         
         connection.KeyText = function KeyText(text, echo) {                 // send text to instance
             if echo
-                term.WriteLn(text.trim())                                   // echo to terminal
+                jsterm.WriteLn(text.trim())                                 // echo to terminal
             naancont.Return(text, inbound)
         }
 
@@ -877,16 +373,15 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         }
         
         connection.WriteLn = function WriteLn(text) {
-            term.WriteLn(text)
+            jsterm.WriteLn(text)
         }
 
         connection.termDetach = function termDetach() {                     // disconnect the terminal
             db.detach(target)
-            term.On("interrupt")
-            term.On("return")
             if inbound
                 naancont.Detach(inbound)
             connected = connected.filter(function(conn) { conn !== connection })
+            term.jsRelease()
         }
 
         connection.popup = true                                             // we can handle multiple terminals
@@ -894,15 +389,15 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         let (replstate) {
             replstate = naancont.StateGet()
             if (replstate)
-                term.StateLoad(replstate)
+                jsterm.StateLoad(replstate)
             else
-                term.Reset()
-            term.On("interrupt", oninterrupt.proc)
-            term.On("return", onreturn.proc)
-            term.Focus()
+                jsterm.Reset()
+            jsterm.On("interrupt", oninterrupt.proc)
+            jsterm.On("return", onreturn.proc)
+            jsterm.Focus()
             inbound = xnew({
-                OnMessage: term.OnMessage
-                StateSave: term.StateSave
+                OnMessage: jsterm.OnMessage
+                StateSave: jsterm.StateSave
                 OnStatus: onstatus.proc
                 OnMessageOut: onmessageout.proc
                 OnDebugOut: ondebugout.proc
@@ -913,7 +408,33 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
             connected.push(connection)
             db.attach(target)
         } ()
-        
+
+        naancont.ioctl_open(function (op, arg) {
+            if op == "sane"
+                jsterm.Sane()
+            else if op == "raw" {
+                if arg                                                      // enable raw mode
+                    jsterm.OnRaw(function(str, origin) {
+                        ioctl_event("raw-key", {
+                            key: str
+                            origin: origin
+                        })
+                    })
+                else                                                        // else disable raw
+                    jsterm.OnRaw()
+            } else if op == "keystroke"
+                jsterm.PutKey(arg)                                          // simulate a keystroke
+            else if op == "echo"
+                jsterm.EchoSet(arg)                                         // echo: 0, 1, 2
+        })
+
+        jsterm.OnResize(function(columns, rows) {
+            ioctl_event("term-resize", {
+                cols: columns
+                rows: rows
+            })
+        })
+         
         // finis
         connection
     }
@@ -923,7 +444,9 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     //     Update the naan controller on this target, which means updating for all the terminals.
     //
     target.updateController = function updateController(newnc, local conn) {
+        naancont.ioctl_close()
         naancont = newnc
+        naancont.ioctl_open(ioctl_callback.proc)
         target.naancont = newnc
         for conn in connected {
             if naancont {
@@ -946,6 +469,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
             conn.WriteLn("\x1b[90m\x1b[3m".concat("\ntarget closed", "\x1b[0m"))
         }
         target.execReset()
+        naancont.ioctl_close()
         target.naancont = naancont = false
     }
 
@@ -1034,6 +558,120 @@ closure termInstallVirtualWatcher(track, naancont) {
 
 
 /*
+ * testTab
+ *
+ * Quick test of the InTop/InBot connection.
+ *
+ */
+
+closure testTab(destID,
+    local comMod, relay, error, found, dest, xc, inbotDestID, intop) {
+
+    // findBottomID
+    //
+    // Find the inbot destID that goes with our desired workerID.
+    //
+    function findBottomID(found, workerID, local item) {
+        for item in found
+            if item.name == "Play" && item.type == workerID
+                return (item.destID)
+        false
+    }
+
+    comMod = require("naanlib:frameworks/client/relaycon.nlg")
+    relay = comMod.RelayCon(App.imp)
+    `(error, found) = relay.clients(destID)
+    dest = found.find(function(item) { item.name == "NaanIDE" && item.services.indexOf("naan-remote-responder") >= 0 })
+    if !dest
+        return (list(Error("cannot locate remoting")))
+    `(error, xc)= relay.context(dest.destID)
+    if error
+        return (list(Error("cannot access remoting", error)))
+    inbotDestID = findBottomID(found, "Webworker-Play")
+    if !inbotDestID
+        return (list(Error("cannot find web worker")))
+    intop = require("../running/instances.nlg").InTop(App.nide.track, {
+        name: "NaanIDE-Play"
+        type: "Relay"
+    })
+    `(error) = intop.open(inbotDestID)
+    if error
+        return (list(Error("cannot create InTop", error)))
+    list(false, xc, intop)
+};
+
+
+/*
+ * relayTab
+ *
+ * Open a relay tab for the first peer NaanIDE found on the same server.
+ *
+ */
+
+closure relayTab(destID, local comMod, relay, error, found, dest, xc, reterm, originID, inbot) {
+
+    // remoteFindTerm
+    //
+    // Executes on remote to give us a (proxy) terminal.
+    //
+    function remoteFindTerm(name, workerID, local target) {
+        for target in App.nide.track.enumlist()
+            if target.name == name && target.workerID == workerID
+                return (target)
+        false
+    }
+
+    comMod = require("naanlib:frameworks/client/relaycon.nlg")
+    relay = comMod.RelayCon(App.imp)
+    if !destID {
+        `(error, found) = relay.clients()
+        if !error {
+            dest = found.find(function(item) { item.name == "NaanIDE Server" && item.type == "Server IMP" })
+            if !dest
+                error = Error("cannot locate server")
+        }
+        if !error
+            `(error, found) = relay.clients(dest.destID)
+        if !error {
+            dest = found.find(function(item) { item.name == "NaanIDE"
+                && item.type == "Client IMP" && item.destID != App.imp.us.instanceID })
+            if !dest
+                error = Error("cannot locate peer tab")
+            else
+                destID = dest.destID
+        }
+    }
+    if error
+        return (list(Error("cannot locate target", error)))
+    `(error, xc) = relay.context(destID)
+    if error
+        return (list(Error("cannot access remoting", error)))
+    `(error) = xc.evalq(chns("browser"))
+    if error
+        return (list(Error("cannot switch namespace", error)))
+    `(error, reterm) = xc.evalq(remoteFindTerm("NaanIDE", "NaanIDE"), `(remoteFindTerm))
+    if error
+        return (list(Error("cannot get remote terminal", error)))
+    originID = App.imp.us.instanceID
+    `(error, inbot) = xc.evalq(InBot(window, {
+        name: "inbot"
+        type: reterm.workerID
+        topOriginID: originID
+    }), `(reterm, originID))
+    if error
+        return (list(Error("cannot create inBot", error)))
+    intop = require("../running/instances.nlg").InTop(App.nide.track, {
+        name: "NaanIDE Relay"
+        type: "Relay"
+    })
+    `(error) = intop.open(inbot.instanceID)
+    if error
+        return (list(Error("cannot create InTop", error)))
+    list(false, xc, intop)
+};
+
+
+/*
  * termInit
  *
  *     Initialize the debugger page.
@@ -1041,15 +679,13 @@ closure termInstallVirtualWatcher(track, naancont) {
  */
 
 function termInit(local manifest) {
-    manifest = `(TermHost, TermLocal, WorkerConnect, termMainProxy, WorkerToMain, findIDEtarget,
-        termIDE, termInstallVirtualWatcher, termInit)
+    manifest = `(TermHost, TermLocal, 
+        findIDEtarget, termIDE, termInstallVirtualWatcher, testTab, relayTab, termInit)
 
     Naan.module.build(module.id, "terminals", function(modobj, compobj) {
-        require("./browser.nlg")
+        require("./worker.nlg")
         compobj.manifest = manifest
         modobj.exports.TermLocal = TermLocal
         modobj.exports.TermHost = TermHost
-        modobj.exports.WorkerConnect = WorkerConnect
-        modobj.exports.WorkerToMain = WorkerToMain
     })
 } ();

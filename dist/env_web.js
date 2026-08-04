@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2024 by Richard C. Zulch
+ * Copyright (c) 2017-2026 by Richard C. Zulch
  *
  */
 
@@ -69,6 +69,7 @@ exports.NaanControllerWeb = function() {
 
     var naanlib = new exports.Naanlib();
     var dontSaveUntilWorking;                                               // true when state loaded, must be reset to save state again
+    var dontSave;                                                           // true to avoid saving, i.e. in debugger
     var contSelf = this;                                                    // this is us, for access within nested functions
     exports.naancon = this;                                                 // access to this instance
     contSelf.anaan = naanlib.js.n;
@@ -93,8 +94,8 @@ exports.NaanControllerWeb = function() {
     function termTextOut(text, level) {
         if (!text)
             return;
-        if (termlist.length === 0) {
-            console.log(text);                                              // make sure we can see early errors
+        if (termlist.length === 0) {                                        // make sure we can see early errors
+            console.log(text.replace(/(?:\x1B[@-Z\\-_]|\x1B\[[0-?]*[ -/]*[@-~])/g, ''));
             if (!replqueue)
                 replqueue = [];
             replqueue.push({text:text, level:level});
@@ -137,7 +138,7 @@ exports.NaanControllerWeb = function() {
 
 
     //==========================================================================
-    // New Terminal Interface
+    // Direct Terminal Interface
     //--------------------------------------------------------------------------
 
     //
@@ -170,6 +171,7 @@ exports.NaanControllerWeb = function() {
         if (repdex < 0)
             termlist.push(terminal);
         takePending();                                                      // output all pending terminal messages
+        this.ioctl_event("term-attach", "");
     };
 
     //
@@ -184,6 +186,7 @@ exports.NaanControllerWeb = function() {
             termlist.splice(repdex, 1);
         if (termlist.length === 0)
             replstate = terminal.StateSave();                               // save ultimate repl state
+        this.ioctl_event("term-detach", "");
     };
 
     //
@@ -339,13 +342,14 @@ exports.NaanControllerWeb = function() {
     function ConsoleDebugTerminal() {
         var termSelf = this;
         //
-        // OnMessageOut
+        // OnMessage
         //
         this.OnMessage = function OnMessage(msg) {
+            var text = msg.text.replace(/(?:\x1B[@-Z\\-_]|\x1B\[[0-?]*[ -/]*[@-~])/g, '');
             if (msg.id == "debugtext")
-                console.log("dbug-" + msg.level + " " + msg.text);
+                console.log("dbug-" + msg.level + " " + text);
             else if (msg.id == "textout")
-                console.log(msg.text);
+                console.log(text);
         };
         //
         // cmd
@@ -391,25 +395,31 @@ exports.NaanControllerWeb = function() {
     exports.debug = debug;
 
     //==========================================================================
-    // Clone Debug Interface
+    // MessageTerminal
     //--------------------------------------------------------------------------
 
-    function CloneDebugTerminal()
+    function MessageTerminal(windest, origin)
     {
         var termSelf = this;
         //
         // listen for messages
         //
         window.addEventListener("message", function (event) {
-            if (event.origin !== window.origin)
+            if (origin && event.origin !== origin)
                 return;                                                     // only talk with our peers
             var msg = event.data;
+            if (msg.scope != "naan-env-web")
+                return;
             if (msg.id == "interrupt")
                 contSelf.Interrupt();
             else if (msg.id == "keyline")
                 contSelf.Return(msg.text, termSelf);                        // keyboard text from terminal
-            else if (msg.id == "start")
-                contSelf.Attach(term);                                      // opener is ready
+            else if (msg.id == "typed")
+                echoTyped(msg.text);
+            else if (msg.id == "attached")
+                contSelf.Attach(messageTerm);                               // start using the terminal
+            else if (msg.id == "detached")
+                contSelf.Detach(messageTerm);                               // done using the terminal
             else if (msg.id == "import")
             {                                                               // for workers
             }
@@ -423,13 +433,16 @@ exports.NaanControllerWeb = function() {
                 if (debugListener)
                     debugListener(msg.data);                                // target received a message
             }
+            else if (msg.id == "ioctl-event")
+                contSelf.ioctl_event(msg.msg, msg.arg);
         });
 
         //
         // report messages back to opener
         //
         termSelf.OnMessage = function OnMessage(msg) {
-            window.opener.postMessage(msg, window.origin);
+            msg.scope = "naan-env-web";
+            windest.postMessage(msg, origin);
             return (msg);
         };
 
@@ -437,7 +450,7 @@ exports.NaanControllerWeb = function() {
         // report messages back to opener
         //
         termSelf.OnMessageOut = function OnMessageOut(data) {
-            var msg = {                                                       // target is sending debug data
+            var msg = {                                                     // target is sending debug data
                 id: "targetout",
                 data: data
             };
@@ -448,7 +461,7 @@ exports.NaanControllerWeb = function() {
         // report debug messages back to opener
         //
         termSelf.OnDebugOut = function OnDebugOut(data) {
-            var msg = {                                                       // target is sending debug data
+            var msg = {                                                     // target is sending debug data
                 id: "debugout",
                 data: data
             };
@@ -459,13 +472,128 @@ exports.NaanControllerWeb = function() {
         // report status back to opener
         //
         termSelf.OnStatus = function OnStatus(status) {
-            var msg = {                                                       // target is sending debug data
+            var msg = {                                                     // target is sending debug data
                 id: "status",
                 status: status
             };
             return (termSelf.OnMessage(msg));
         };
+
+        //
+        // stub to ignore call
+        //
+        termSelf.StateSave = function StateSave() {
+            return (false);
+        };
+
+        //
+        // send ioctl back to terminal
+        //
+        termSelf.ioctl = function ioctl(op, arg) {
+            var msg = {
+                id: "ioctl",
+                op: op,
+                arg: arg
+            };
+            return (termSelf.OnMessage(msg));
+        };
+
+        listen_all.push(function(imsg, arg) {
+            var msg = {                                                     // target is sending ioctl event
+                id: "ioctl_event",
+                msg: imsg,
+                arg: arg
+            };
+            return (termSelf.OnMessage(msg));
+        });
     }
+
+    //==========================================================================
+    // ioctl terminal control
+    //--------------------------------------------------------------------------
+
+    var listen_all = [];
+    var listeners = { };
+    var ioctl_callback;
+
+    //
+    // ioctl_open
+    //
+    // A terminal controller is now open on our instance.
+    //
+
+    this.ioctl_open = function ioctl_open(callback) {
+        ioctl_callback = callback;
+        return (true);
+    };
+
+    //
+    // ioctl_close
+    //
+    // The terminal controller is no longer open on our instance.
+    //
+
+    this.ioctl_close = function ioctl_close() {
+        ioctl_callback = false;
+        return (true);
+    };
+
+    //
+    // ioctl_event
+    //
+    // Events incoming from terminal.
+    //
+
+    this.ioctl_event = function ioctl_event(msg, arg) {
+        listen_all.forEach(function(proc) {
+            proc(msg, arg);
+        });
+        if (listeners[msg])
+            listeners[msg].forEach(function(proc) {
+                proc(msg, arg);
+            });
+    };
+
+    //
+    // ioctl_add_listener
+    // ioctl_remove_listener
+    //
+    // Add a listener for a terminal event.
+    //
+
+    this.ioctl_add_listener = function ioctl_add_listener(msg, proc) {
+        if (typeof(msg) != "string" || typeof(proc) != "function")
+            return (false);
+        this.ioctl_remove_listener(msg, proc);
+        if (!listeners[msg])
+            listeners[msg] = [];
+        listeners[msg].push(proc);
+        return (true);
+    };
+
+    this.ioctl_remove_listener = function ioctl_remove_listener(msg, proc) {
+        if (typeof(msg) != "string" || typeof(proc) != "function")
+            return (false);
+        if (listeners[msg]) {
+            var index = listeners[msg].indexOf(proc);
+            if (index >= 0)
+                listeners[msg].splice(index, 1);
+        }
+        return (true);
+    };
+
+    //
+    // ioctl
+    //
+    // Control of terminals (and their controller.)
+    //
+
+    this.ioctl = function ioctl(op, arg) {
+        if (ioctl_callback)
+            ioctl_callback(op, arg);
+        messageTerm.ioctl(op, arg);
+        return (true);
+    };
 
     //==========================================================================
     // Host Environment
@@ -499,6 +627,16 @@ exports.NaanControllerWeb = function() {
 
     this.Working = function Working() {
         dontSaveUntilWorking = false;
+    };
+
+    //
+    // Saving
+    //
+    // Turn state saving on or off; on by default.
+    //
+
+    this.Saving = function Saving(onOff) {
+        dontSave = !onOff;
     };
 
     window.document.addEventListener("visibilitychange", function (e) {
@@ -550,8 +688,12 @@ exports.NaanControllerWeb = function() {
             localStorage.removeItem("NaanState_Hosted");
             return (false);
         }
+        if (dontSave)
+            return (false);                                                 // not saving right now
         if ("nosave" in querystrings)
             return (false);
+        if (window.opener)
+            return (false);                                                 // don't save running under NaanIDE
         var statedoc = makeState();
         var statestr = JSON.stringify(statedoc);
         try {
@@ -655,11 +797,11 @@ exports.NaanControllerWeb = function() {
 
     if (window.opener) {
         virtualOpen();
-        var term = new CloneDebugTerminal();
-        term.OnMessage({
-            id: "loaded"
-        });
     }
+    var messageTerm = new MessageTerminal(window, window.origin);
+    messageTerm.OnMessage({
+        id: "loaded"
+    });
 };
 
 /*jshint sub:true */

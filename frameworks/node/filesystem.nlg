@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2025 by Richard C. Zulch
+ * Copyright (c) 2017-2026 by Richard C. Zulch
  *
  */
 
@@ -977,16 +977,41 @@ closure Filesystem(rootpath, local files, badCreatePathRegEx) {
     //
     // shellOpen
     //
-    // Execute the MacOS open utility, returning a standard tuple: `(error, result)
+    // Execute the platform's open utility, returning a standard tuple: `(error, result) which opens
+    // the specified path as a browser URL or invokes a shell script. This is used by the NaaN build
+    // system's "run" function.
+    //     The args option has a dictionary that can override the "runner" utility and set arguments
+    // for specific platform(s):
+    //  {
+    //      darwin: {
+    //          runner: "open"                  // default for platforms not mentioned
+    //          // args: ["--args", <prog arg>] // program arguments if desired
+    //      }
+    //      linux / android: {
+    //          runner: "bash"                  // for <path>.sh or <path>.tool
+    //          runner: "xdg-open"              // all other types
+    //      }
+    //  }
     //
-    files.shellOpen = closure shellOpen(path, args, callback) {
+    files.shellOpen = closure shellOpen(path, args, callback, local platform, runner) {
         if !callback
             return (syncAdapter(shellOpen, path, args))
-        if args
-            args = [path].concat("--args", args)                            // only add target args if specified
+        platform = js.g.process.platform
+        runner = args[platform].runner
+        if runner
+            { }                                                             // explicit runner
+        else if platform == "linux" || platform == "android" {
+            if RegExp("[.]((sh)|(tool))$").test(path)
+                runner = "bash"                                             // execute scripts
+            else
+                runner = "xdg-open"                                         // "open" other things
+        } else
+            runner = "open"                                                 // default runner
+        if args[platform]
+            args = [path].concat(args[platform])                            // has custom args
         else
             args = [path]
-        nodecp.execFile("open",
+        nodecp.execFile(runner,
             args,                                                           // command line args to open
             { },                                                            // execution options
             function(err, stdout, stderr) {

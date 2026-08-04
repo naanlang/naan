@@ -1,0 +1,255 @@
+/*
+ * worker.nlg
+ * Naanlib/frameworks/browser
+ *
+ * Manage NaaN instances.
+ *
+ * NaaN instances are managed by a top/bottom pair of of objects. InBot (INstance BOTtom) objects
+ * reside in the same JavaScript environment (node/browser) as their worker and communicate with the
+ * appropriate env_xxx.js adapter for NaaN in that environment.
+ *
+ * Zero or more InTop objects connect to each InBot object via the IMP network, providing remote
+ * evaluation and terminal access services. Each InTop supports only one terminal simultaneously, but
+ * they can be attached and detached at any time.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * InBot
+ *
+ * Create a remote interface for a single execution instance, returning the object. This provides
+ * instance access to zero or more InTops via IMP connections. The tops subscribe to receive
+ * notifications/responses.
+ *
+ * Options:
+ *  {
+ *      name:       <string>                    // target name, e.g. "Play"
+ *      type:       <string>                    // target category, e.g. "Local"
+ *      startup:    <dictionary>                // startup options
+ *      workerID:   <string>                    // initialize worker with this
+ *      workerGUID: <string>                    // initialize worker with this
+ *      topOriginID:  <string>                  // so top can route to us through IMP
+ *  }
+ *
+ */
+
+closure InBot(worker, options, local inbot)
+{
+    global(App)
+    inbot = new(object, this)
+    inbot.topsubs = []
+    options = merge({
+        type: "Local"
+    }, options)
+    inbot.workerID = options.workerID
+    inbot.worker = worker
+
+    inbot.instanceID = UUID()
+    inbot.sender = App.imp.register(inbot, {
+        name: options.name
+        type: options.type
+        instanceID: inbot.instanceID
+        services: ["naan-worker"]
+    })
+
+    // If this InBot is created remotely then we need to send a message from our new instanceID
+    // to the InTop origin so that it can send messages to us. The intermediate gateways save the
+    // route to allow replies.
+    if options.topOriginID && options.topOriginID != App.imp.us.instanceID
+        inbot.sender(options.topOriginID)                                   // create route top->bottom
+
+    // subscribe
+    //
+    // Add an InTop to our subscribers if not already known.
+    //
+    function subscribe(destID) {
+        if !inbot.topsubs.find(function(item) { item == destID }) {
+            inbot.topsubs.push(destID)
+            if inbot.workerDestID
+                inbot.sender(destID, {
+                    id: "workerDestID"
+                    workerDestID: inbot.workerDestID
+                })
+        }
+    }
+
+    // unsubscribe
+    //
+    // Remove an InTop from our subscribers if present.
+    //
+    function unsubscribe(destID) {
+        inbot.topsubs = inbot.topsubs.filter(function(item) { item != destID })
+    }
+
+    // notifyAll
+    //
+    // Send the message to all our subscribers.
+    //
+    inbot.notifyAll = function notifyAll(message, exceptID, local topDestID) {
+        for topDestID in inbot.topsubs
+            if topDestID != exceptID
+                inbot.sender(topDestID, message)
+    }
+
+    // impUnknown
+    //
+    // Received an unknown destination notice from the other side.
+    //
+    inbot.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+        if inbot.topsubs[unknownID] {                                       // did not have courtesy to unsubscribe!
+            unsubscribe(unknownID)
+            return
+        }
+        if !gateway
+            debuglog("InBot.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // impReceive
+    //
+    // Received a message from InTop.
+    //
+    inbot.impReceive = function impReceive(message, sourceID) {
+        if message.id == "destroy"
+            destroy()                                                       // told to destroy worker
+        else if message.id == "subscribe"
+            subscribe(sourceID)
+        else if message.id == "unsubscribe"
+            unsubscribe(sourceID)
+        else if message.id == "typed"
+            notifyAll(message, sourceID)
+        else {                                                              // relay to worker
+            message.scope = "naan-env-web"
+            inbot.worker.postMessage(message)
+        }
+    }
+
+    // onmessage
+    //
+    // A message was received from the worker.
+    //
+    inbot.worker.addEventListener("message", function(e, local msg) {
+        msg = new(e.data)
+        if msg.scope == "naan-imp-web" {
+            inbot.impconn.dispatch(msg.data)
+            return
+        }
+        if msg.scope != "naan-env-web"
+            return
+        if msg.id == "loaded" {
+            if !inbot.started
+                inbot.worker.postMessage({
+                    scope: "naan-env-web"
+                    id: "start",
+                    state: false                                            // resume state, if we have any
+                    altcmd: options.startup.initcmds
+                    workerID: options.workerID
+                    workerGUID: options.workerGUID
+                    metadata: {
+                        mainInstanceID: App.imp.us.instanceID
+                        name: options.name
+                    }
+                })
+            inbot.started = true
+        }
+        notifyAll(msg)
+    })
+
+    // onerror
+    //
+    // The worker had an error.
+    //
+    inbot.worker.addEventListener("error", function(e) {
+        debuglog("worker error:", e.message)
+        notifyAll({
+            id: "error"
+            data: e.message
+        })
+        inbot.worker = false
+        destroy()
+    })
+    
+    // destroy
+    //
+    // Ensure the worker is destroyed and notify everyone.
+    //
+    inbot.destroy = function destroy() {
+        if inbot.worker {
+            inbot.worker.terminate()                                        // kill without saving
+            inbot.worker = false
+        }
+        notifyAll({
+            id: "terminated"
+        })
+        inbot.impconn.close()
+        inbot.impconn = false
+        App.imp.unregister(inbot.instanceID)
+    }
+
+    // register our connects *after* the receivers are configured above
+
+    // finis
+
+    inbot
+};
+
+
+/*
+ * NubBot
+ *
+ * Create a remote interface like InBot, but also provide messaging support for WebWorkerNub inside
+ * the worker.
+ *
+ */
+
+closure NubBot(worker, options, local nubbot)
+{
+    global(App)
+    nubbot = InBot(worker, options)
+
+    App.imp.addEventListener("active", function(event, info) {
+        if info.ourID == nubbot.instanceID {
+            nubbot.workerDestID = info.destID                               // handshake completed
+            nubbot.notifyAll({                                              // send to tops
+                id: "workerDestID"
+                workerDestID: nubbot.workerDestID
+            })
+        }
+    })
+
+    nubbot.impconn = App.imp.responder(function(data) {
+        nubbot.worker.postMessage({                                         // send to worker
+            scope: "naan-imp-web"                                           // scoped for WorkerNub
+            data: data
+        })
+        list(false, { sent: true })
+    }, {
+        ourID: nubbot.instanceID
+    })
+
+    // finis
+
+    nubbot
+};
+
+
+/*
+ * workInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function workInit(local manifest) {
+    manifest = `(InBot, NubBot, workInit)
+
+    Naan.module.build(module.id, "worker", function(modobj, compobj) {
+        require("./browser.nlg")
+        compobj.manifest = manifest
+        modobj.exports.InBot = InBot
+    })
+} ();

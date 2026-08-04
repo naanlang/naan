@@ -1,0 +1,143 @@
+/*
+ * remote_req.nlg
+ * Naanlib/frameworks/running
+ *
+ * Requester for accessing remote services.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * RemoteRequester
+ *
+ * Return an executor proxy for the specified remote responder.
+ *
+ * Options:
+ *  {
+ *      name:           <string>                // name
+ *      type:           <string>                // type
+ *  }
+ *
+ */
+
+function RemoteRequester(destID, options, local track)
+{
+    global(App)
+    options = merge({
+        name: "Remote Eval"
+        type: "RemoteRequester"
+    }, options)
+
+    // remoteReq
+    //
+    // Executes on our worker thread to return an execution instance that can be used to create a
+    // proxy for remote evaluation.
+    //
+    closure remoteReq(track, name, options, local target) {
+        target = ExecutorBase(false, "proxy", options.name)
+        target.instanceID = UUID()
+    
+        target.sender = App.imp.register(target, {
+            name: options.name
+            type: options.type
+            instanceID: target.instanceID
+            services: [ "naan-remote-requester" ]
+        })
+    
+        // impUnknown
+        //
+        // Received an unknown destination notice from the other side.
+        //
+        target.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
+            if !gateway
+                debuglog("MainThread.impUnknownID:", unknownID, "sourceID:", sourceID)
+        }
+    
+        // impReceive
+        //
+        // Received a payload from the other side.
+        //
+        target.impReceive = function impReceive(message, sourceID) {
+            if message.id == "targetout"
+                target.execReceived(message.data)
+        }
+    
+        // PostMessage
+        //
+        // Post a message to the target.
+        //
+        target.PostMessage = function PostMessage(data) {
+            target.sender(destID, {
+                id: "targetin",
+                data: data
+            })
+            list(false, { posted: true })
+        }
+
+        // destroy
+        //
+        // Terminate the proxy and all its works.
+        //
+        target.destroy = function destroy() {
+            App.imp.unregister(target.instanceID)
+            track.delete(target)
+        }
+
+        // finis
+        
+        track.add(target)
+        list(false, target)
+    }
+
+    options = merge({
+        name: "RemoteRequester"
+        proxy: "proxy"
+    }, options)
+    track = ExecutorTracker()
+    track.register(options.type, remoteReq)
+    track.spawn(options.type, options.name)                                 // returns result tuple
+};
+
+
+/*
+ * MainThread
+ *
+ * Return an executor proxy for the main thread. Only usable in workers.
+ *
+ */
+
+function MainThread()
+{
+    global(App)
+    if !App.mainInstanceID
+        throw("MainThread can only be used in workers")
+        
+    RemoteRequester(App.mainInstanceID, {
+        name: "MainThread"
+        type: "mainProxy"
+    })
+};
+
+
+/*
+ * maithInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function remreqInit(local manifest) {
+    manifest = `(RemoteRequester, MainThread, remreqInit)
+
+    Naan.module.build(module.id, "remote_req", function(modobj, compobj) {
+        require("./executors.nlg")
+        require("../service/imp.nlg")
+        compobj.manifest = manifest
+        modobj.exports.RemoteRequester = RemoteRequester
+        modobj.exports.MainThread = MainThread
+    })
+} ();

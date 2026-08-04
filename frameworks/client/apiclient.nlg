@@ -2,42 +2,62 @@
  * apiclient.nlg
  * Naanlib/frameworks/client
  *
- *     Access to Nide API with specified HTTP client.
+ * Access to Nide API with specified HTTP client.
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2025 by Richard C. Zulch
+ * Copyright (c) 2017-2026 by Richard C. Zulch
  *
  */
+
+
+// Globals
+
+serviceMod;;
 
 
 /*
  * APIClient
  *
- *     Make an API client object.
+ * Make an API client object.
  *
  * Options:
  *  {
  *      url:            <string>                // hostname or URL of the remote server
  *      guid:           <string>                // shared secret for access to remote server
- *      instanceID:     <string>                // optional UUID for our client; can be persisted by caller
  *  }
  *
  */
 
-closure APIClient(options, local client, url, guid) {
-    global(App)
+closure APIClient(imp, options, local client, url, guid) {
+    global(App, serviceMod)
     client = new(object, this)
+    options = merge({
+    }, options)
     url = options.url
     if !url.match(RegExp("^https?:\/\/", "i"))
         url = "http://${url}"                                               // a protocol is required
     if url.slice(-1) != "/"
         url = url.concat("/")                                               // must end in "/"
     client.url = url
+    options.url = url
     client.guid = options.guid
-    client.instanceID = options.instanceID || UUID()                        // our client's unique ID
     client.notifyAfter = 0
     client.requester = clirRequester()
+
+    //
+    // wsopen
+    //
+
+    client.wsopen = function wsopen(error) {
+        if !client.wesc {
+            client.wesc = WebSocketClient(options, imp)
+            `(error) = client.wesc.connect()
+            if error
+                ErrorDebuglog("APIClient: cannot connect to", url)
+        }
+    }
+    wsopen()
 
     // clientRequest() - append our guid to the headers
 
@@ -152,24 +172,176 @@ closure APIClient(options, local client, url, guid) {
         else
             callback(error, content)
     }
+    
+    // destroy
+    //
+    // Close down the client and release all resources.
+    //
+    client.destroy = closure destroy() {
+        debuglog("client destroy websocket")
+        client.wesc.destroy()
+        client.wesc = false
+    }
 
     client
+};
+
+
+/* 
+ * WebSocketClient
+ *
+ * WebSocket client for websocket communications with a server. The Instance Messaage Processor (IMP)
+ * handles routing between instances using intermediaries.
+ *
+ * Options:
+ *  {
+ *      url:            <string>                // hostname or URL of the remote server
+ *      guid:           <string>                // shared secret for access to remote server
+ *      instanceID:     <string>                // UUID for our client; can be persisted by caller
+ *  }
+ *
+ */
+
+closure WebSocketClient(options, imp, local wesc, ws) {
+    global(js)
+    wesc = new(object, this)
+
+    // connect
+    //
+    // Establish a websocket connection with the host.
+    //
+    wesc.connect = closure connect(local url, pending) {
+        if ws && !wesc.fatal
+            return(list(false, { connected: true }))
+        if wesc.fatal
+            debuglog("WebSocketClient reopen")
+        wesc.fatal = false
+        try {
+            url = xnew(js.w.URL, options.url)
+        } catch {
+            return(list(Error("invalid URL ${options.url}", exception)))
+        }
+        if url.protocol == "https:"
+            url.protocol = "wss:"
+        else
+            url.protocol = "ws:"
+        ws = xnew(js.w.WebSocket, url.href)
+        pending = new(nonce)
+    
+        // onopen
+        // The WebSocket connection is now open.
+        ws.onopen = function onopen(e, local error) {
+            wesc.impconn = imp.requester(function(data) {
+                if wesc.fatal                                               // raw send function
+                    return (list(wesc.fatal))
+                ws.send(js.w.JSON.stringify(data))
+                list(false, { sent: true })
+            }, {
+                secret: options.guid
+                label: "api-server"
+                wesc: wesc
+            })
+            if error
+                pending.signal(list(error))
+            else
+                pending.signal(list(false, { ok: true }))
+        }
+    
+        // onmessage
+        // A message was received via WebSockets.
+        ws.onmessage = function onmessage(e, local error, message) {
+            `(error, message) = JsonParse(e.data)
+            if !error {
+                message = new(message)
+                if wesc.impconn.dispatch(message)
+                    return
+            }
+            debuglog("socket message:", e.data)
+        }
+    
+        // onerror
+        // An error occurred on the WebSocket connection.
+        // This can happen in normal operation when the connection times out.
+        ws.onerror = function onerror(e) {
+            if !wesc.fatal
+                wesc.fatal = Error("websocket failed", e)
+            pending.signal(list(wesc.fatal))
+        }
+        
+        // onclose
+        // The WebSocket connection was closed.
+        ws.onclose = function onclose(e) {
+            // if e.code != 1000 && e.code != 1001 && e.code != 1005 && e.code != 1006
+                debuglog("WebSocketClient: closed:", e.code, e.reason)
+            ws = false
+            if !wesc.fatal
+                wesc.fatal = Error("websocket closed", e.code, e.reason)
+            pending.signal(list(wesc.fatal))
+            wesc.impconn.close({
+                code: e.code
+                reason: e.reason
+            })
+            wesc.impconn = false
+        }
+
+        pending.wait()
+    }
+    
+    // close
+    //
+    // Close the connection, but can be opened again with connect().
+    //
+    wesc.close = function close() {
+        if !ws
+            return
+        ws.close(1000)                                                      // 1000: normal close
+    }
+    
+    // destroy
+    //
+    // Destroy the connection permanently.
+    //
+    wesc.destroy = function destroy() {
+        close()
+    }
+
+    // send
+    //
+    // Send a message.
+    //
+    wesc.send = closure send(data) {
+        if wesc.fatal
+            return (wesc.fatal)
+        wesc.impconn.send(data)
+    }
+
+    // sendRaw
+    //
+    // Send a message with reconnect but no routing.
+    //
+    wesc.sendRaw = closure sendRaw(data) {
+        ws.send(data)
+    }
+
+    // finis
+    wesc
 };
 
 
 /*
  * apicInit
  *
- *     Initialize the apic component.
+ * Initialize the apiclient component.
  *
  */
 
 function apicInit(local manifest) {
 
-    manifest = `(APIClient, apicInit)
+    manifest = `(APIClient, WebSocketClient, apicInit)
 
     Naan.module.build(module.id, "apiclient", function(modobj, compobj) {
         Naan.module.require("./client.nlg")
+        serviceMod = Naan.module.require("naanlib:frameworks/service/imp.nlg")
         compobj.manifest = manifest
         modobj.exports.APIClient = APIClient
     })

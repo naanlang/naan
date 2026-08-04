@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2024 by Richard C. Zulch
+ * Copyright (c) 2021-2024,2026 by Richard C. Zulch
  *
  */
 
@@ -47,7 +47,7 @@ closure HttpsApiRequest(url, options,
     // defRetrier -- backoff and retry selected errors
     //
     function defRetrier(error, headers, local retryAfter, retryms, waitms) {
-        if member(error.status, `(408, 500, 502, 503, 504)) {               // retriable errors
+        if member(error.status, `(408, 429, 500, 502, 503, 504)) {          // retriable errors
             retryAfter = headers["retry-after"]
             if retryAfter {
                 retryms = toint(retryAfter) * 1000
