@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2024 by Richard C. Zulch
+ * Copyright (c) 2021-2026 by Richard C. Zulch
  *
  */
 
@@ -562,7 +562,7 @@ closure DynaConverter(local conv) {
  *
  */
 
-closure DynaTable(dyna, tablename, options, local table) {
+closure DynaTable(dyna, tablename, options, local table, delayf, backoffMS) {
     global()
     table = new(object, this)
     table.name = tablename
@@ -575,6 +575,38 @@ closure DynaTable(dyna, tablename, options, local table) {
                 table.rangeKey = options.rangeKey
         } else
             debuglog("DynaTable: invalid (hashKey/rangeKey) option:", tablename, list(options.hashKey, options.rangeKey))
+    }
+
+    // retrier
+    //
+    //     Perform exponential backoff when throttled, returning true for retry or false otherwise.
+    //
+    function retrier(error, local waitms, newbo) {
+        if !error
+            delayf = false
+        else if error.name == "ThrottlingException" {                       // retriable errors
+            if backoffMS > milliseconds()
+                return (true)                                               // use existing backoff
+            if !delayf
+                delayf = ExbackFactory(6,60)                                // 6s max backoff, 60s deadline
+            waitms = delayf()
+            if waitms {                                                     // returns false for no retry
+                newbo = milliseconds() + waitms                             // tick when proceeding is allowed
+                if !(backoffMS > newbo)
+                    backoffMS = newbo
+                true
+            }
+        }
+    }
+    
+    // delayer
+    //
+    //     Delay until the current backoff is complete.
+    //
+    function delayer(local waitms) {
+        waitms = backoffMS - milliseconds()
+        if waitms > 0
+            sleep(waitms + waitms * Math.random()/2)
     }
 
     // info
@@ -694,16 +726,24 @@ closure DynaTable(dyna, tablename, options, local table) {
                 KeyType: "RANGE"
             })
         }
-        pending = new(nonce)
-        dyna.aws.createTable(params, function(error, data) {
-            if error {
-                dynaTableError = error
-                debuglog("aws.createTable failed", tablename, ErrorString(error))
-                error = Error("table.create(".concat(tablename, ") failed"), error)
-            }
-            pending.signal(list(error, data))
-        })
-        `(error, data) = pending.wait()
+
+        loop {
+            pending = new(nonce)
+            delayer()
+            dyna.aws.createTable(params, function(error, data) {
+                if error {
+                    dynaTableError = error
+                    if error.name != "ThrottlingException"
+                        debuglog("aws.createTable failed", tablename, ErrorString(error))
+                    error = Error("table.create(".concat(tablename, ") failed"), error)
+                }
+                pending.signal(list(error, data))
+            })
+            `(error, data) = pending.wait()
+            if !retrier(error)
+                break
+        }
+
         if error
             return(list(Error("aws.createTable failed", error)))
         start = milliseconds()
@@ -764,7 +804,8 @@ closure DynaTable(dyna, tablename, options, local table) {
     // The result is a standard result tuple `(error, record).
 
     //
-    table.getRecord = closure getRecord(hashValue, options, local params, rangeValue, pending) {
+    table.getRecord = closure getRecord(hashValue, options,
+        local params, rangeValue, pending, error, record) {
         if preflightError(this)
             return
         params = {
@@ -776,17 +817,25 @@ closure DynaTable(dyna, tablename, options, local table) {
         } else
             rangeValue = options
         params.Key = makeDynKey(list(hashValue, rangeValue))
-        pending = new(nonce)
-        dyna.aws.getItem(params, function(error, data) {
-            if error {
-                dynaTableError = error
-                debuglog("aws.getItem failed", tablename, ErrorString(error))
-                error = Error("table.getRecord(".concat(tablename, ") failed"), error)
-            } else
-                data = dyna.conv.recordDynToNaan(data.Item)
-            pending.signal(list(error, data))
-        })
-        pending.wait()
+
+        loop {
+            pending = new(nonce)
+            delayer()
+            dyna.aws.getItem(params, function(error, data) {
+                if error {
+                    dynaTableError = error
+                    if error.name != "ThrottlingException"
+                        debuglog("aws.getItem failed", tablename, ErrorString(error))
+                    error = Error("table.getRecord(".concat(tablename, ") failed"), error)
+                } else
+                    data = dyna.conv.recordDynToNaan(data.Item)
+                pending.signal(list(error, data))
+            })
+            `(error, record) = pending.wait()
+            if !retrier(error)
+                break
+        }
+        list(error, record)
     }
     
     //
@@ -794,23 +843,32 @@ closure DynaTable(dyna, tablename, options, local table) {
     //
     //     Put a record in the table, replacing any existing record with the same key.
         
-    table.putRecord = closure putRecord(record, local params, pending) {
+    table.putRecord = closure putRecord(record,
+        local params, pending, error) {
         if preflightError(this)
             return
         params = {
             TableName: tablename
             Item: dyna.conv.recordNaanToDyn(record)
         }
-        pending = new(nonce)
-        dyna.aws.putItem(params, function(error, data) {
-            if error {
-                dynaTableError = error
-                debuglog("aws.putItem failed", tablename, ErrorString(error))
-                error = Error("table.putRecord(".concat(tablename, ") failed"), error)
-            }
-            pending.signal(list(error, data))
-        })
-        pending.wait()
+
+        loop {
+            pending = new(nonce)
+            delayer()
+            dyna.aws.putItem(params, function(error, data) {
+                if error {
+                    dynaTableError = error
+                    if error.name != "ThrottlingException"
+                        debuglog("aws.putItem failed", tablename, ErrorString(error))
+                    error = Error("table.putRecord(".concat(tablename, ") failed"), error)
+                }
+                pending.signal(list(error, data))
+            })
+            `(error, record) = pending.wait()
+            if !retrier(error)
+                break
+        }
+        list(error, record)
     }
 
     //
@@ -831,7 +889,7 @@ closure DynaTable(dyna, tablename, options, local table) {
     // The result is a standard result tuple `(error, record).
         
     table.updateRecord = closure updateRecord(hashValue, rangeValue, options,
-        local error, params, pending) {
+        local error, params, pending, record) {
         if preflightError(this)
             return
         params = {
@@ -856,18 +914,25 @@ closure DynaTable(dyna, tablename, options, local table) {
             if !params.ReturnValues
                 params.ReturnValues = "NONE"
         }
-        pending = new(nonce)
-        dyna.aws.updateItem(params, function(error, data) {
-            if error {
-                dynaTableError = error
-                debuglog("aws.updateItem failed", tablename, ErrorString(error), Dialect.print(params))
-                error = Error("table.updateRecord(".concat(tablename, ") failed"), error)
-            }
-            else
-                data = dyna.conv.recordDynToNaan(data.Attributes)
-            pending.signal(list(error, data))
-        })
-        pending.wait()
+        loop {
+            pending = new(nonce)
+            delayer()
+            dyna.aws.updateItem(params, function(error, data) {
+                if error {
+                    dynaTableError = error
+                    if error.name != "ThrottlingException"
+                        debuglog("aws.updateItem failed", tablename, ErrorString(error), Dialect.print(params))
+                    error = Error("table.updateRecord(".concat(tablename, ") failed"), error)
+                }
+                else
+                    data = dyna.conv.recordDynToNaan(data.Attributes)
+                pending.signal(list(error, data))
+            })
+            `(error, record) = pending.wait()
+            if !retrier(error)
+                break
+        }
+        list(error, record)
     }
     
     //
@@ -881,7 +946,7 @@ closure DynaTable(dyna, tablename, options, local table) {
  
         
     table.deleteRecord = closure deleteRecord(hashValue, rangeValue, options,
-        local params, error, pending) {
+        local params, error, pending, record) {
         if preflightError(this)
             return
         params = {
@@ -902,16 +967,25 @@ closure DynaTable(dyna, tablename, options, local table) {
             if !params.ReturnValues
                 params.ReturnValues = "NONE"
         }
-        pending = new(nonce)
-        dyna.aws.deleteItem(params, function(error, data) {
-            if error {
-                dynaTableError = error
-                debuglog("aws.deleteItem failed", tablename, ErrorString(error))
-                error = Error("table.deleteRecord(".concat(tablename, ") failed"), error)
-            }
-            pending.signal(list(error, data))
-        })
-        pending.wait()
+
+        loop {
+            pending = new(nonce)
+            delayer()
+            dyna.aws.deleteItem(params, function(error, data) {
+                if error {
+                    dynaTableError = error
+                    if error.name != "ThrottlingException"
+                        debuglog("aws.deleteItem failed", tablename, ErrorString(error))
+                    error = Error("table.deleteRecord(".concat(tablename, ") failed"), error)
+                }
+                pending.signal(list(error, data))
+            })
+            pending.wait()
+            `(error, record) = pending.wait()
+            if !retrier(error)
+                break
+        }
+        list(error, record)
     }
 
     //
@@ -922,16 +996,23 @@ closure DynaTable(dyna, tablename, options, local table) {
     //
     closure dynQueryPager(procname, params, remaining, doneCB) {
         if !remaining
-            remaining = 10                                              // default retrieve limit
+            remaining = 10                                                  // default retrieve limit
         params.Limit = remaining
-        QueryPager(dyna.aws, procname, params, function(data, local processed) {
+        delayer()
+        QueryPager(dyna.aws, procname, params, function(error, data, local processed) {
+            if error {
+                if !retrier(error)
+                    return (false)
+                delayer()
+                return (true)
+            }
             processed = doneCB(data)
             if processed
                 remaining -= processed
             params.ExclusiveStartKey = data.LastEvaluatedKey
             if processed && remaining > 0 && data.LastEvaluatedKey {
-                params.Limit = remaining                                // set up for next iteration
-                true                                                    // continue looping
+                params.Limit = remaining                                    // set up for next iteration
+                true                                                        // continue looping
             }
         })
     }

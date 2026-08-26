@@ -634,18 +634,14 @@ closure psmcFsConnector(psm, api, local connClassID, connector, watch) {
             else {
                 api = connector.apis[creds.urlName]
                 if !api {                                                   // create API to remote server
-                    connector.apis[creds.urlName] = api = APIClient({
+                    api = APIClient(App.imp, {
                         url: creds.urlName
                         guid: creds.authSecret
-                        instanceID: creds.instanceID
                     })
-                    if creds.instanceID != api.instanceID {                 // update our client instanceID
-                        creds.instanceID = api.instanceID
-                        `(error) = connector.vault.updateResource(resID, creds)
-                    }
-                }
-            }
-        }
+                    `(error) = api.connect()
+                    if !error
+                        connector.apis[creds.urlName] = api
+                } } }
         if error
             list(error)
         else if service == "NideTerminal" {
@@ -653,11 +649,11 @@ closure psmcFsConnector(psm, api, local connClassID, connector, watch) {
                 return (list(Error("NideTerminal not supported in this environment")))
             list(false, App.nide.track.spawn(App.nide.registerRemote(api),
                 args.0,                                                     // terminal display name
-                args.1))                                                    // options:
-                    // {
-                    //      workerID: "NideServer"  -- for main thread; other strings for worker threads
-                    //      type: "My Remotes"      -- display name of terminal group; e.g. URL
-                    // }
+                merge(args.1, {
+                    serverID: api.serverID                                  // server we found
+                    // workerID: "NideServer"  -- for main thread; other strings for worker threads
+                    // type: "My Remotes"      -- display name of terminal group; e.g. URL
+                })))                                                    // options:
         }
         else if service == "NideHostAPI"
             list(false, api)                                                // connect to the Host API

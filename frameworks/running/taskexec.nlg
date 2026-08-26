@@ -13,18 +13,18 @@
 /*
  * TaskDispatcher
  *
- *     Create a dispatcher for remote evaluation. The replier argument is a function that accepts
- * outgoing messages. The return value is a closure that processes incomming messages. This code is
- * a peer to ExecutorContext in executors.nlg.
+ * Create a dispatcher for remote evaluation. The return value is a closure that processes incoming
+ * messages. All arguments optional. This code is a peer to ExecutorContext in executors.nlg.
  *
  */
 
-closure TaskDispatcher(replier, coder, local contexts, gohome, util) {
+closure TaskDispatcher(replier, coder, name, local contexts, gohome, util) {
     global()
     contexts = { }
     gohome = makeActivator()
     util = modlist().Util.exports
-    
+    name = name || ""
+
     // ContextCoder
     //
     // A context-specific coder allowing remote-initiated communication.
@@ -49,7 +49,7 @@ closure TaskDispatcher(replier, coder, local contexts, gohome, util) {
                     contextID: contextID
                 }, contexts[contextID].coder)
                 if error {
-                    ErrorDebuglog("TaskDispatcher.ContextCoder failed:", error)
+                    ErrorDebuglog("Remoter(${name}).ContextCoder failed:", error)
                     exec = false
                     return (list(error))
                 }
@@ -74,7 +74,7 @@ closure TaskDispatcher(replier, coder, local contexts, gohome, util) {
             xmsg: "error"
             xid: data.xid
             _guid: data._guid || undefined
-            error: "unknown operation"
+            error: "Remoter(${name}): unknown operation"
         }
         try {
             restorens = makeActivator()
@@ -108,9 +108,9 @@ closure TaskDispatcher(replier, coder, local contexts, gohome, util) {
                 //
                 context = contexts[data.contextID]
                 if !context
-                    reply.error = "unknown context"
+                    reply.error = "Remoter(${name}): unknown context"
                 else if !context.namespace
-                    reply.error = "namespace missing"
+                    reply.error = "Remoter(${name}): namespace missing"
                 else {
                     context.activator()
                     reply.xmsg = "evaluated"
@@ -152,9 +152,9 @@ closure TaskDispatcher(replier, coder, local contexts, gohome, util) {
                 //
                 context = contexts[data.contextID]
                 if !context
-                    reply.error = "unknown context"
+                    reply.error = "Remoter(${name}): unknown context"
                 else if !context.namespace
-                    reply.error = "namespace missing"
+                    reply.error = "Remoter(${name}): namespace missing"
                 else {
                     context.activator()
                     reply.xmsg = "executed"
@@ -183,53 +183,13 @@ closure TaskDispatcher(replier, coder, local contexts, gohome, util) {
                     result = exception.toarray.map(function(x){tostring(x)}).join(" - ")
                 else
                     result = tostring(exception)
-                reply.error = "exception: ".concat(result)
+                reply.error = "Remoter(${name}) exception: ${result}"
             }
         } finally {
             restorens()
         }
         dynreply(reply)
     }
-};
-
-
-/*
- * TaskExecutor
- *
- *     Install an executor for remote evaluation in worker threads. This uses the OnMessage protocol
- * available in the env_xxx.js Naan controllers. The return value is false if OnMessage is not there
- * or true on success.
- *
- */
-
-closure TaskExecutor() {
-
-    // taskInstall
-    // Install the TaskDispatcher, and reload on state load.
-    //
-    function taskInstall() {
-        if !js.t.OnMessage
-            return (false)                                                  // false if not a worker
-        js.t.OnMessage(TaskDispatcher(js.t.ReplyMessage))
-    }()
-    LoadNotify(taskInstall)
-
-    // finis
-
-    true
-};
-
-
-/*
- * TaskOnMessageHook
- *
- *     OK, this is a kludge, but you call this function to specify a handler proc when a message
- * comes in that we don't understand.
- *
- */
-
-function TaskOnMessageHook(hook) {
-    onMessageHook = hook
 };
 
 
@@ -241,14 +201,11 @@ function TaskOnMessageHook(hook) {
  */
 
 function taxInit(local manifest) {
-
-    manifest = `(TaskDispatcher, TaskExecutor, TaskOnMessageHook, taxInit)
+    manifest = `(TaskDispatcher, TaskOnMessageHook, taxInit)
 
     Naan.module.build(module.id, "taskexec", function(modobj, compobj) {
-        require("./running.nlg").LiveImport()
+        require("./running.nlg")
         compobj.manifest = manifest
         modobj.exports.TaskDispatcher = TaskDispatcher
-        modobj.exports.TaskExecutor = TaskExecutor
-        modobj.exports.TaskOnMessageHook = TaskOnMessageHook
     })
 } ();

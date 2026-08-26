@@ -10,13 +10,6 @@
  *
  */
 
-/*
- * globals
- *
- */
-
-gWorkerController = false;
-
 
 /*
  * CurBot
@@ -46,7 +39,6 @@ closure CurBot(options, local curbot) {
         debugtext:  ONdebugText.proc
         status:     ONstatus.proc
         debugout:   ONdebugOut.proc
-        messageout: ONmessageOut.proc
         ioctl:      ONioctl.proc
     })
     curbot.guid = 1
@@ -86,10 +78,44 @@ closure CurBot(options, local curbot) {
     //
     // Send the message to all our subscribers.
     //
-    function notifyAll(message, exceptID, local topDestID) {
+    curbot.notifyAll = function notifyAll(message, exceptID, local topDestID) {
         for topDestID in curbot.topsubs
             if topDestID != exceptID
                 curbot.sender(topDestID, message)
+    }
+
+    // textEntry
+    //
+    // Simulate text entry for subprocess support.
+    //
+    curbot.textEntry = function textEntry(text) {
+        curbot.host.DispatchMessage({
+            id: "keyline"
+            text: text
+        })
+    }
+
+    // rawStart
+    //
+    // Configure ioctls for raw terminal operation using the spawned PTY process.
+    //
+    curbot.rawStart = closure rawStart(ptySpawned, local dokey, doresize, doattach) {
+        dokey = xnew(function(msg, arg) { ptySpawned.write(arg.key) })
+        js.t.ioctl_add_listener("raw-key", dokey)
+        doresize = xnew(function(msg, dim) { ptySpawned.resize(dim.cols, dim.rows) })
+        js.t.ioctl_add_listener("term-resize", doresize)
+        js.t.ioctl("raw", true)
+        doattach = xnew(function(msg, arg) { js.t.ioctl("raw", true) }) // restore raw mode when we are attached
+        js.t.ioctl_add_listener("term-attach", doattach)
+
+        curbot.rawStop = function rawStop() {
+            js.t.ioctl("raw")
+            js.t.ioctl_remove_listener("raw-key", dokey)
+            js.t.ioctl_remove_listener("term-resize", doresize)
+            js.t.ioctl_remove_listener("term-attach", doattach)
+            dokey = doresize = doattach = false
+            curbot.rawStop = undefined
+        }
     }
 
     // impReceive
@@ -104,11 +130,14 @@ closure CurBot(options, local curbot) {
             subscribe(sourceID)
         else if message.id == "unsubscribe"
             unsubscribe(sourceID)
-        else if message.id == "typed"
-            notifyAll(message, sourceID)
         else {
-            message.data._guid = sourceID
-            curbot.host.DispatchMessage(message)
+            subscribe(sourceID)                                             // auto-subscribe
+            if message.id == "typed"
+                notifyAll(message, sourceID)
+            else if message.id == "keyline" && curbot.keyin
+                curbot.keyin(message.text)                                  // terminal keyboard -> pty subprocess
+            else
+                curbot.host.DispatchMessage(message)
         }
     }
 
@@ -117,7 +146,7 @@ closure CurBot(options, local curbot) {
     // Received an unknown destination notice.
     //
     curbot.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
-        if curbot.topsubs[unknownID] {                                      // did not have courtesy to unsubscribe!
+        if curbot.topsubs.indexOf(unknownID) >= 0 {                         // did not have courtesy to unsubscribe!
             unsubscribe(unknownID)
             return
         }
@@ -125,28 +154,15 @@ closure CurBot(options, local curbot) {
             debuglog("CurBot.impUnknownID:", unknownID, "sourceID:", sourceID)
     }
 
-    // replyHook
-    //
-    //     Intercept the ReplyMessage function to see if we should handle it.
-    //
-    function replyHook(data) {
-        // js.g.console.log("CurBot.replyHook:\n", Dialect.print(new(data)))
-        // debuglog("CurBot.replyHook:\n", Dialect.print(new(data)))
-        /* ###
-        if data._guid
-            workco.uworkers[data._guid].msgport.postMessage({
-                id: "targetreceive"
-                data: data
-            })
-        */
-    }
-    curbot.host.OnReplyHook(replyHook.proc)
-
     // ONtextOut
     //
     // Process console text output by Naan.
     //
     function ONtextOut(text) {
+        if curbot.naanin {
+            curbot.naanin(text)                                             // naan output -> pty subprocess
+            return
+        }
         notifyAll({
             id: "textout",
             text: text,
@@ -187,22 +203,6 @@ closure CurBot(options, local curbot) {
         })
     }
 
-    // ONmessageOut
-    //
-    // Process message output.
-    //
-    function ONmessageOut(data, local _guid) {
-        if data._guid {
-            _guid = data._guid
-            data._guid = undefined
-            curbot.sender(_guid, {
-                id: "targetout",
-                data: data
-            })
-            return
-        }
-    }
-
     // ONioctl
     //
     // Process ioctl.
@@ -236,11 +236,17 @@ closure CurBot(options, local curbot) {
  *      type:           <string>                // target category, e.g. "Local"
  *      startup:        <dictionary>            // startup options
  *      topOriginID:    <string>                // so top can route to us through IMP
+ *      rootPath:       <string>                // root path of worker's folder, must have lib/node_worker_init.nlg
+ *      node: {
+ *          // see NodeJS docs
+ *          workerData: {                       // passed to node_worker.js
+ *          }
+ *      }
  *  }
  *
  */
 
-closure NowBot(options, local nowbot, subChannel) {
+closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     global(App, js, threads, JSpath)
     nowbot = new(object, this)
     nowbot.topsubs = []
@@ -248,8 +254,14 @@ closure NowBot(options, local nowbot, subChannel) {
         type: "node-worker"
     }, options)
 
-    // options = { execArgv: ["--inspect-brk"] }                            // uncomment for NodeJS debugging
-    nowbot.thread = xnew(threads.Worker, JSpath.resolve(js.d, "lib/node_worker.js"), options)
+    nodeops = merge({
+        // execArgv: ["--inspect-brk"]          // unfortunately doesn't work; use VS Code instead
+    }, options.node)
+    if options.rootPath
+        nodeops.workerData = merge({
+            rootPath: options.rootPath
+        }, nodeops.workerData)
+    nowbot.thread = xnew(threads.Worker, JSpath.resolve(js.d, "lib/node_worker.js"), nodeops)
     subChannel = xnew(threads.MessageChannel)
     nowbot.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
     nowbot.msgport = subChannel.port2
@@ -303,6 +315,43 @@ closure NowBot(options, local nowbot, subChannel) {
                 nowbot.sender(topDestID, message)
     }
 
+    // textEntry
+    //
+    // Simulate text entry for subprocess support.
+    //
+    nowbot.textEntry = function textEntry(text) {
+        nowbot.msgport.postMessage({
+            id: "keyline"
+            text: text
+        })
+    }
+
+    // ioctl
+    //
+    // Send an ioctl to the terminal.
+    //
+    nowbot.ioctl = function ioctl(op, arg) {
+        notifyAll({
+            id: "ioctl"
+            op: op
+            arg: arg
+        })
+    }
+
+    // rawMode
+    //
+    // Configure ioctls for raw terminal operation using the spawned PTY process.
+    //
+    nowbot.rawStart = function rawStart(ptys) {
+        ptySpawned = ptys
+        ioctl("raw", true)
+        nowbot.rawStop = function rawStop() {
+            ioctl("raw", false)
+            nowbot.rawStop = undefined
+            ptySpawned = false
+        }
+    }
+
     // impReceive
     //
     // Received a payload.
@@ -314,22 +363,35 @@ closure NowBot(options, local nowbot, subChannel) {
             subscribe(sourceID)
         else if message.id == "unsubscribe"
             unsubscribe(sourceID)
-        else if message.id == "typed"
-            notifyAll(message, sourceID)
         else {
+            subscribe(sourceID)                                             // auto-subscribe
+            if message.id == "typed" {
+                notifyAll(message, sourceID)
+                return
+            }
+            if ptySpawned {                                                 // raw mode: kludgey, but works
+                if message.id == "ioctl-event" {
+                    if message.msg == "raw-key"
+                        ptySpawned.write(message.arg.key)
+                    else if message.msg == "term-resize"
+                        ptySpawned.resize(message.arg.cols, message.arg.rows)
+                }
+                if (message.id == "attached")
+                    ioctl("raw", true)                                      // restore raw mode after terminal attach
+            }
             if message.id == "keyline" && nowbot.keyin
                 nowbot.keyin(message.text)                                  // terminal keyboard -> pty subprocess
             else
                 nowbot.msgport.postMessage(message)
         }
     }
-            
+   
     // impUnknown
     //
     // Received an unknown destination notice.
     //
     nowbot.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
-        if nowbot.topsubs[unknownID] {                                      // did not have courtesy to unsubscribe!
+        if nowbot.topsubs.indexOf(unknownID) >= 0 {                         // did not have courtesy to unsubscribe!
             unsubscribe(unknownID)
             return
         }
@@ -348,9 +410,11 @@ closure NowBot(options, local nowbot, subChannel) {
             id: "terminated"
             error: error
         })
+        nowbot.dispatchEvent("terminated", nowbot.instanceID, { error: error })
+        nowbot.thread = false
         destroy()
     })
-    
+
     // onexit
     //
     // Note that the worker thread has terminated.
@@ -360,9 +424,11 @@ closure NowBot(options, local nowbot, subChannel) {
             id: "terminated"
             exitCode: exitCode
         })
+        nowbot.dispatchEvent("terminated", nowbot.instanceID, { exitCode: exitCode })
+        nowbot.thread = false
         destroy()
     })
-    
+
     // destroy
     //
     // Ensure the worker is destroyed.
@@ -370,7 +436,7 @@ closure NowBot(options, local nowbot, subChannel) {
     nowbot.destroy = function destroy() {
         terminate()
         nowbot.thread = false
-        nowbot.impconn.close()
+        nowbot.impconn.destroy()
         nowbot.impconn = false
         App.imp.unregister(nowbot.instanceID)
     }
@@ -387,35 +453,28 @@ closure NowBot(options, local nowbot, subChannel) {
             startmsg = {
                 id: "start"
                 state: false                                                // resume state, if we have any
-                altcmd: false
+                altcmd: options.startup.initcmds
                 dirpath: js.d
                 workerID: workerID
-                workerGUID: worker.guid
                 metadata: {
                     mainInstanceID: App.imp.us.instanceID
                     name: options.name
+                    maintext: options.startup.maintext.concat("\n")
                 }
             }
-            if options.startup.initcmds
-                startmsg.altcmd = options.startup.initcmds.concat("\n")
             if options.startup.dirpath
                 startmsg.dirpath = options.startup.dirpath
             nowbot.msgport.postMessage(startmsg)
             notifyAll({
                 id: "started"
             })
-        } else if msg.id == "targetsend" {
-            msg.data._guid = nowbot.guid
-            js.t.DispatchMessage({
-                id: "targetin"
-                data: msg.data
-            }) }
-        else if msg.id == "textout" && nowbot.naanin
+            nowbot.dispatchEvent("started", nowbot.instanceID)
+        } else if msg.id == "textout" && nowbot.naanin
             nowbot.naanin(msg.text)                                         // naan output -> pty subprocess
         else
             notifyAll(msg)
     })
-    
+
     // terminate
     //
     //  Terminate this worker asap.
@@ -440,6 +499,7 @@ closure NowBot(options, local nowbot, subChannel) {
     }
 
     nowbot.subprocess = MakeSubProcessor(nowbot)                            // Enable PTY subprocesses on our terminal
+    Events(nowbot)
 
     // finis
 
@@ -518,7 +578,9 @@ closure NobBot(options, local nobbot)
  * return value is a result tuple with an object that can be used to kill or monitor the 
  * subprocess.
  *
- * The subprocess can be connected in a variety of ways:
+ *      exec.subprocess(executable, args, options)
+ *
+ * The subprocess can be connected to the terminal raw, or in a variety of ways:
  *
  *                      term-keyboard   | term-display  | worker-in  | worker-out
  * -------------------------------------|---------------|------------|-----------
@@ -527,29 +589,28 @@ closure NobBot(options, local nobbot)
  *
  * Options:
  *  {
- *      input:  false | "keyboard" | "pipe"
- *      output: false | "display" | "pipe" | "tee"
- *      spawn:  <PtyManager.spawn options>
+ *      input:          false | "keyboard" | "pipe"
+ *      output:         false | "display" | "pipe" | "tee"
+ *      raw:            <boolean>
+ *      spawn:          <PtyManager.spawn options>
  *  }
  *
  */
 
 closure MakeSubProcessor(execbot) {
+    global()
     closure subprocess(
         executable, args, options, local error, pty) {
 
         // ptyData - text has been returned from the subprocess
         function ptyData(text) {
             if options.output == "display" || options.output == "tee"
-                notifyAll({                                                 // send to display
+                execbot.notifyAll({                                         // send to display
                     id: "textout",
                     text: text
                 })
             if options.output == "pipe" || options.output == "tee"
-                msg({                                                       // send to NaaN worker
-                    id: "keyline"
-                    text: text
-                })
+                execbot.textEntry(text)                                     // send to NaaN worker
         }
 
         // ptyKilled - the subprocess has terminated
@@ -558,6 +619,10 @@ closure MakeSubProcessor(execbot) {
                 execbot.keyin = false
             if execbot.naanin === naanin
                 execbot.naanin = false
+            if options.raw {
+                execbot.rawStop()
+                execbot.textEntry("\x15mu();;\n")                           // send to NaaN worker
+            }
         }
 
         // keyin - the terminal has generated text for the subprocess
@@ -570,6 +635,7 @@ closure MakeSubProcessor(execbot) {
             pty.write(text)
         }
 
+        require("./pty.nlg")                                                // load on demand
         `(error, pty) = PtyManager().spawn(executable, args, {
             ptyData: ptyData
             ptyKilled: ptyKilled
@@ -577,9 +643,17 @@ closure MakeSubProcessor(execbot) {
         if error
             return (list(error))
         if options.input == "keyboard"
-            nowbot.keyin = keyin                                            // replace existing
+            execbot.keyin = keyin                                            // replace existing
         else if options.input == "pipe"
             execbot.naanin = naanin                                         // replace existing
+        if options.raw
+            execbot.rawStart(pty)
+
+        // our worker has terminated
+        execbot.addEventListener("terminated", function() {
+            pty.kill()
+        })
+
         list(false, pty)
     }
 };

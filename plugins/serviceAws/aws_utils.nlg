@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2025 by Richard C. Zulch
+ * Copyright (c) 2021-2026 by Richard C. Zulch
  *
  */
 
@@ -27,19 +27,14 @@ closure queryPager(apiobject, procname, params, xargs, doneCB, local pending, lo
         return (list(Error("queryPager method undefined:", procname)))
     pending = new(nonce)
     looping = true
-    while looping {                                                         // loop for multiple pages
+    while looping {                                                         // loop for multiple pages or retry
         pending.reset()
         xapply(apiobject, procname, append(cons(params, xargs), cons(function (error, data) {
-            if error {
-                qpPagerError = error
-                debuglog(procname, "failed", error)
-                looping = false
-                pending.signal(list(error))
-            }
-            else {
-                looping = doneCB(data)
+            looping = doneCB(error, data)
+            if looping || !error
                 pending.signal(list(false, {ok: true}))
-            }
+            else
+                pending.signal(list(error))
         })))
         result = pending.wait()
     }

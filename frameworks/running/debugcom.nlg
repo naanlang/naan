@@ -19,9 +19,6 @@
 
 closure DebugCommand(executor, notify, local decom, excon) {
     decom = new(object, this)
-    executor.DebugCmd({
-        op: "attach"
-    })
     decom.executor = executor
 
     // debugData
@@ -96,6 +93,24 @@ closure DebugCommand(executor, notify, local decom, excon) {
         status
     }
 
+    // query
+    // Send a status update back.
+    //
+    decom.query = function query() {
+        decom.executor.DebugCmd({
+            op: "query"
+        })
+    }
+    
+    // attach
+    // Attach our GUI to the low-level debugger
+    //
+    decom.attach = function attach() {
+        executor.DebugCmd({
+            op: "attach"
+        })
+    }
+
     //
     // Run control.
     //
@@ -137,6 +152,8 @@ closure DebugCommand(executor, notify, local decom, excon) {
         decom.running = true
         notify.runState(debugStatus())
     }
+
+    attach()
 
     // finis
     

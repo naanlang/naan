@@ -10,93 +10,24 @@
  *
  */
 
-/*
- * globals
- *
- */
-
-gWorkers;
-
-
-/*
- * ioctl terminal control and events
- *
- * Example "raw" mode:
- *
-    // rawTest
-    // echo typed keystrokes in BOLD until Control-C stops it.
-    //
-    closure rawTest(local dokey) {
-        dokey = xnew(function(msg, arg) {
-            if arg.key == "\x03" {
-                js.t.ioctl("raw", false)
-                js.t.ioctl_remove_listener("raw-key", dokey)
-            }
-            else
-                print("\x1b[1m${arg.key}\x1b[22m")
-        })
-        js.t.ioctl_add_listener("raw-key", dokey)
-        js.t.ioctl("raw", true)
-    };
-    
-    rawTest();
- *
- *
- * Example echo control:
- *
-    js.t.ioctl("echo", 0)                       // no echo at all
-    js.t.ioctl("echo", 1)                       // echo newlines (best for hiding REPL commands)
-    js.t.ioctl("echo", 2)                       // normal echo
-
-    js.t.ioctl("sane")                          // restore echo and raw
- *
- *
- * Example simulated keystrokes:
- *
-    future(function(){ js.t.ioctl("keystroke", "joe") }, 10);               // "joe" in keyboard buffer
- *
- *
- * Example terminal resize notification:
- *
-    doresize = xnew(function(msg, dim) { printline("(${dim.cols}, ${dim.rows})")})
-    js.t.ioctl_add_listener("term-resize", doresize);
- *
- *
- * Example terminal connection notification:
- *
-    // add removable listener:
-    listener = xnew(function(msg,arg) { debuglog("listener:", msg, arg) });
-    js.t.ioctl_add_listener("term-attach", listener);
-    js.t.ioctl_add_listener("term-detach", listener);
-
-    // remove the listeners:
-    js.t.ioctl_remove_listener("term-attach", listener);
-    js.t.ioctl_remove_listener("term-detach", listener);
- *
- * Note that js.t.ioctl(...) controls the *terminal* even if attached to a different instance. But
- * ioctl event listeners are attached to an *instance* regardless of what terminal is connected.
- * But in general it does the "right thing" for multiple terminals on a single instance, and when
- * switching among instances.
- *
- */
-
 
 /*
  * TermHost
  *
- *     Make an Nide API Server debugger target.
+ *     Make a debugger target on our Host NaanIDE Server or a remote one.
  *
  * Options:
  *  {
- *      type: <string>                          // target category, e.g. "Host", "api.yyy.com"
- *      workerID: <string>                      // kind of worker in server subsystem
- *      startup: <dictionary>                   // startup options
+ *      serverID:     <string>                  // target server if not our Host
+ *      type:       <string>                    // target category, e.g. "Remote", "api.yyy.com"
+ *      workerID:   <string>                    // kind of worker in server subsystem
+ *      startup:    <dictionary>                // startup options
  *  }
  *
  */
 
 closure TermHost(track, name, options,
-    local relay, error, destID, target, xc)
+    local relay, error, serverID, targetID, target, xc)
 {
     global(App)
 
@@ -105,15 +36,20 @@ closure TermHost(track, name, options,
     // Find the host instance name/type, or create new remote worker. The default for no name/type is
     // the server itself.
     //
-    function findHostInstance(relay, name, type, local error, found, dest, worker) {
-        `(error, found) = relay.clients()
-        if !error {
-            dest = found.find(function(item) { item.name == "NaanIDE Server" && item.type == "Server IMP" })
-            if !dest
-                error = Error("cannot locate host")
+    function findHostInstance(relay, name, type,
+        local error, found, dest, worker) {
+        if !serverID {
+            `(error, found) = relay.clients()
+            if !error {
+                dest = found.find(function(item) { item.name == "NaanIDE Server" && item.type == "Server IMP" })
+                if dest
+                    serverID = dest.destID
+                else
+                    error = Error("cannot locate host")
+            }
         }
         if !error
-            `(error, found) = relay.clients(dest.destID)
+            `(error, found) = relay.clients(serverID)
         if !error {
             if name && type {
                 dest = found.find(function(item) { item.name == name && item.type == type })
@@ -143,6 +79,7 @@ closure TermHost(track, name, options,
                     name: name
                     type: options.type
                     startup: options.startup
+                    rootPath: options.rootPath || undefined
                     topOriginID: App.imp.us.instanceID
                 })
             if error
@@ -162,10 +99,11 @@ closure TermHost(track, name, options,
         return (list(false, target))                                        // already exists
 
     relay = require("naanlib:frameworks/client/relaycon.nlg").RelayCon(App.imp)
+    serverID = options.serverID
     if options.workerID == "NideServer"                                     // server main thread
-        `(error, destID) = findHostInstance(relay)
+        `(error, targetID) = findHostInstance(relay)
     else
-        `(error, destID) = findHostInstance(relay, name, options.type)
+        `(error, targetID) = findHostInstance(relay, name, options.type)
     relay.close()
     if error
         return (list(error))
@@ -174,9 +112,10 @@ closure TermHost(track, name, options,
         name: name
         type: options.type
     })
-    target.workerID = options.workerID
+    target.serverID = serverID                                              // server instanceID
+    target.workerID = options.workerID                                      // worker on server instanceID
 
-    `(error) = target.open(destID)
+    `(error) = target.open(targetID)
     if error
         return (list(Error("cannot create InTop", error)))
 
@@ -201,11 +140,9 @@ closure TermHost(track, name, options,
  *
  */
 
-closure TermLocal(track, name, options, local target, worker, inbot, error)
+closure TermLocal(track, name, options, local target, worker, wowbot, error)
 {
-    global(js, window, gWorkers)
-    if !dictionary(gWorkers)
-        gWorkers = {}
+    global(js, window)
     options = merge({
         type: "Local"
     }, options)
@@ -221,7 +158,7 @@ closure TermLocal(track, name, options, local target, worker, inbot, error)
         return (list(false, target))                                        // already exists
 
     worker = xnew(window.Worker, "env_webworker.js")
-    inbot = NubBot(worker, {
+    wowbot = WowBot(worker, {
         name: name
         type: options.workerID
         startup: options.startup
@@ -231,7 +168,7 @@ closure TermLocal(track, name, options, local target, worker, inbot, error)
         type: options.type
         workerID: options.workerID
     })
-    `(error) = target.open(inbot.instanceID)
+    `(error) = target.open(wowbot.instanceID)
     if error
         return (list(Error("cannot create InTop", error)))
 
@@ -271,7 +208,7 @@ closure findIDEtarget(track, name, workerID, title, naancont, local target) {
  */
 
 closure termIDE(track, name, workerID, naancont, title, local target, connected) {
-    global(js, gWorkers)
+    global(js)
     target = findIDEtarget(track, name, workerID, title, naancont)
     if target {                                                             // new naancont on existing target
         if target.naancont && naancont !== target.naancont
@@ -282,23 +219,23 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         return (target)
     }
     target = require("../running/executors.nlg").ExecutorBase(track, "Local", name)
+    target.dispatcher = require("../running/taskexec.nlg").TaskDispatcher(false, false, "termIDE")
     target.name = name
     target.title = title
     target.workerID = workerID
     target.naancont = naancont
     naancont.ioctl_open(ioctl_callback.proc)
     connected = []
-    
-    // replyHook
+
+    // PostMessage
     //
-    //     Intercept the ReplyMessage function to see if we should handle it.
+    // Process a message through the dispatcher.
     //
-    function replyHook(data) {
-        if data._guid
-            gWorkers[data._guid].worker.postMessage({
-                id: "targetreceive"
-                data: data
-            })
+    target.PostMessage = function PostMessage(data) {
+        target.dispatcher(data, function(reply) {
+             target.execReceived(reply)
+        })
+        list(false, { posted: true })
     }
 
     // ioctl_callback
@@ -323,15 +260,6 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         naancont.DispatchDebugger(data)
     }
 
-    // target.PostMessage
-    //
-    //     Post a message to the target, ourselves.
-    //
-    target.PostMessage = function PostMessage(data) {
-        naancont.DispatchMessage(data)
-        list(false, { posted: true })
-    }
-
     // termAttach
     //
     // Create a closure for an attaching terminal.
@@ -350,11 +278,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     
         function onstatus(status) {
             target.execSetStatus(status)
-            statusCB(target, status)
-        }
-    
-        function onmessageout(data) {
-            target.execReceived(data)
+            notify.execStatus(target, status)
         }
     
         function ondebugout(data) {
@@ -399,7 +323,6 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
                 OnMessage: jsterm.OnMessage
                 StateSave: jsterm.StateSave
                 OnStatus: onstatus.proc
-                OnMessageOut: onmessageout.proc
                 OnDebugOut: ondebugout.proc
             })
             naancont.Attach(inbound)
@@ -516,7 +439,6 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         track.delete(target)
     }
 
-    js.t.OnReplyHook(replyHook.proc)
     track.add(target)
 
     // finis
@@ -534,7 +456,7 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
  */
 
 closure termInstallVirtualWatcher(track, naancont) {
-    global()
+    global(js)
 
     function watchVsites(msg, local error, target) {
         if msg.op == "VsiteOpen" {
@@ -553,7 +475,7 @@ closure termInstallVirtualWatcher(track, naancont) {
         }
     }
     
-    require("../running/executors.nlg").TaskOnMessageHook(watchVsites)
+    js.t.OnMessage(watchVsites.proc)
 };
 
 
@@ -653,8 +575,8 @@ closure relayTab(destID, local comMod, relay, error, found, dest, xc, reterm, or
     if error
         return (list(Error("cannot get remote terminal", error)))
     originID = App.imp.us.instanceID
-    `(error, inbot) = xc.evalq(InBot(window, {
-        name: "inbot"
+    `(error, inbot) = xc.evalq(MewBot(window, {
+        name: "mewbot"
         type: reterm.workerID
         topOriginID: originID
     }), `(reterm, originID))

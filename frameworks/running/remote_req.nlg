@@ -24,20 +24,16 @@
  *
  */
 
-function RemoteRequester(destID, options, local track)
+closure RemoteRequester(destID, options, local track)
 {
     global(App)
-    options = merge({
-        name: "Remote Eval"
-        type: "RemoteRequester"
-    }, options)
 
     // remoteReq
     //
     // Executes on our worker thread to return an execution instance that can be used to create a
     // proxy for remote evaluation.
     //
-    closure remoteReq(track, name, options, local target) {
+    closure remoteReq(track, name, local target) {
         target = ExecutorBase(false, "proxy", options.name)
         target.instanceID = UUID()
     
@@ -94,8 +90,8 @@ function RemoteRequester(destID, options, local track)
     }
 
     options = merge({
-        name: "RemoteRequester"
-        proxy: "proxy"
+        name: "Remote Eval"
+        type: "Remote Requester"
     }, options)
     track = ExecutorTracker()
     track.register(options.type, remoteReq)

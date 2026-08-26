@@ -402,10 +402,12 @@ closure Imp(us, local imp) {
                 info.name = dest.name
                 info.type = dest.type
                 info.meta = dest.meta
+                dest.conn.dispatchEvent("active", info)
                 imp.dispatchEvent("active", info)
             }, 0)
             if initiator
                 send_hello(destID)                                          // start the handshake
+            dest.conn.dispatchEvent("opening", info)
             imp.dispatchEvent("opening", info)
         }
 
@@ -415,6 +417,7 @@ closure Imp(us, local imp) {
             dest.state = `closed
             if !initiator
                 dest.destID = undefined                                     // ### reset for non-persistent clients
+            dest.conn.dispatchEvent("closed", info)
             imp.dispatchEvent("closed", info)
         }
 
@@ -423,6 +426,7 @@ closure Imp(us, local imp) {
             if dest.state != `closed
                 close()
             imp.pipes[destID] = undefined
+            dest.conn.dispatchEvent("destroyed", info)
             imp.dispatchEvent("destroyed", info)
         }
 
@@ -651,12 +655,23 @@ closure ImpConn(dispatcher, sender, wait, open, close, destroy,
     global()
     impco = new(object, this)
 
+    // reopen
+    //
+    // Reopen the connection with a delay to let events process.
+    //
+    impco.reopen = closure reopen() {
+        close()
+        sleep(10)
+        open()
+    }
+
     impco.dispatch = dispatcher.proc
     impco.send = sender.proc
     impco.wait = wait.proc
     impco.open = open.proc
     impco.close = close.proc
     impco.destroy = destroy.proc
+    Events(impco)
 
     // finis
 

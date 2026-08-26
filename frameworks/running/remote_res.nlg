@@ -32,7 +32,7 @@ closure RemoteResponder(destID, options, local remo, name)
         type: "Remote Responder"
     }, options)
     remo = ExecutorBase(App.nide.track, "remote-responder", name)
-    remo.dispatcher = TaskDispatcher()
+    remo.dispatcher = TaskDispatcher(false, false, "RemoteResponder")
     remo.instanceID = destID || UUID()
     remo.sender = App.imp.register(remo, {
         name: options.name

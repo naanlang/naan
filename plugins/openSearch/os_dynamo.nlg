@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023-2025 by Richard C. Zulch
+ * Copyright (c) 2023-2026 by Richard C. Zulch
  *
  */
 
@@ -41,6 +41,7 @@
 
 closure OSDynIndexer(index, table, options,
     local dbOptions, scanPending, indexPending, updatePending, output, error, records, data, ids) {
+    global()
     if !options.converter
         return (Error("OSDynIndexer: options.converter is required"))
     dbOptions = {
@@ -78,7 +79,7 @@ closure OSDynIndexer(index, table, options,
     //
     // Batch index documents into OpenSearch, returning a nonce signaled with ids array.
     //
-    closure batchIndex(records, local pending) {
+    closure batchIndex(records, local pending, docs) {
         pending = new(nonce)
         docs = asyncArray(records, 10, closure(record) {
             options.converter(record)

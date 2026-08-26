@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023 by Richard C. Zulch
+ * Copyright (c) 2023-2026 by Richard C. Zulch
  *
  */
 
@@ -53,6 +53,7 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
     osin = new(object, this)
     if symbol(indexName)
         indexName = indexName.tostring()
+    osin.name = indexName
     osin.analyzers = {                                                      // map names, language to analyzer
         english: "english"
         hashtag: "hashtag"
@@ -335,7 +336,7 @@ closure openSearchIndex(prosc, indexName, ioptions, local osin) {
                 `(error, data) = prosc.request(indexName.concat("/_bulk"), {
                     method: "POST"
                     putdata: docs
-                    contentType: "application/json"
+                    contentType: "application/x-ndjson"
                 })
             if data
                 data = data.items.map(function(item) {

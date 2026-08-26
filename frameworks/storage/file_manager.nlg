@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2024 by Richard C. Zulch
+ * Copyright (c) 2020-2026 by Richard C. Zulch
  *
  */
 
@@ -31,6 +31,7 @@ closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
     watch = commonWatching.Watchable()
     files.watch = watch.watch                                               // watch for file changes
     files.unWatch = watch.unwatch                                           // stop watching for file changes
+    hadgit = { }
 
     // compareNodes
     //
@@ -460,7 +461,7 @@ closure FileManager(fs, options, local files, watch, opqueue, willgit, hadgit) {
                 unknownFiles = []
                 unknownFileStatus = {}
                 delgit = hadgit
-                hadgit = {}
+                hadgit = { }
                 willgit = false
                 for item in statlist {
                     hadgit[item.path] = 1

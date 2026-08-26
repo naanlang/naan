@@ -171,7 +171,7 @@ exports.NaanControllerWeb = function() {
         if (repdex < 0)
             termlist.push(terminal);
         takePending();                                                      // output all pending terminal messages
-        this.ioctl_event("term-attach", "");
+        this.ioctl_event("term-attach", terminal.guid);
     };
 
     //
@@ -186,7 +186,7 @@ exports.NaanControllerWeb = function() {
             termlist.splice(repdex, 1);
         if (termlist.length === 0)
             replstate = terminal.StateSave();                               // save ultimate repl state
-        this.ioctl_event("term-detach", "");
+        this.ioctl_event("term-detach", terminal.guid);
     };
 
     //
@@ -218,24 +218,6 @@ exports.NaanControllerWeb = function() {
         window.setTimeout(function () {
             naanlib.textLine(text);
         }, 1);
-    };
-
-    var replyHook;
-    this.OnReplyHook = function OnReplyHook(proc) {
-        replyHook = proc;
-        return (proc);
-    };
-
-    this.ReplyMessage = function ReplyMessage(data) {                       // "remote" -> "local"
-        if (replyHook)
-            setTimeout(function() {
-                replyHook(data);
-            }, 1);
-        termlist.forEach(function(term) {
-            if (term.OnMessageOut)
-                term.OnMessageOut(data);
-        });
-        return (data);
     };
 
     var nideListener;
@@ -425,6 +407,7 @@ exports.NaanControllerWeb = function() {
             }
             else if (msg.id == "targetin")
             {
+                console.log("env_web targetin");
                 if (nideListener)
                     nideListener(msg.data);                                 // target received a message
             }
@@ -444,17 +427,6 @@ exports.NaanControllerWeb = function() {
             msg.scope = "naan-env-web";
             windest.postMessage(msg, origin);
             return (msg);
-        };
-
-        //
-        // report messages back to opener
-        //
-        termSelf.OnMessageOut = function OnMessageOut(data) {
-            var msg = {                                                     // target is sending debug data
-                id: "targetout",
-                data: data
-            };
-            return (termSelf.OnMessage(msg));
         };
 
         //

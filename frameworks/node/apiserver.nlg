@@ -126,7 +126,6 @@ closure APIServer(options, local server, chroot) {
             return (list(error))
         }
         server.hostfs = hostfs
-        server.workco = workerMod.WorkerController()
         server.Register(server.workco.serverID, server.workco)
 
         list(false, port)

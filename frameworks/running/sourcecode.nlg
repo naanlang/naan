@@ -25,7 +25,6 @@
 closure CodeManager(options,  local coman, cache)
 {
     coman = modlist().CLI.exports.Utils(options)
-    coman.independent = new(nonce)                                          // caches are ephemeral
 
     // composite
     //
@@ -70,6 +69,8 @@ closure CodeManager(options,  local coman, cache)
         else
             modname = "<".concat(sym.namespace.tostring, ">")               // create independent module
         compname = "<".concat(sym, ">")                                     // create independent component
+        if !coman.independent
+            coman.independent = new(nonce)                                  // ephemeral cache
         coman.independent[modname.concat(":-:", compname)] = CodeComposite(coman, sym, modname, compname)
     }
     
@@ -114,7 +115,7 @@ closure CodeManager(options,  local coman, cache)
     coman.cacheAdd = function cacheAdd(cocode, manifest, local item, mandefs) {
         for item in manifest
             push(item.proc, mandefs)
-        cacne = new(nonce)
+        cache = new(nonce)
         cache.modname = cocode.modname
         cache.compname = cocode.compname
         cache.mandefs = mandefs

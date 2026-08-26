@@ -124,6 +124,7 @@ function nodrInit(local manifest) {
         throw("module frameworks/node cannot be used from a browser")
     Naan.module.build(module.id, "node", function(modobj, compobj) {
         require("../common/").LiveImport()
+        require("../common/events.nlg")
         commonWatching = require("../common/watching.nlg")
         compobj.manifest = manifest
         function nodrReload() {

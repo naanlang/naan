@@ -30,13 +30,13 @@ closure NodeWorkerNub(imp, options, local nownub) {
     }, options)
     nownub = new(object, this)
     nownub.instanceID = imp.us.instanceID || UUID()
-    nownub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher()
+    nownub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher(false, false, "NodeWorkerNub")
 
     // impReceive
     //
     // Receive a remote request and reply to it.
     //
-    nownub.impReceive = function impReceive(message, sourceID) {
+    nownub.impReceive = closure impReceive(message, sourceID) {
         if message.id == "targetin"
             nownub.dispatcher(message.data, function(reply) {
                 nownub.sender(sourceID, {
@@ -45,7 +45,7 @@ closure NodeWorkerNub(imp, options, local nownub) {
                 })
             })
     }
-            
+
     // impUnknown
     //
     // Received an unknown destination notice from the other side.
@@ -53,6 +53,37 @@ closure NodeWorkerNub(imp, options, local nownub) {
     nownub.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
         if !gateway
             debuglog("NodeWorkerNub.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // mainContext
+    //
+    // Convenience method to get the main thread and its remote context.
+    //
+    nownub.mainContext = function mainContext(local error, mtx, ctx) {
+        if !(mtx = nownub.mtx) {
+            `(error, mtx) = require("../running/remote_req.nlg").MainThread()
+            if error
+                return (list(error))
+            nownub.mtx = mtx
+        }
+        `(error, ctx) = mtx.context()
+        if error
+            list(error)
+        else
+            list(false, ctx, mtx)
+    }
+
+    // execProxy
+    //
+    // Get a proxy object for our executor on the main thread.
+    //
+    nownub.execProxy = closure execProxy(error, ctx, execID, exec) {
+        `(error, ctx) = mainContext()
+        if !error
+            `(error, execID) = ctx.eval(subatq(App.imp.pipes.destID.info.ourID, [list(`destID, nownub.instanceID)]))
+        if !error
+            `(error, exec) = ctx.eval(subatq(App.imp.direct.execID.obj, [list(`execID, execID)]))
+        list(error, exec)
     }
 
     // message event
@@ -82,7 +113,7 @@ closure NodeWorkerNub(imp, options, local nownub) {
     })
 
     // finis
-    
+
     App.workerNub = nownub
 };
 

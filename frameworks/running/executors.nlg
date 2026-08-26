@@ -5,7 +5,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2024 by Richard C. Zulch
+ * Copyright (c) 2020-2026 by Richard C. Zulch
  *
  */
 
@@ -65,7 +65,7 @@ closure ExecutorBase(track, type, name, local exec) {
                 exec.reverseDispatch = require("./taskexec.nlg").TaskDispatcher(function(data) {
                     data.reverse = true
                     exec.PostMessage(data)
-                }, exec.contexts[data.contextID].coder)
+                }, exec.contexts[data.contextID].coder, "execReceived")
             data.reverse = false
             exec.reverseDispatch(data)
             return
@@ -73,7 +73,7 @@ closure ExecutorBase(track, type, name, local exec) {
         pending = exec.pending[data.xid]
         if !pending {                                                       // not waiting on message
             if data.xmsg == "xready"
-                exec.pending.ready = true
+                exec.inst_ready = true
             if data.xmsg == "xattention"
                 { }
             return
@@ -99,7 +99,7 @@ closure ExecutorBase(track, type, name, local exec) {
     // Communication has failed.
     //
     exec.execFailed = closure execFailed(error, local xid, pending) {
-        exec.pending.error = error
+        exec.inst_error = error
         for `(xid, pending) in exec.pending
             pending.signal(list(error))
     }
@@ -112,7 +112,7 @@ closure ExecutorBase(track, type, name, local exec) {
     exec.execClosed = closure execClosed(error, local xid, pending) {
         for `(xid, pending) in exec.pending {
             pending.signal(list(error))
-            pending[xid] = undefined
+            exec.pending[xid] = undefined
         }
     }
         
@@ -127,7 +127,7 @@ closure ExecutorBase(track, type, name, local exec) {
         retries = 0
         ms = milliseconds()
         delta = 1
-        while !exec.pending.ready {
+        while !exec.inst_ready {
             `(error) = exec.PostMessage({
                 xmsg: "xstart"
             })
@@ -135,8 +135,8 @@ closure ExecutorBase(track, type, name, local exec) {
                 return (Error("exec.context failed", error))
             if ++retries > 100
                 return (list(Error("timeout creating remote context", type, name)))
-            if exec.pending.error
-                return (list(Error("cannot create remote context", exec.pending.error)))
+            if exec.inst_error
+                return (list(Error("cannot create remote context", exec.inst_error)))
             sleep(delta)
             if delta < 100
                 delta *= 2 }
@@ -566,13 +566,13 @@ closure ExecutorParallel(track, options, local maxcount, parallel, state, exqueu
             return (false)                                                  // already destroyed
         crValue = cancelResult
         maxcount = 0
-        state.available = false
-        parallel.contexts = false
         while state.workers.length > 0 {
             worker = state.workers.pop()
             parallel.contexts[worker] = false
             worker.destroy()
         }
+        state.available = false
+        parallel.contexts = false
         while exqueue.length > 0 {
             next = exqueue.pop()
             next.pending.signal(crValue)
@@ -604,8 +604,10 @@ closure ExecutorTracker(local xtrak) {
     // Notify the watchers by calling a named procedure
     
     closure notify(changes, local watch) {
-        for watch in xtrak.watchers
-            call(watch, changes)
+        future(function(){
+            for watch in xtrak.watchers
+                call(watch, changes)
+        }, 10)
     }
 
     // add

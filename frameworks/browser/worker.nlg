@@ -2,7 +2,7 @@
  * worker.nlg
  * Naanlib/frameworks/browser
  *
- * Manage NaaN instances.
+ * Manage web-based NaaN instances.
  *
  * NaaN instances are managed by a top/bottom pair of of objects. InBot (INstance BOTtom) objects
  * reside in the same JavaScript environment (node/browser) as their worker and communicate with the
@@ -24,7 +24,8 @@
  *
  * Create a remote interface for a single execution instance, returning the object. This provides
  * instance access to zero or more InTops via IMP connections. The tops subscribe to receive
- * notifications/responses.
+ * notifications/responses. This runs in the main thread and communicates with the worker via the
+ * standard JS messaging interface.
  *
  * Options:
  *  {
@@ -32,7 +33,6 @@
  *      type:       <string>                    // target category, e.g. "Local"
  *      startup:    <dictionary>                // startup options
  *      workerID:   <string>                    // initialize worker with this
- *      workerGUID: <string>                    // initialize worker with this
  *      topOriginID:  <string>                  // so top can route to us through IMP
  *  }
  *
@@ -148,10 +148,10 @@ closure InBot(worker, options, local inbot)
                     state: false                                            // resume state, if we have any
                     altcmd: options.startup.initcmds
                     workerID: options.workerID
-                    workerGUID: options.workerGUID
                     metadata: {
                         mainInstanceID: App.imp.us.instanceID
                         name: options.name
+                        maintext: options.startup.maintext.concat("\n")
                     }
                 })
             inbot.started = true
@@ -164,10 +164,14 @@ closure InBot(worker, options, local inbot)
     // The worker had an error.
     //
     inbot.worker.addEventListener("error", function(e) {
-        debuglog("worker error:", e.message)
+        debuglog("worker error:", e.message, "in", e.filename, "at", e.lineno)
         notifyAll({
             id: "error"
-            data: e.message
+            data: {
+                message: e.message
+                filename: e.filename
+                lineno: e.lineno
+            }
         })
         inbot.worker = false
         destroy()
@@ -185,12 +189,10 @@ closure InBot(worker, options, local inbot)
         notifyAll({
             id: "terminated"
         })
-        inbot.impconn.close()
+        inbot.impconn.destroy()
         inbot.impconn = false
         App.imp.unregister(inbot.instanceID)
     }
-
-    // register our connects *after* the receivers are configured above
 
     // finis
 
@@ -199,41 +201,77 @@ closure InBot(worker, options, local inbot)
 
 
 /*
- * NubBot
+ * MewBot
  *
- * Create a remote interface like InBot, but also provide messaging support for WebWorkerNub inside
- * the worker.
+ * Create a remote InBot interface for the Main WEb browser thread.
  *
  */
 
-closure NubBot(worker, options, local nubbot)
+closure MewBot(exec, options, local mewbot, inbot_impReceive)
 {
     global(App)
-    nubbot = InBot(worker, options)
+    mewbot = InBot(exec, options)
+    mewbot.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher()
+    inbot_impReceive = mewbot.impReceive
+
+    // impReceive
+    //
+    // Received a message from InTop.
+    //
+    mewbot.impReceive = function impReceive(message, sourceID) {
+        if message.id == "targetin"
+            mewbot.dispatcher(message.data, function(reply) {
+                mewbot.sender(sourceID, {
+                    id: "targetout",
+                    data: reply
+                })
+            })
+        else
+            inbot_impReceive(message, sourceID)
+    }
+
+    // finis
+
+    mewbot
+}
+
+
+/*
+ * WowBot
+ *
+ * Create a remote InBot interface for WebWorkerNub running in the worker. This forwards remoting
+ * messages to the worker so they can be handled in the correct place.
+ *
+ */
+
+closure WowBot(worker, options, local wowbot)
+{
+    global(App)
+    wowbot = InBot(worker, options)
 
     App.imp.addEventListener("active", function(event, info) {
-        if info.ourID == nubbot.instanceID {
-            nubbot.workerDestID = info.destID                               // handshake completed
-            nubbot.notifyAll({                                              // send to tops
+        if info.ourID == wowbot.instanceID {
+            wowbot.workerDestID = info.destID                               // handshake completed
+            wowbot.notifyAll({                                              // send to tops
                 id: "workerDestID"
-                workerDestID: nubbot.workerDestID
+                workerDestID: wowbot.workerDestID
             })
         }
     })
 
-    nubbot.impconn = App.imp.responder(function(data) {
-        nubbot.worker.postMessage({                                         // send to worker
-            scope: "naan-imp-web"                                           // scoped for WorkerNub
+    wowbot.impconn = App.imp.responder(function(data) {
+        wowbot.worker.postMessage({                                         // send IMP messages to worker
+            scope: "naan-imp-web"                                           // scoped for WebWorkerNub
             data: data
         })
         list(false, { sent: true })
     }, {
-        ourID: nubbot.instanceID
+        ourID: wowbot.instanceID
     })
 
     // finis
 
-    nubbot
+    wowbot
 };
 
 
@@ -245,11 +283,13 @@ closure NubBot(worker, options, local nubbot)
  */
 
 function workInit(local manifest) {
-    manifest = `(InBot, NubBot, workInit)
+    manifest = `(InBot, MewBot, WowBot, workInit)
 
     Naan.module.build(module.id, "worker", function(modobj, compobj) {
         require("./browser.nlg")
         compobj.manifest = manifest
         modobj.exports.InBot = InBot
+        modobj.exports.MewBot = MewBot
+        modobj.exports.WowBot = WowBot
     })
 } ();

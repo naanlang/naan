@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2024-2025 by Richard C. Zulch
+ * Copyright (c) 2024-2026 by Richard C. Zulch
  *
  */
 
@@ -28,7 +28,7 @@
  */
 
 closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
-    global(js, compress)
+    global(js, compress, App)
     shob = new(object, this)
 
     // readline
@@ -78,6 +78,26 @@ closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
         pending.wait()
     }
 
+    // pty
+    //
+    // Execute a shell command in a PTY terminal with optional current-working-directory.
+    //
+    shob.pty = closure pty(cmd, args, cwd, local exec, error, options, ptyp) {
+        exec = App.exec
+        if !exec
+            `(error, exec) = App.workerNub.execProxy()
+        if !error {
+            options = { input:"keyboard", output:"display", raw:true }
+            if cwd
+                options.spawn = { cwd: cwd }
+            `(error, ptyp) = exec.subprocess(cmd, args, options)
+        }
+        if ptyp
+            list(false, ptyp)
+        else
+            exec(cmd, args, cwd)
+    }
+
     // shellparser
     // intercept command-line parsing and look for a !shell escape
     function shellparser(source, grammar, operators, local token, text) {
@@ -89,7 +109,10 @@ closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
                 atom: `;;
                 loc: tuple(0, text.length)
             })
-            exec("bash", ["-c", text], js.d)                                // default directory: js.d
+            if text == "\n"
+                pty()
+            else
+                exec("bash", ["-c", text], js.d)                            // default directory: js.d
 	    }
         else {
             source.tokenpush(token)

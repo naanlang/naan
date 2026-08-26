@@ -19,7 +19,7 @@ serviceMod;;
 /*
  * APIClient
  *
- * Make an API client object.
+ * Make an API client object. If you want websockets, and you do, call connect() on the object.
  *
  * Options:
  *  {
@@ -46,18 +46,20 @@ closure APIClient(imp, options, local client, url, guid) {
     client.requester = clirRequester()
 
     //
-    // wsopen
+    // connect
     //
 
-    client.wsopen = function wsopen(error) {
-        if !client.wesc {
+    client.connect = function connect(error) {
+        if !client.wesc
             client.wesc = WebSocketClient(options, imp)
-            `(error) = client.wesc.connect()
-            if error
-                ErrorDebuglog("APIClient: cannot connect to", url)
+        `(error) = client.wesc.connect()
+        if error {
+            ErrorDebuglog("APIClient: cannot connect to", url, error)
+            return (list(error))
         }
+        client.serverID = client.wesc.serverID                              // serverID
+        list(false, { connected: true })
     }
-    wsopen()
 
     // clientRequest() - append our guid to the headers
 
@@ -178,10 +180,12 @@ closure APIClient(imp, options, local client, url, guid) {
     // Close down the client and release all resources.
     //
     client.destroy = closure destroy() {
-        debuglog("client destroy websocket")
+        debuglog("API client destroyed")                                    // ### not pretty, but uncommon
         client.wesc.destroy()
         client.wesc = false
     }
+    
+    // finis
 
     client
 };
@@ -197,25 +201,38 @@ closure APIClient(imp, options, local client, url, guid) {
  *  {
  *      url:            <string>                // hostname or URL of the remote server
  *      guid:           <string>                // shared secret for access to remote server
- *      instanceID:     <string>                // UUID for our client; can be persisted by caller
  *  }
  *
  */
 
-closure WebSocketClient(options, imp, local wesc, ws) {
+closure WebSocketClient(options, imp, local wesc, ws, pending) {
     global(js)
     wesc = new(object, this)
+
+    // reconnect
+    //
+    // Attempt to reconnect if needed, returning false on success or an error tuple otherwise.
+    //
+    function reconnect() {
+        if !ws || wesc.fatal || pending {
+            connect()                                                       // try to connect
+            if wesc.fatal
+                return (list(wesc.fatal))
+        }
+        false
+    }
 
     // connect
     //
     // Establish a websocket connection with the host.
     //
-    wesc.connect = closure connect(local url, pending) {
-        if ws && !wesc.fatal
-            return(list(false, { connected: true }))
-        if wesc.fatal
-            debuglog("WebSocketClient reopen")
-        wesc.fatal = false
+    wesc.connect = closure connect(local url, result) {
+        if ws {
+            if pending
+                return (pending.wait())                                     // connect in process
+            if !wesc.fatal
+                return(list(false, { connected: true }))                    // already open
+        }
         try {
             url = xnew(js.w.URL, options.url)
         } catch {
@@ -226,27 +243,35 @@ closure WebSocketClient(options, imp, local wesc, ws) {
         else
             url.protocol = "ws:"
         ws = xnew(js.w.WebSocket, url.href)
+        if wesc.fatal
+            debuglog("WebSocketClient reopen")                              // ### not pretty to see this
+        wesc.fatal = false
         pending = new(nonce)
-    
+
         // onopen
         // The WebSocket connection is now open.
-        ws.onopen = function onopen(e, local error) {
+        ws.onopen = function onopen(e) {
+            if wesc.impconn {
+                result = wesc.impconn.reopen()
+                pending.signal(result)
+                return
+            }
             wesc.impconn = imp.requester(function(data) {
-                if wesc.fatal                                               // raw send function
-                    return (list(wesc.fatal))
+                if !pending && reconnect()                                  // !pending means not opening/reopening
+                    return                                                  // failed to reconnect
                 ws.send(js.w.JSON.stringify(data))
                 list(false, { sent: true })
             }, {
                 secret: options.guid
                 label: "api-server"
-                wesc: wesc
             })
-            if error
-                pending.signal(list(error))
-            else
+            wesc.impconn.addEventListener("active", function (event, info) {
+                wesc.serverID = info.destID                                 // serverID we connected to
                 pending.signal(list(false, { ok: true }))
+                pending = false
+            })
         }
-    
+
         // onmessage
         // A message was received via WebSockets.
         ws.onmessage = function onmessage(e, local error, message) {
@@ -256,9 +281,11 @@ closure WebSocketClient(options, imp, local wesc, ws) {
                 if wesc.impconn.dispatch(message)
                     return
             }
-            debuglog("socket message:", e.data)
+            pending.signal(list(Error("incompatible responder")))
+            pending = false
+            debuglog("socket message:", e.data)                             // unexpected incoming data
         }
-    
+
         // onerror
         // An error occurred on the WebSocket connection.
         // This can happen in normal operation when the connection times out.
@@ -266,35 +293,34 @@ closure WebSocketClient(options, imp, local wesc, ws) {
             if !wesc.fatal
                 wesc.fatal = Error("websocket failed", e)
             pending.signal(list(wesc.fatal))
+            pending = false
         }
         
         // onclose
         // The WebSocket connection was closed.
         ws.onclose = function onclose(e) {
             // if e.code != 1000 && e.code != 1001 && e.code != 1005 && e.code != 1006
-                debuglog("WebSocketClient: closed:", e.code, e.reason)
+                debuglog("WebSocketClient: closed:", e.code, e.reason)      // ### not pretty to see this
             ws = false
             if !wesc.fatal
                 wesc.fatal = Error("websocket closed", e.code, e.reason)
             pending.signal(list(wesc.fatal))
-            wesc.impconn.close({
-                code: e.code
-                reason: e.reason
-            })
-            wesc.impconn = false
+            pending = false
         }
 
-        pending.wait()
+        result = pending.wait(10000, list(Error("IMP connection timeout")))
+        pending = false
+        result
     }
-    
+
     // close
     //
     // Close the connection, but can be opened again with connect().
     //
     wesc.close = function close() {
-        if !ws
-            return
-        ws.close(1000)                                                      // 1000: normal close
+        if ws
+            ws.close(1000)                                                  // 1000: normal close
+        ws = false
     }
     
     // destroy
@@ -303,23 +329,27 @@ closure WebSocketClient(options, imp, local wesc, ws) {
     //
     wesc.destroy = function destroy() {
         close()
+        wesc.impconn.destroy()
+        wesc.impconn = false
     }
 
     // send
     //
-    // Send a message.
+    // Send a message, returning result tuple.
     //
     wesc.send = closure send(data) {
-        if wesc.fatal
-            return (wesc.fatal)
+        if reconnect()
+            return                                                          // failed to reconnect
         wesc.impconn.send(data)
     }
 
     // sendRaw
     //
-    // Send a message with reconnect but no routing.
+    // Send a message with reconnect but no routing. Returns a result tuple.
     //
     wesc.sendRaw = closure sendRaw(data) {
+        if reconnect()
+            return                                                          // failed to reconnect
         ws.send(data)
     }
 

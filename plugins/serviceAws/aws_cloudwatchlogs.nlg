@@ -18,7 +18,7 @@
  *
  */
 
-closure CloudWatchLogs(local cwlogs) {
+closure CloudWatchLogs(local cwlogs, delayf, backoffMS) {
     global(awsSDK)
     cwlogs = new(object, this)
 
@@ -35,7 +35,42 @@ closure CloudWatchLogs(local cwlogs) {
         })
         list(false, { ok: true })
     }
+
+    // retrier
+    //
+    //     Perform exponential backoff when throttled, returning true for retry or false otherwise.
+    //
+    function retrier(error, local waitms, newbo) {
+        if !error
+            delayf = false
+        else if error.name == "ThrottlingException" {                       // retriable errors
+            if backoffMS > milliseconds() {
+                debuglog("DynaTable.retrier: existing backoff", backoffMS - milliseconds(), "msec")
+                return (true)                                               // use existing backoff
+            }
+            if !delayf
+                delayf = ExbackFactory(6,60)                                // 6s max backoff, 60s deadline
+            waitms = delayf()
+            debuglog("DynaTable.retrier: new backoff:", waitms, "msec")
+            if waitms {                                                     // returns false for no retry
+                newbo = milliseconds() + waitms                             // tick when proceeding is allowed
+                if !(backoffMS > newbo)
+                    backoffMS = newbo
+                true
+            }
+        }
+    }
     
+    // delayer
+    //
+    //     Delay until the current backoff is complete.
+    //
+    function delayer(local waitms) {
+        waitms = backoffMS - milliseconds()
+        if waitms > 0
+            sleep(waitms + waitms * Math.random()/2)
+    }
+
     //
     // cwlQueryPager
     //
@@ -46,7 +81,14 @@ closure CloudWatchLogs(local cwlogs) {
         if !remaining
             remaining = 10                                              // default retrieve limit
         params.limit = remaining
-        QueryPager(cwlogs.aws, procname, params, function(data, local processed) {
+        delayer()
+        QueryPager(cwlogs.aws, procname, params, function(error, data, local processed) {
+            if error {
+                if !retrier(error)
+                    return (false)
+                delayer()
+                return (true)
+            }
             processed = doneCB(data)
             if processed
                 remaining -= processed

@@ -321,6 +321,7 @@ closure InTop(track, options, local intop, nlregex, str, error) {
         intop.execClosed(Error("instance closed"))
         track.delete(intop)
         termDetach()
+        sleep(10)
         App.imp.unregister(intop.instanceID)
         intop.instanceID = false
     }

@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2019-2024 by Richard C. Zulch
+ * Copyright (c) 2019-2026 by Richard C. Zulch
  *
  */
 
@@ -426,7 +426,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     // autoquoted to itself, a symbol. This can be used to detect build time vs. runtime.
     
     function parseAndPack1(text, fpath, options, operation,
-        local util, lib, penv, naansym, dlogsym, pmod, pcomp, output, textout, annerror, annotations, package)
+        local util, lib, penv, naansym, dlogsym, pmod, pcomp, ournn, output, textout, annerror, annotations, package)
     {
         //
         // textline
@@ -445,20 +445,39 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         lib = Naan.module.modlist().Lib.exports
         if !util || !lib
             return (list("Build packager cannot access support functions"))
+        //
+        // The following crazy rigmarole is about customizing the ParsEnvironment so we can glean
+        // enough information to build a package without actually executing the code. To do this we
+        // replace the entire Naan.module collection of functions with just build, so the others do
+        // nothing. From that we collect the module and component names, plus the manifest. This 
+        // also sets up a benign "exports" dictionary so module build can "go through the mtions"
+        // without modification.
+        //
         penv = lib.ParsEnvironment(Dialect, "build-".concat(operation))
         penv.evalq(letlocal(App))                                           // make local copy of App
         penv.evalq(letlocal(js))                                            // make local copy of js
-        naansym = penv.evalq(letlocal(Naan).0)                              // make local copy of Naan
-        penv.evalq(assign(naansym,new(Naan)))                               // make it modifiable
+        ournn = new(Naan)                                                   // get modifiable Naan
         pmod = { }                                                          // our module object
         pcomp = { }                                                         // our component object
-        car(naansym).module = {
+        ournn.module = {
             build: function(modname, compname, proc) {
-                pmod.id = module
+                pmod.id = module.id
+                pmod.exports = { }
                 pcomp.name = compname
                 call(proc, pmod, pcomp)                                     // obtain manifest
             }
         }
+        naansym = penv.evalq(function(nn) {
+            assign(letlocal(Naan).0,nn)
+            `Naan
+        }(ournn))                                                           // make Naan modifiable
+        penv.evalq(assign(letlocal(module).0, {                             // make local copy of module
+            exports: { }
+        }))
+        //
+        // Here we make a custom debuglog function that identifies the text without color and will
+        // write the output to the build log.
+        //
         dlogsym = penv.evalq(letlocal(debuglog).0)                          // make local copy of debuglog
         penv.evalq(function \.debuglog args {                               // redefine debuglog for capture
             let (arg, spaced) {
@@ -471,8 +490,19 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
                 apply(textline, reverse(spaced))
             } () })
         penv.evalq(putproc(car(dlogsym), \.debuglog.proc))
+        //
+        // The NideBuild symbol is "debug" or "release", etc. or is simply autoquoted as the symbol
+        // itself when not building. This is used if the source needs different behavior at build
+        // time or run time.
+        //
         penv.eval(append(quote(assign(compress("NideBuild"))), operation))  // NideBuild symbol is operation name string
+        //
+        // This is the actual meat of the matter, the parsing of the program text.
+        //
         output = penv.parse(text)                                           // parse and evaluate
+        //
+        // Output processing and error logging
+        //
         textout = ""
         try {
             if !pcomp.name
@@ -507,20 +537,30 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
             }
             if output.errors.length > 0
                 return (list("errors in ".concat(fpath), false, annotations, textout))
+            //
+            // Build the package, if not just doing syntax checking
+            //
             if options.naanpack || options.jspack {                         // actually building a package?
                 if !pcomp.name {
-                    pcomp = penv.evalq(car(compress(NaanBuildComponent)))   // fallback for building Module.nlg itself
+                    //
+                    // Some components cannot use a build function because they are too early in the
+                    // boot process, but we still need a component. We look for NaanBuildComponent
+                    // to define a dictionary with filename, name and manifest fields. For example,
+                    // see Util:Module.nlg
+                    //
+                    pcomp = penv.evalq(car(compress(NaanBuildComponent)))
                     if !pcomp || !fpath.endsWith("/".concat(pcomp.filename))
                         return (list("Build cannot package without component in ".concat(fpath), false, annotations, textout))
                 }
-                package = penv.evalq(util.pkgSave(compress(pcomp.name), pcomp.manifest))
+                package = util.pkgSave(compress(pcomp.name), pcomp.manifest)
+                if string(package)
+                    return (list("Build cannot generate package for ".concat(fpath), false, annotations, textout))
             }
         } catch {
             if true
                 return (list("Packaging exception in ".concat(fpath, ": ", tostring(exception)), false, annotations, textout))
         } finally {
             penv.destroy()                                                  // remove the namespace
-            debuglog("parseAndPack1 done", fpath)
         }
         if options.naanpack
             package = (js.w||js.s||js.g).JSON.stringify(package)            // doesn't have frameworks/common available
@@ -546,7 +586,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
             build.parallel = ExecutorParallel(track, {                      // create worker pool
                 basename: "build"
                 initeval: `(false, (parseAndPack1))
-            }) 
+            })
         result = build.parallel.rpc(parseAndPack1, list(text, fpath, options, operation))
         if !result.0 {
             result = result.1                                               // unpeel RPC result
@@ -1211,17 +1251,19 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //
     // Run the current build product by spawning a new worker.
     //
-    build.runSpawn = function runSpawn(local error, maintext, executor, vpath, site) {
+    build.runSpawn = function runSpawn(local error, maintext, executor, vpath, site, dirpath) {
         `(error, maintext) = fs.readFile(JSpath.join(build.destpath, build.runway.main))
         if error
             error = Error("Builder: cannot read main file", error)
         else {
+            dirpath = fs.path.resolve("/", fs.rootpath, build.destpath, build.runway.path || "")
             `(error, executor) = track.spawn(build.runway.spawn.0, "${rules.name} ${build.version}", {
                 workerID: "Run-${build.version}+${build.buildnum}"
                 startup: {
-                    initcmds: maintext
-                    dirpath: fs.path.resolve("/", fs.rootpath, build.destpath)
+                    maintext: maintext
+                    dirpath: dirpath
                 }
+                rootPath: dirpath
             })
             if error
                 error = Error("Builder: cannot spawn executor instance", error)

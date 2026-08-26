@@ -35,6 +35,7 @@ closure DebugNub(local nub, debug, paused) {
     nub.watches = []
     nub.stacks = { }
     nub.usage = { }
+    paused = { }
 
     // debugDepth
     // Return the recursive debugging depth as an integer.
@@ -45,6 +46,18 @@ closure DebugNub(local nub, debug, paused) {
             curdepth = 0
         curdepth
     }
+    
+    // sendStatus
+    // Send current status to the far end.
+    //
+    function sendStatus() {
+        js.t.ReplyDebugger({
+            op: "status"
+            depth: debugDepth()
+            bpenable: debug.bpenable
+            exenable: nub.exenable
+        })
+    }
 
     // onDebugger proc
     // Process an incoming debugger command.
@@ -52,17 +65,13 @@ closure DebugNub(local nub, debug, paused) {
     function onDebugger(msg) {
         if msg.op == "attach" {
             debug.setCommander(nub)
-            js.t.ReplyDebugger({
-                op: "status"
-                depth: debugDepth()
-                bpenable: debug.bpenable
-                exenable: nub.exenable
-            })
+            sendStatus()
         }
         else if msg.op == "detach" {
             debug.setCommander(false)
             paused.wait = false                                             // false: go back to ndb
-        }
+        } else if msg.op == "query"
+            sendStatus()
         else if msg.op == "pause"
             debugger()
         else if msg.op == "resume" || msg.op == "stop"

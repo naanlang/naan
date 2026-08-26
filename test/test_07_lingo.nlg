@@ -474,7 +474,7 @@ RegisterTestCategory("Lingo", [
         { errors: "invalid iteration variable at (1, 5) found 3" } ],
     [ "for x in xnew() print(x);>", "Dictionary{6}"],
     [ "for x in Array(e, f, g) print(x);>", "efg|Dictionary{7}"],
-    [ "for x in false print(x);>", "Dictionary{5}"],
+    [ "for x in false print(x);>", "Dictionary{6}"],
     [ "for x in { } print(x);>", "Dictionary{7}"],
 
     //

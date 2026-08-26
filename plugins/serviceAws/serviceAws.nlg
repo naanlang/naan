@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2022 by Richard C. Zulch
+ * Copyright (c) 2020-2026 by Richard C. Zulch
  *
  */
 
@@ -23,7 +23,8 @@ function sawsInit(local manifest) {
 
     Naan.module.build(module.id, "serviceAws", function(modobj, compobj) {
         compobj.manifest = manifest
-        require("naanlib:frameworks/common").LiveImport()
+        require("naanlib:frameworks/common/utils.nlg")                      // get ExbackFactory
+        require("naanlib:frameworks/common").LiveImport()                   // applies to all exports
         require("./aws_utils.nlg")
         function sawsPostload() {
             if js.g

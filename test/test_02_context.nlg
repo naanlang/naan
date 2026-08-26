@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2024 by Richard C. Zulch
+ * Copyright (c) 2017-2026 by Richard C. Zulch
  *
  */
 
@@ -38,7 +38,7 @@ RegisterTestCategory("context", [
     [ "function setNS(ns) { ns=reverse(ns),sudo(nsactive(reverse(ns, defNS))) };", "setNS" ],
     [ "x;", "x" ],
     [ "y;", "y" ],
-    [ "length(symlist(nsactive(true).0));", "173"],
+    [ "length(symlist(nsactive(true).0));", "175"],
     [ "testvar;", "testvar" ],
     [ "function setTestvar(v) { testvar=v };", "setTestvar" ],
     [ "naanvar;", "naanvar" ],
@@ -200,20 +200,20 @@ RegisterTestCategory("context", [
     [ "test2(4);", "10001|10001" ],
 
     [ "function test1(x) { if x > 10000 printline(x) else test2(x+1), undefined() };", "==> redefined: test1|test1" ],
-    [ "test2(5);", { errors: "exception: recursed 101" } ],
+    [ "test2(5);", { errors: "exception: recursed 99" } ],
 
     [ "function test1(x) { if x > 10000 printline(x) else loop test2(x+1) };", "==> redefined: test1|test1" ],
-    [ "test2(6);", { errors: "exception: recursed 102" } ],
+    [ "test2(6);", { errors: "exception: recursed 100" } ],
 
     [ "function test1(x) { if x > 10000 printline(x) else 0+test2(x+1) };", "==> redefined: test1|test1" ],
-    [ "test2(7);", { errors: "exception: recursed 149" } ],
+    [ "test2(7);", { errors: "exception: recursed 147" } ],
 
     [ "function test2(x) { testRecurCheck(x), if true test1(x+1) else print(x) };", "==> redefined: test2|test2" ],
-    [ "test2(8);", { errors: "exception: recursed 150" } ],
+    [ "test2(8);", { errors: "exception: recursed 148" } ],
 
     [ "function test1(x) { if x > 10000 printline(x) else loop test2(x+1, 4, 5) };", "==> redefined: test1|test1" ],
     [ "function test2(x,y,z) { testRecurCheck(x), loop if true { test1(x+1),break } else print(x) };", "==> redefined: test2|test2" ],
-    [ "test2(9);", { errors: "exception: recursed 51" } ],
+    [ "test2(9);", { errors: "exception: recursed 49" } ],
 
     [ "function test1 xt { if car(xt) > 10000 printline(xt) else test2(car(xt)+1) };", "==> redefined: test1|test1" ],
     [ "function test2 xt { testRecurCheck(car(xt)), test1(car(xt)+1) };", "==> redefined: test2|test2" ],
@@ -222,7 +222,7 @@ RegisterTestCategory("context", [
     [ "oo=new(object);", "Object{0}"],
     [ "oo.test1 = function test1(x) { if x > 10000 printline(x) else test2(x+1) };", "==> redefined: test1|test1"],
     [ "oo.test2 = function test2 xt { testRecurCheck(car(xt)), oo.test1(car(xt)+1) };", "==> redefined: test2|test2"],
-    [ "oo.test1(11);", { errors: "exception: recursed 154" } ],
+    [ "oo.test1(11);", { errors: "exception: recursed 152" } ],
 
     [ "function test1 xt { testRecurCheck(car(xt)), if car(xt) > 10000 printline(xt) else test1(car(xt)+1) };",
         "==> redefined: test1|test1" ],

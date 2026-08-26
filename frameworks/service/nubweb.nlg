@@ -30,13 +30,13 @@ closure WebWorkerNub(imp, options, local wonub) {
     }, options)
     wonub = new(object, this)
     wonub.instanceID = imp.us.instanceID || UUID()
-    wonub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher()
+    wonub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher(false, false, "WebWorkerNub")
 
     // impReceive
     //
     // Receive a remote request and reply to it.
     //
-    wonub.impReceive = function impReceive(message, sourceID) {
+    wonub.impReceive = closure impReceive(message, sourceID) {
         if message.id == "targetin"
             wonub.dispatcher(message.data, function(reply) {
                 wonub.sender(sourceID, {
@@ -45,7 +45,7 @@ closure WebWorkerNub(imp, options, local wonub) {
                 })
             })
     }
-            
+
     // impUnknown
     //
     // Received an unknown destination notice from the other side.
@@ -53,6 +53,24 @@ closure WebWorkerNub(imp, options, local wonub) {
     wonub.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
         if !gateway
             debuglog("WebWorkerNub.impUnknownID:", unknownID, "sourceID:", sourceID)
+    }
+
+    // mainContext
+    //
+    // Convenience method to get the main thread and its remote context.
+    //
+    wonub.mainContext = function mainContext(local error, mtx, ctx) {
+        if !(mtx = wonub.mtx) {
+            `(error, mtx) = require("../running/remote_req.nlg").MainThread()
+            if error
+                return (list(error))
+            wonub.mtx = mtx
+        }
+        `(error, ctx) = mtx.context()
+        if error
+            list(error)
+        else
+            list(false, ctx, mtx)
     }
 
     // message event
@@ -83,7 +101,7 @@ closure WebWorkerNub(imp, options, local wonub) {
     })
 
     // finis
-    
+
     App.workerNub = wonub
 };
 

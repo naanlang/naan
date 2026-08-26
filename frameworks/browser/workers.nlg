@@ -314,7 +314,7 @@ closure ScopedServiceWorker(pubID, pubVersion, callback, local scoper, result) {
     //
     //     Destroy the service worker.
     
-    worker.destroy = function destroy() {
+    scoper.destroy = function destroy() {
         scoper.serv.unregister()
         scoper.serv = false
     }

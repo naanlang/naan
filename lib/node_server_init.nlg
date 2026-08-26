@@ -1,0 +1,149 @@
+/*
+ * node_server_init.nlg
+ * Naanide
+ *
+ * Loaded automatically for Node.js before REPL turned over to the user.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2020-2026 by Richard C. Zulch
+ *
+ */
+
+loglevel(3);
+
+
+/*
+ * Debugging & Tools
+ *
+ */
+
+if !module.owner.list.running.components.debugnub {
+    require("naanlib:frameworks/common/repltools.nlg").ImportReplTools()
+    require("naanlib:frameworks/running/debugnub.nlg").DebugNub()
+};
+
+App.shell = require("naanlib:frameworks/node/shell.nlg").ShellConnect({
+    cwd: js.d
+})
+
+
+/*
+ * versionCheck
+ *
+ * Ensure that Node is at least as new as the specified version.
+ *
+ */
+
+function versionCheck(minver, local rxver, curver) {
+    rxver = RegExp("([0-9]+)[.]([0-9]+)[.]([0-9]+)")
+    minver = minver.match(rxver).map(function(x){Number.parseInt(x)})
+    curver = js.g.process.version.match(rxver).map(function(x){Number.parseInt(x)})
+    minver[1] < curver[1] || minver[1] == curver[1] && (minver[2] < curver[2] || minver[2] == curver[2] && minver[3] <= curver[3])
+};
+
+
+/*
+ * saveState
+ *
+ * Save our state soon. This saves in a future to avoid stack problems. Returns a nonce.
+ *
+ */
+
+function saveState() {
+    future(function() {
+        js.t.Working()
+        js.save()
+    }, 0)
+};
+
+
+/*
+ * startup
+ *
+ * This is the normal NaanIDE startup code. The scenarios are as follows:
+ * 1. Start new server at available port and launch browser tab             // default behavior
+ * 2. Start new server with intialization file that launches browser
+ * 3. Start new server at fixed port and launch browser tab
+ * 4. Start new server at fixed port with initialization file
+ * 5. Connect to existing server at fixed port and evaluate remote expression, then quit
+ *
+ * This uses the Naan symbol NaanStartParams as:
+ *  {
+ *      naanpath:   <string>                    // path to the naan library
+ *      serverPort: <integer>                   // defined if the command line specified a port
+ *      guid:       <string>                    // server secret
+ *      cmd_mod:    <string>                    // name of a command to execute
+ *      cmd_path:   <string>                    // path to command's module
+ *      cmd_args:   [<string>]                  // arguments to the command
+ *  }
+ *
+ */
+
+closure startup(local error, api, exists, oururl) {
+    if !versionCheck("16.20.2") {
+        debuglog("NaanIDE: NodeJS too old; version 16.20.2 required.")
+        js.g.process.exit(2)
+    }
+    if !dictionary(NaanStartParams) {
+        debuglog("NaanIDE: startup parameters missing.")
+        js.g.process.exit(3)
+    }
+
+    App.imp = require("naanlib:frameworks/service/imp.nlg").Imp({
+        name: "NaanIDE Server"
+        type: "Server IMP"
+    })
+    require("naanlib:frameworks/running/remote_res.nlg")
+        .RemoteResponder(App.imp.us.instanceID, {                           // make our server remotable
+        name: "NaanIDE Server"
+        type: "Node Remote"
+    })
+    App.exec = require("naanlib:frameworks/node/worker.nlg").CurBot({
+        name: "NaanIDE Server"
+        type: "NaaN Server"
+    })
+
+    App.api = undefined
+    App.naanpath = NaanStartParams.naanpath
+    App.nidecon = require("lib/nidecon").NideCon({
+        fixedPort: NaanStartParams.serverPort
+        guid: NaanStartParams.guid
+        statics: [
+            list("", NaanStartParams.naanpath)
+        ]
+    })
+    if NaanStartParams.cmd_mod {
+        `(error) = App.nidecon.runCommand(NaanStartParams.cmd_mod, NaanStartParams.cmd_path, NaanStartParams.cmd_args)
+        saveState().wait()                                                  // wait so we don't exit too soon
+        if error {
+            if error.memo != ""
+                ErrorDebuglog("NaanIDE: command failed", error)
+            if error.exit
+                js.g.process.exit(error.exit)                               // fatal error
+        }
+    }
+    else if js.expr
+        saveState().wait()
+    else {
+        `(error, api, exists) = App.nidecon.startServer()
+        if exists {
+            `(error, oururl) = App.nidecon.connectServer()
+            if error {
+                ErrorDebuglog("NaanIDE: server at port ${NaanStartParams.serverPort} not responding", error)
+                js.g.process.exit(1)
+            }
+            debuglog("existing server access:", oururl)
+            return
+        } else if error {
+            ErrorDebuglog("NaanIDE: can't start server:", error)
+            js.g.process.exit(1)
+        }
+        debuglog("server access:", api.oururl)
+        Naan.runtimelib.curdriver().setOptions({prompt:true})
+        saveState()
+        `(error) = App.nidecon.launchBrowser()
+        if error
+            ErrorDebuglog("NaanIDE: can't launch browser:", error)
+    }
+}();

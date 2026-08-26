@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2017-2023 by Richard C. Zulch
+ * Copyright (c) 2017-2026 by Richard C. Zulch
  *
  */
 
@@ -881,7 +881,7 @@ RegisterTestCategory("core", [
 
     [ "unintern(true) === true", "false"],
 
-    [ "length(stacktrace());", "55" ],
+    [ "length(stacktrace());", "57" ],
     
     //
     // relate builtin

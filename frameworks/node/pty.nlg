@@ -102,8 +102,9 @@ closure ptyManagerMain(local ptym, pty) {
     //
     // Close the pty manager, killing any open spawned processes.
     //
-    ptym.close = closure close() {
-        // ### kill any open spawned processes
+    ptym.close = closure close(local worker) {
+        for worker in ptym.workers
+            worker.kill()
     }
 
     // spawn
@@ -111,14 +112,16 @@ closure ptyManagerMain(local ptym, pty) {
     // Spawn a new pty process, returning a result tuple. If executable is omitted then a shell is
     // spawned.
     // 
-    // options:
+    // options: (all optional)
     //  {
-    //      workerGUID: <string>                // if specified, kills pty process when worker terminates
+    //      cwd:        <string>                // current working directory
+    //      env:        <string>                // environment
+    //      raw:        <boolean>               // enable raw mode with ioctls
     //  }
     // 
     //
     ptym.spawn = closure spawn(executable, args, notify, options,
-        local ptySpawned, ptypro) {
+        local error, ptySpawned, ptypro) {
 
         if !executable {
             if os.platform() == "win32"
@@ -136,6 +139,10 @@ closure ptyManagerMain(local ptym, pty) {
             env: js.g.process.env
         }, options)
 
+        `(error) = open()                                                   // ensure we're open
+        if error
+            return (list(error))
+
         ptySpawned = pty.spawn(executable, args, {                          // spawn the pty process
             name: options.name
             cols: options.cols
@@ -147,7 +154,6 @@ closure ptyManagerMain(local ptym, pty) {
         ptypro = ptyProcess(ptySpawned, notify)
         ptym.workers.push({                                                 // track all pty processes
             pid: ptySpawned.pid
-            workerGUID: options.workerGUID || undefined
             ptySpawned: ptySpawned
         })
 
@@ -160,19 +166,6 @@ closure ptyManagerMain(local ptym, pty) {
             ptypro.killed(event)
         })
 
-        if options.workerGUID
-            WorkerController().watcher.watch(
-                function(action, worker, local ptydex) {                    // worker-owner of pty process died
-                    if action == "terminated" {
-                        ptydex = ptym.workers.findIndex(function(item) {
-                            options.workerGUID == item.workerGUID
-                        })
-                        if ptydex >= 0 {
-                            ptySpawned.kill()
-                            ptym.workers.splice(ptydex)
-                        }
-                    }
-                })
         list(false, ptypro)
     }
 
@@ -238,7 +231,14 @@ closure ptyProcess(ptySpawned, notify, local ptyp) {
     // Kill the spawned process.
     //
     ptyp.kill = closure kill(signame) {
-        ptySpawned.kill(signame)
+        if signame
+            ptySpawned.kill(signame)                                        // use caller signal
+        else {
+            ptySpawned.kill("SIGTERM")                                      // SIGTERM/SIGKILL sequence
+            sleep(1000)
+            if ptySpawned
+                ptySpawned.kill("SIGKILL")
+        }
     }
 
     // finis
@@ -268,7 +268,7 @@ closure ptyManagerWorker(local ptyw, mainContext, mainPty) {
         }
 
         if !mainContext {
-            `(error, main) = require("naanlib:frameworks/running/mainthread.nlg").MainThread()
+            `(error, main) = require("naanlib:frameworks/running/remote_req.nlg").MainThread()
             if !error
                 `(error, mainContext) = main.context()
             if error

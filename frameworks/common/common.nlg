@@ -247,6 +247,8 @@ macro LoadComponentOnDemand(functionKeys, componentPath, local modobj, key) {
 macro LiveExport() {
     global()
     closure (exporterMod, local importList) {
+        if !exporterMod
+            return (false)                                                  // no module (e.g. build time)
         importList = []
         //
         // LiveImport
