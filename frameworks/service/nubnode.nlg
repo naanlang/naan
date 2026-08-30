@@ -29,7 +29,7 @@ closure NodeWorkerNub(imp, options, local nownub) {
         type: "node-worker-nub"
     }, options)
     nownub = new(object, this)
-    nownub.instanceID = imp.us.instanceID || UUID()
+    nownub.instanceID = imp.us.instanceID || imp.getUUID("NodeWorkerNub(${options.name}) instanceID")
     nownub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher(false, false, "NodeWorkerNub")
 
     // impReceive
@@ -88,10 +88,10 @@ closure NodeWorkerNub(imp, options, local nownub) {
 
     // message event
     //
-    // Incoming data.
+    // Incoming data to the worker.
     //
     js.t.msgPort.on("message", function(msg) {
-        if msg.id == "naan-imp-node"
+        if msg.id == "naan-imp-in"
             nownub.impconn.dispatch(new(msg.data))
     })
 
@@ -106,7 +106,7 @@ closure NodeWorkerNub(imp, options, local nownub) {
     })
     nownub.impconn = imp.requester(function(data) {
         js.t.msgPort.postMessage({                                          // send to main
-            id: "naan-imp-node",
+            id: "naan-imp-out"
             data: data
         })
         list(false, { sent: true })

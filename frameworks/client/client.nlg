@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2020-2025 by Richard C. Zulch
+ * Copyright (c) 2020-2026 by Richard C. Zulch
  *
  */
 
@@ -32,6 +32,26 @@ function clirRequester() {
 
 
 /*
+ * clirWebsocket
+ *
+ *     Return an appropriate Websocket client based on our environment.
+ *
+ */
+
+clirWebsocketApi = false;
+
+function clirWebsocket() {
+    if !clirWebsocketApi {
+        if js.w
+            clirWebsocketApi = require("naanlib:frameworks/browser/ws_client.nlg").WebSocket
+        else
+            clirWebsocketApi = require("naanlib:frameworks/node/ws_client.nlg").WebSocket
+    }
+    clirWebsocketApi
+};
+
+
+/*
  * clirInit
  *
  *     Initialize the client module.
@@ -40,7 +60,7 @@ function clirRequester() {
  */
 
 function clirInit(local manifest) {
-    manifest = `(clirRequester, clirInit)
+    manifest = `(clirRequester, clirWebsocket, clirInit)
 
     Naan.module.build(module.id, "client", function(modobj, compobj) {
         require("../common/").LiveImport()

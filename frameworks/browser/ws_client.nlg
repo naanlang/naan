@@ -13,107 +13,43 @@
 /*
  * WebSocket
  *
- * Create a WebSocket client connection object.
+ * Create a WebSocket client connection object, returning a tuple.
  *
- * Optional, default Host:
- *      host:       <string>                    // host:port
+ * Required:
+ *      urlstr:     <string>
  *
  * Options:
  *  {
  *      wss:        <boolean>                   // true to use secure connection
+ *      query:      <string>                    // query string starting with ?
  *      onopen:     <proc>(e)                   // connection has opened
  *      onmessage:  <proc>(e, message)          // message received
  *      onerror:    <proc>(e)                   // error occurred
  *      onclose:    <proc>(e)                   // connection has closed
- *      query:      <string>                    // query string starting with ? for insecure connections
- *      querys:     <string>                    // query string starting with ? for secure connections
  *  }
  *
  */
 
-closure WebSocket(host, options, local wsock) {
-    global(window)
-    wsock = new(object, this)
-    options = new(options) || { }
-    if !host {
-        host = window.location.host
-        options.wss = window.location.protocol == "https:"
+closure WebSocket(urlstr, options, local url, ws) {
+    try {
+        url = xnew(js.w.URL, urlstr)
+    } catch {
+        return (list(Error("invalid URL ${urlstr}", exception)))
     }
-
-    // connect
-    //
-    // Connect with the host if not already connected, returning a result tuple.
-    //
-    wsock.connect = closure connect(local url, pending) {
-        if wsock.ws
-            return (list(false, { open: true }))
-        if options.wss
-            url = "wss://${host}${options.querys||''}"
-        else
-            url = "ws://${host}${options.query||''}"
-        wsock.ws = xnew(window.WebSocket, url)
-        pending = new(nonce)
-    
-        // onopen
-        // The WebSocket connection is now open.
-        wsock.ws.onopen = closure onopen(e) {
-            pending.signal(list(false, { ok: true }))
-            options.onopen(e)
-        }
-
-        // onmessage
-        // A message was received from the worker via WebSockets.
-        wsock.ws.onmessage = closure onmessage(e, local message) {
-            try {
-                message = new(JSONparse(e.data))
-            } catch {
-                debuglog("can't decode incoming ws message:", exception)
-                options.onerror(Error("can't decode incoming message:", exception))
-                return
-            }
-            options.onmessage(e, message)
-        }
-        
-        // onerror
-        // An error occurred on the WebSocket connection.
-        wsock.ws.onerror = closure onerror(e, local error) {
-            error = Error("websocket failed", e)
-            options.onerror(e, error)
-            pending.signal(list(error))                                     // ensure connect completes
-        }
-        
-        // onclose
-        // The WebSocket connection was closed.
-        wsock.ws.onclose = closure onclose(e) {
-            options.onclose(e, e.code, e.reason)
-            pending.signal(list(Error("connection closed")))                // ensure connect completes
-            wsock.ws = false
-        }
-        
-        pending.wait()
-    }
-  
-    // send
-    //
-    //     Send a message dictionary.
-    //
-    wsock.send = function send(message) {
-        wsock.ws.send(JSONstringify(message))
-    }
-        
-    // close
-    //
-    //     Close the connection.
-    //
-    wsock.close = function close(reason) {
-        if !reason
-            reason = 1000                                                   // normal close
-        wsock.ws.close(reason)
-    }
-
-    // finis
-
-    wsock
+    options = merge({
+        query: url.search || ''
+        wss: url.protocol == "https:"
+    }, options)
+    if options.wss
+        url = "wss://${url.host}${options.query}"
+    else
+        url = "ws://${url.host}${options.query}"
+    ws = xnew(window.WebSocket, url)
+    ws.onopen = options.onopen
+    ws.onmessage = options.onmessage
+    ws.onerror = options.onerror
+    ws.onclose = options.onclose
+    list(false, ws)
 };
 
 

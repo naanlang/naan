@@ -49,7 +49,7 @@ closure InBot(worker, options, local inbot)
     inbot.workerID = options.workerID
     inbot.worker = worker
 
-    inbot.instanceID = UUID()
+    inbot.instanceID = App.imp.getUUID("InBot(${options.name}) instanceID")
     inbot.sender = App.imp.register(inbot, {
         name: options.name
         type: options.type
@@ -133,9 +133,9 @@ closure InBot(worker, options, local inbot)
     // A message was received from the worker.
     //
     inbot.worker.addEventListener("message", function(e, local msg) {
-        msg = new(e.data)
-        if msg.scope == "naan-imp-web" {
-            inbot.impconn.dispatch(msg.data)
+        msg = e.data
+        if msg.scope == "naan-imp-out" {
+            inbot.impconn.dispatch(new(msg.data))
             return
         }
         if msg.scope != "naan-env-web"
@@ -177,6 +177,16 @@ closure InBot(worker, options, local inbot)
         destroy()
     })
     
+    // close
+    //
+    // Close and remove our IMP resources, but leave the worker alone.
+    //
+    inbot.close = function close() {
+        inbot.impconn.destroy()
+        inbot.impconn = false
+        App.imp.unregister(inbot.instanceID)
+    }
+
     // destroy
     //
     // Ensure the worker is destroyed and notify everyone.
@@ -189,9 +199,7 @@ closure InBot(worker, options, local inbot)
         notifyAll({
             id: "terminated"
         })
-        inbot.impconn.destroy()
-        inbot.impconn = false
-        App.imp.unregister(inbot.instanceID)
+        close()
     }
 
     // finis
@@ -261,7 +269,7 @@ closure WowBot(worker, options, local wowbot)
 
     wowbot.impconn = App.imp.responder(function(data) {
         wowbot.worker.postMessage({                                         // send IMP messages to worker
-            scope: "naan-imp-web"                                           // scoped for WebWorkerNub
+            scope: "naan-imp-in"                                            // scoped for WebWorkerNub
             data: data
         })
         list(false, { sent: true })

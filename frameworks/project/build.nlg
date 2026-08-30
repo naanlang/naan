@@ -304,18 +304,26 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //
     // Apply substitutions from readSubstitutionFile to string, returning a tuple of the resulting
     // text and the number of substitution patterns actually used from the supplied dictionary.
+    // Specify iterative to repeat the substitution on the result until no more substitutions occur.
     //
-    function applySubstitutions(text, subs, local subbed) {
-        subbed = { }
-        list(text.replace(RegExp("[$][^$\\s]+[$]", "g"), function(match, local subst) {
-            subst = subs[match.slice(1,-1)]
-            if subst {
-                subbed[match] = true
-                subst
-            }
-            else
-                match
-        }), length(subbed))
+    function applySubstitutions(text, subs, iterative, local count, subbed) {
+        count = 0
+        loop {
+            subbed = { }
+            text = text.replace(RegExp("[$][^$\\s]+[$]", "g"), function(match, local subst) {
+                subst = subs[match.slice(1,-1)]
+                if subst {
+                    subbed[match] = true
+                    subst
+                }
+                else
+                    match
+            })
+            count += length(subbed)
+            if length(subbed) == 0 || !iterative
+                break
+        }
+        list(text, count)
     }
     
     //
@@ -1044,9 +1052,9 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
                 }
                 else if ((`(error, content) = fs.readFile(entry.readpath, readOptions)) && !error) {
                     if entry.license
-                        `(content) = applySubstitutions(content, licFileDefs)
+                        `(content) = applySubstitutions(content, licFileDefs, true)
                     if entry.version
-                        `(content) = applySubstitutions(content, verFileDefs)
+                        `(content) = applySubstitutions(content, verFileDefs, true)
                     if entry.naanpack
                         `(error, content) = parseAndPack(content, entry.readpath, { naanpack: true })
                     else if entry.jspack
@@ -1251,7 +1259,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //
     // Run the current build product by spawning a new worker.
     //
-    build.runSpawn = function runSpawn(local error, maintext, executor, vpath, site, dirpath) {
+    build.runSpawn = function runSpawn(stage,
+        local error, maintext, executor, vpath, site, dirpath) {
         `(error, maintext) = fs.readFile(JSpath.join(build.destpath, build.runway.main))
         if error
             error = Error("Builder: cannot read main file", error)
@@ -1291,13 +1300,12 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     //
     // Run the current build product by opening a new window.
     //
-    build.runWindow = function runWindow(
+    build.runWindow = function runWindow(stage,
         local title, main, url, features, vpath, error, window, site) {
         if !js.w
             return (list(Error('Run method "window" requires browser host')))
         if !build.runway."v-site"
             return (list(Error('Run method "window" requires v-site specification')))
-        title = rules.name.concat("-", build.buildnum)
         main = build.runway.main
         if !main
             main = "index.html"
@@ -1313,6 +1321,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         if error
             return (list(Error("Builder: cannot create virtual site", error)))
         sleep(1)                                                            // needed on Windows or it won't open, fiik why
+        title = rules.name.concat("-", stage, "-", operation)
         window = js.w.open(url, title, features)
         list(false, { ok: true })                                           // we don't know the executor
     }
@@ -1323,13 +1332,13 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     // Run the current build product, which would be after the make call. Returns a standard result
     // tuple.
     //
-    build.run = function run() {
+    build.run = function run(stage) {
         if build.runway.open
             fs.shellOpen(JSpath.join(build.destpath, build.runway.open), build.runway.args)
         else if build.runway.spawn
-            build.runSpawn()
+            build.runSpawn(stage)
         else if build.runway.window
-            build.runWindow()
+            build.runWindow(stage)
         else
             list(false, { ok: true })
     }

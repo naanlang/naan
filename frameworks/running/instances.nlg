@@ -41,6 +41,7 @@
 closure InTop(track, options, local intop, nlregex, str, error) {
     global(App)
     intop = ExecutorBase(track, options.type, options.name)
+    intop.verbose = false
     intop.workerID = options.workerID || undefined
     intop.msgQueue = []
     nlregex = RegExp("\\n", "g")
@@ -101,7 +102,7 @@ closure InTop(track, options, local intop, nlregex, str, error) {
     // Received an unknown destination notice from the other side.
     //
     intop.impUnknown = function impUnknown(unknownID, sourceID, gateway) {
-        if !gateway
+        if !gateway && intop.verbose
             debuglog("InTop.impUnknownID:", unknownID, "sourceID:", sourceID)
     }
 
@@ -263,8 +264,12 @@ closure InTop(track, options, local intop, nlregex, str, error) {
     //     A terminal was attached.
     //
     intop.termAttach = function termAttach(repl, db, notify, local msg) {
+        if !repl {
+            debuglog("termAttach false repl")
+            return (false)
+        }
         if !intop.msgQueue
-            return (list(Error("already attached")))
+            return (intop)                                                  // already attached
         intop.sender(intop.botDestID, {
             id: "attached",
             guid: intop.instanceID
@@ -294,7 +299,7 @@ closure InTop(track, options, local intop, nlregex, str, error) {
     //
     intop.termDetach = function termDetach() {
         if intop.msgQueue
-            return (list(Error("already detached")))
+            return                                                          // already detached
         intop.term.SetNotify()
         intop.msgQueue = []
         intop.debugger.detach(intop)
@@ -310,20 +315,17 @@ closure InTop(track, options, local intop, nlregex, str, error) {
 
     // close
     //
-    //     Close our access to the worker.
+    //     Close our access to the worker, but it can be reopened.
     //
     intop.close = function close() {
-        if !intop.instanceID
+        if !intop.botDestID
             return
         intop.sender(intop.botDestID, {
             id: "unsubscribe"
         })
-        intop.execClosed(Error("instance closed"))
-        track.delete(intop)
-        termDetach()
-        sleep(10)
+        intop.botDestID = false
         App.imp.unregister(intop.instanceID)
-        intop.instanceID = false
+        intop.sender = false
     }
 
     // destroy
@@ -334,11 +336,17 @@ closure InTop(track, options, local intop, nlregex, str, error) {
         if intop.destroyed
             return
         intop.destroyed = true
+        intop.execClosed(Error("instance closed"))
         intop.sender(intop.botDestID, {
             id: "destroy",
             guid: intop.instanceID
         })
-        close()
+        track.delete(intop)
+        termDetach()
+        sleep(10)
+        App.imp.unregister(intop.instanceID)
+        intop.sender = false
+        intop.cleanup()                                                     // child classes release resources
     }
 
     // open
@@ -348,24 +356,27 @@ closure InTop(track, options, local intop, nlregex, str, error) {
     intop.open = closure open(inbotID) {
         if intop.destroyed
             return (list(Error("InTop already destroyed")))
-        if intop.instanceID {
-            if inbotID != intop.botDestID
-                return (list(Error("InTop already open")))
-        } else
-            intop.instanceID = UUID()
+        if intop.botDestID == inbotID
+            return (list(false, { reopen: true }))
+        if intop.botDestID
+            close()
         intop.botDestID = inbotID
-        intop.sender = App.imp.register(intop, {
-            name: options.name
-            type: options.type
-            instanceID: intop.instanceID
-            services: [ "naan-executor" ]
-        })
+        if !intop.instanceID {
+            intop.instanceID = App.imp.getUUID("InTop(${options.name}) instanceID")
+            track.add(intop)
+        }
+        if !intop.sender
+            intop.sender = App.imp.register(intop, {
+                name: options.name
+                type: options.type
+                instanceID: intop.instanceID
+                services: [ "naan-executor" ]
+            })
         `(error) = intop.sender(intop.botDestID, {
             id: "subscribe"
         })
         if error
             return(list(error))
-        track.add(intop)
         list(false, { ok: true })
     }
 

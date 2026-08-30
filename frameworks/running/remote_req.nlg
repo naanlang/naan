@@ -35,7 +35,8 @@ closure RemoteRequester(destID, options, local track)
     //
     closure remoteReq(track, name, local target) {
         target = ExecutorBase(false, "proxy", options.name)
-        target.instanceID = UUID()
+        target.instanceID = App.imp.getUUID("RemoteRequester(${options.name}) instanceID")
+
     
         target.sender = App.imp.register(target, {
             name: options.name

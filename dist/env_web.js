@@ -721,7 +721,6 @@ exports.NaanControllerWeb = function() {
                     naancont: contSelf,
                     title: vsiteName + " $Version$"
                 });
-                termTextOut("\x1b[90m\x1b[3m".concat("\nwindow closed", "\x1b[0m\n"));
             }
         } catch (e) {
         }

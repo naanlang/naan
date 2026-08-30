@@ -252,14 +252,16 @@ macro LiveExport() {
         importList = []
         //
         // LiveImport
-        // Return a new LiveImport function to be exported by the module who called MakeLiveImport.
+        // Return a new LiveImport function to be exported by the module who called LiveExport.
         //
-        macro LiveImport(fixproc, local importingMod, mdex, updater) {
+        macro LiveImport(fixproc, local importingMod, item, updater) {
             importingMod = car(nsrights().lookup("module"))
-            mdex = importList.indexOf(importingMod)
-            if mdex >= 0
-                updater = importList[mdex]                                  // already registered
-            else {
+            for item in importList
+                if item.proc.1.namespace === importingMod.namespace {
+                    updater = item
+                    break
+                }
+            if !updater {
                 updater = closure(importingMod, fixproc) {                  // create new updater
                     putproc(compress(updateImports), function updateImports(local goback) {
                         if importingMod !== exporterMod {
@@ -269,10 +271,10 @@ macro LiveExport() {
                         try {
                             call(fixproc, exporterMod)                      // let caller do any fixups
                         } catch {
-                            if (true)
-                                debuglog("LiveImport fixup failed in", nsrights(), "exception:", exception)
+                            debuglog("LiveImport fixup failed in", nsrights(), "exception:", exception)
+                        } finally {
+                            goback()
                         }
-                        goback()
                     })
                     updateImports
                 } (importingMod, eval(fixproc))

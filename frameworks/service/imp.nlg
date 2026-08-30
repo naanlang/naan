@@ -35,8 +35,11 @@ closure Imp(us, local imp) {
         name: "imp-generic"
         type: "imp-type"
     }, us)
+    imp.verbose = false
     if !us.instanceID
-        us.instanceID = UUID()
+        us.instanceID = getUUID("Imp(${imp.us.name}) instanceID")
+    else if imp.verbose >= 1
+        debuglog("useUUID ${us.instanceID} for: Imp(${imp.us.name}) instanceID")
     imp.direct = { }                                                        // direct-connected destinations
     imp.pipes = { }                                                         // piped connections to destinations
     imp.gateways = { }                                                      // routing gateways for next hop
@@ -395,8 +398,10 @@ closure Imp(us, local imp) {
         function open() {
             dest.handshake.reset()
             dest.state = `connected
-            future(function() {
-                wait()
+            future(function(local error, newdid) {
+                `(error, newdid) = wait()
+                if error
+                    return                                                  // didn't succeed (yet)
                 info.destID = destID
                 info.defaultID = dest.defaultID || undefined
                 info.name = dest.name
@@ -453,7 +458,7 @@ closure Imp(us, local imp) {
             dest.info.services = [ service ]
         destID = info.destID
         if !destID {
-            destID = UUID()                                                 // temporary destID to be updated
+            destID = getUUID("imp temporary for requester")                 // temporary destID to be updated
             dest.idsymbol = quote(destID)
         }
         imp.pipes[destID] = dest
@@ -461,6 +466,18 @@ closure Imp(us, local imp) {
             open()                                                          // open immediately
         
         dest.conn
+    }
+
+    // getUUID
+    //
+    // Get a UUID for the specified purpose, which is just a comment. This makes it easy to log
+    // UUID assignments for debugging.
+    //
+    imp.getUUID = function getUUID(purpose, local uuid) {
+        uuid = UUID()
+        if imp.verbose >= 1
+            debuglog("getUUID ${uuid} for: ${purpose}")
+        uuid
     }
 
     // requester
@@ -526,7 +543,7 @@ closure Imp(us, local imp) {
             debuglog("Imp.register: info.meta must be a dictionary if specified")
         instanceID = info.instanceID
         if !string(instanceID) || imp.direct[instanceID] {
-            instanceID = UUID()
+            instanceID = getUUID("imp.register(${info.name}) auto-assignment")
             debuglog("Imp.register: instanceID ${info.instanceID} invalid or in use - replaced with ${instanceID}")
         }
         imp.direct[info.instanceID] = {

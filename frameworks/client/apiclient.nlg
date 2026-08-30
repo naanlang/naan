@@ -208,6 +208,7 @@ closure APIClient(imp, options, local client, url, guid) {
 closure WebSocketClient(options, imp, local wesc, ws, pending) {
     global(js)
     wesc = new(object, this)
+    
 
     // reconnect
     //
@@ -226,40 +227,29 @@ closure WebSocketClient(options, imp, local wesc, ws, pending) {
     //
     // Establish a websocket connection with the host.
     //
-    wesc.connect = closure connect(local url, result) {
+    wesc.connect = closure connect(local url, result, error) {
         if ws {
             if pending
                 return (pending.wait())                                     // connect in process
             if !wesc.fatal
                 return(list(false, { connected: true }))                    // already open
         }
-        try {
-            url = xnew(js.w.URL, options.url)
-        } catch {
-            return(list(Error("invalid URL ${options.url}", exception)))
-        }
-        if url.protocol == "https:"
-            url.protocol = "wss:"
-        else
-            url.protocol = "ws:"
-        ws = xnew(js.w.WebSocket, url.href)
-        if wesc.fatal
-            debuglog("WebSocketClient reopen")                              // ### not pretty to see this
-        wesc.fatal = false
-        pending = new(nonce)
 
         // onopen
         // The WebSocket connection is now open.
-        ws.onopen = function onopen(e) {
+        function onopen(e) {
             if wesc.impconn {
                 result = wesc.impconn.reopen()
                 pending.signal(result)
                 return
             }
-            wesc.impconn = imp.requester(function(data) {
+            wesc.impconn = imp.requester(function(data, local error, text) {
                 if !pending && reconnect()                                  // !pending means not opening/reopening
                     return                                                  // failed to reconnect
-                ws.send(js.w.JSON.stringify(data))
+                `(error, text) = JsonStringify(data)
+                if error
+                    return (list(error))
+                ws.send(text)
                 list(false, { sent: true })
             }, {
                 secret: options.guid
@@ -274,7 +264,7 @@ closure WebSocketClient(options, imp, local wesc, ws, pending) {
 
         // onmessage
         // A message was received via WebSockets.
-        ws.onmessage = function onmessage(e, local error, message) {
+        function onmessage(e, local error, message) {
             `(error, message) = JsonParse(e.data)
             if !error {
                 message = new(message)
@@ -289,7 +279,7 @@ closure WebSocketClient(options, imp, local wesc, ws, pending) {
         // onerror
         // An error occurred on the WebSocket connection.
         // This can happen in normal operation when the connection times out.
-        ws.onerror = function onerror(e) {
+        function onerror(e) {
             if !wesc.fatal
                 wesc.fatal = Error("websocket failed", e)
             pending.signal(list(wesc.fatal))
@@ -298,7 +288,7 @@ closure WebSocketClient(options, imp, local wesc, ws, pending) {
         
         // onclose
         // The WebSocket connection was closed.
-        ws.onclose = function onclose(e) {
+        function onclose(e) {
             // if e.code != 1000 && e.code != 1001 && e.code != 1005 && e.code != 1006
                 debuglog("WebSocketClient: closed:", e.code, e.reason)      // ### not pretty to see this
             ws = false
@@ -308,6 +298,19 @@ closure WebSocketClient(options, imp, local wesc, ws, pending) {
             pending = false
         }
 
+        `(error, ws) = call(clirWebsocket(), options.url, {
+            onopen: onopen.proc
+            onmessage: onmessage.proc
+            onerror: onerror.proc
+            onclose: onclose.proc
+        })
+        if error
+            return (list(wesc.fatal = error))                               // failed to even get started
+
+        if wesc.fatal
+            debuglog("WebSocketClient reopen")                              // ### not pretty to see this
+        wesc.fatal = false
+        pending = new(nonce)
         result = pending.wait(10000, list(Error("IMP connection timeout")))
         pending = false
         result

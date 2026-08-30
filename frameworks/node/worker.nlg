@@ -44,7 +44,7 @@ closure CurBot(options, local curbot) {
     curbot.guid = 1
     curbot.host = js.t                                                      // our magic Naan controller reference
 
-    curbot.instanceID = UUID()
+    curbot.instanceID = App.imp.getUUID("CurBot(${options.name}) instanceID")
     curbot.sender = App.imp.register(curbot, {
         name: curbot.name
         type: curbot.type
@@ -266,7 +266,7 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     nowbot.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
     nowbot.msgport = subChannel.port2
 
-    nowbot.instanceID = UUID()
+    nowbot.instanceID = App.imp.getUUID("NowBot(${options.name}) instanceID")
     nowbot.sender = App.imp.register(nowbot, {
         name: options.name
         type: options.type
@@ -428,6 +428,16 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
         nowbot.thread = false
         destroy()
     })
+    
+    // close
+    //
+    // Close and remove our IMP resources, but leave the worker alone.
+    //
+    nowbot.close = function close() {
+        nowbot.impconn.destroy()
+        nowbot.impconn = false
+        App.imp.unregister(nowbot.instanceID)
+    }
 
     // destroy
     //
@@ -436,9 +446,7 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     nowbot.destroy = function destroy() {
         terminate()
         nowbot.thread = false
-        nowbot.impconn.destroy()
-        nowbot.impconn = false
-        App.imp.unregister(nowbot.instanceID)
+        close()
     }
 
     // NaaN message
@@ -446,7 +454,7 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     // A message has been received from NaaN running on the worker thread.
     //
     nowbot.msgport.on("message", function (msg, local startmsg) {
-        if msg.id == "naan-imp-node" {
+        if msg.id == "naan-imp-out" {
             nowbot.impconn.dispatch(new(msg.data))
             return
         } else if msg.id == "loaded" {
@@ -542,7 +550,7 @@ closure NobBot(options, local nobbot)
 
     nobbot.impconn = App.imp.responder(function(data) {
         nobbot.msgport.postMessage({                                        // send to worker
-            id: "naan-imp-node"                                             // scoped for NodeWorkerNub
+            id: "naan-imp-in"                                               // scoped for NodeWorkerNub
             data: data
         })
         list(false, { sent: true })

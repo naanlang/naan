@@ -23,13 +23,21 @@ closure ExecutorBase(track, type, name, local exec) {
     exec.type = type
     exec.name = name
     exec.contexts = { }
-    
+
     // execReset
     //
     // Initialize remote communications for a new or restarted instance.
     //
-    exec.execReset = function execReset() {
+    exec.execReset = function execReset(error, local xid, pending) {
+        if !error
+            error = Error("execReset")
+        for `(xid, pending) in exec.pending {
+            pending.signal(list(error))
+            exec.pending[xid] = undefined
+        }
         exec.pending = { }
+        exec.inst_ready = false
+        exec.inst_error = undefined
         exec.nextSendID = toint(RandomBytes(3))                             // keep our sequence code unique for shared servers
     }
     execReset()
@@ -52,7 +60,7 @@ closure ExecutorBase(track, type, name, local exec) {
             pending.signal(Error("execSend failed", error))
         pending
     }
-    
+
     // execReceived
     //
     // The specified message was received from the instance, so signal it.
@@ -81,7 +89,7 @@ closure ExecutorBase(track, type, name, local exec) {
         exec.pending[data.xid] = undefined
         pending.signal(list(false, data))
     }
-    
+
     // execSetStatus
     //
     // Received a status update from the instance. This makes a copy of the specified dictionary for
@@ -93,7 +101,7 @@ closure ExecutorBase(track, type, name, local exec) {
     exec.execSetStatus = function execSetStatus(status) {
         exec.xstatus = new(status)                                          // for GC (!)
     }
-    
+
     // execFailed
     //
     // Communication has failed.
@@ -103,19 +111,15 @@ closure ExecutorBase(track, type, name, local exec) {
         for `(xid, pending) in exec.pending
             pending.signal(list(error))
     }
-    
+
     // execClosed
-    //
     //
     // Note that the connection has closed, so signal all the waiters.
     //
-    exec.execClosed = closure execClosed(error, local xid, pending) {
-        for `(xid, pending) in exec.pending {
-            pending.signal(list(error))
-            exec.pending[xid] = undefined
-        }
+    exec.execClosed = closure execClosed(error) {
+        execReset(error)
     }
-        
+
     // context
     //
     // Return a context object for the instance, or an error, in a result tuple. The optional state
@@ -157,7 +161,7 @@ closure ExecutorBase(track, type, name, local exec) {
     exec.attention = function attention() {
         track.attention(exec)
     }
-    
+
     // finis
     exec
 };
@@ -220,6 +224,8 @@ closure ExecutorContext(exec, state, coder, local context, util) {
     // an optional tuple of symbols to retrieve after evaluation.
     //
     context.eval = closure evalf(expr, put, get, local roots, pkg, data, pending, result) {
+        if !exec.inst_ready
+            return (list(Error("execution context closed")))
         if tuple(put)
             roots = cons(`expr, put)
         else
@@ -288,6 +294,8 @@ closure ExecutorContext(exec, state, coder, local context, util) {
     // The procedure must be specified as a symbol or string.
     //
     context.rpc = closure rpc(proc, args, local data, pending, result) {
+        if !exec.inst_ready
+            return (list(Error("execution context closed")))
         data = {
             contextID: state.contextID
             proc: proc
@@ -611,7 +619,7 @@ closure ExecutorTracker(local xtrak) {
     }
 
     // add
-    // Add an execution instance at the specified location.
+    // Add an execution instance.
 
     xtrak.add = closure add(executor, local instance) {
         instance = new(nonce)

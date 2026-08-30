@@ -132,10 +132,12 @@ closure TermHost(track, name, options,
  *
  * Options:
  *  {
- *      workerID: <string>                      // kind of worker in server subsystem
+ *      workerID:   <string>                    // kind of worker in server subsystem
  *                                              // "NaanIDE" for local IDE
- *      startup: <dictionary>                   // startup options
- *      type: <string>                          // (rare) target category, e.g. "Local"
+ *      startup:    <dictionary>                // startup options
+ *      type:       <string>                    // (rare) target category, e.g. "Local"
+ *      worker:     <xobject>                   // existing worker or window
+ *      naancont:   <xobject>                   // NaaN controller if vsite
  *  }
  *
  */
@@ -153,11 +155,17 @@ closure TermLocal(track, name, options, local target, worker, wowbot, error)
         return (termIDE(track, name, options.workerID, js.t))               // connect to IDE execution instance itself
     }
 
-    target = findIDEtarget(track, name, options.workerID)
-    if target
-        return (list(false, target))                                        // already exists
+    target = findIDEtarget(track, name, options.workerID, options.title, options.naancont)
+    if target {                                                             // new naancont on existing target
+        target.updateController(options)
+        track.update(target)
+        return (list(false, target))
+    }
 
-    worker = xnew(window.Worker, "env_webworker.js")
+    if options.worker
+        worker = options.worker
+    else
+        worker = xnew(window.Worker, "env_webworker.js")
     wowbot = WowBot(worker, {
         name: name
         type: options.workerID
@@ -171,6 +179,91 @@ closure TermLocal(track, name, options, local target, worker, wowbot, error)
     `(error) = target.open(wowbot.instanceID)
     if error
         return (list(Error("cannot create InTop", error)))
+
+    target.title = options.title
+    target.naancont = options.naancont
+
+    // updateController
+    //
+    //     Our controller was replaced, meaning the window changed.
+    //
+    target.updateController = function updateController(newops) {
+        target.execReset()
+        target.statusPoll = false
+        wowbot.close()
+        if defined(newops, `worker) {
+            if worker
+                target.impReceive({
+                    id: "textout"
+                    text: "\x1b[90m\x1b[3m".concat("\ntarget replaced", "\x1b[0m\n")
+                })
+            worker = newops.worker
+        }
+        if defined(newops, `title)
+            target.title = newops.title
+        if defined(newops, `naancont)
+            target.naancont = newops.naancont
+        wowbot = WowBot(worker, {
+            name: name
+            type: options.workerID
+            startup: options.startup
+        })
+        target.open(wowbot.instanceID)
+    }
+
+    // targetClose
+    //
+    //     Mark the target window as closed.
+    //
+    target.targetClose = function targetClose() {
+        worker = false
+        target.execReset()
+        target.cleanup()
+        target.impReceive({
+            id: "textout"
+            text: "\x1b[90m\x1b[3m".concat("\nwindow closed", "\x1b[0m\n")
+        })
+        target.close()
+    }
+
+    // cleanup
+    //
+    //     InTop is destroying our worker.
+    //
+    target.cleanup = function cleanup() {
+        target.statusPoll = false
+        target.naancont = false
+    }
+
+    // setCheckStatus
+    //
+    //     Begin or end checking status on the worker to see if stopped responding. The challenge
+    // here is that we open vsite windows in the main thread, but there is no reliable event to learn
+    // when they are closed. The solution is to poll the window.closed variable, which is reliable.
+    // to learn more quickly if the window as closed, the child may also inform us, but this is not
+    // entirely reliable--just quick if accurate.
+    //
+    target.setCheckStatus = closure setCheckStatus(hidden, window) {
+        if !target.statusPoll
+            target.statusPoll = future(function childWindowClosePoll() {
+                while target.statusPoll {
+                    if window.closed {
+                        targetClose()
+                        target.statusPoll = false
+                        break
+                    } else
+                        sleep(1000)                                     // check 1x/second
+                }
+            }, 10)                                                      // start after 10 msec
+    }
+
+    // vsiteRefresh
+    //
+    //     The vsite upon which we are based has changed.
+    //
+    target.vsiteRefresh = function vsiteRefresh(url_origin) {
+        target.naancont.VsiteRefresh(url_origin)
+    }
 
     // finis
 
@@ -203,27 +296,21 @@ closure findIDEtarget(track, name, workerID, title, naancont, local target) {
  *
  *     Make an IDE debugger target. The Naan controller in this case, env_web.js, iterates through
  * all connected terminals so we just have to provide unique connection object for it to talk with.
- * This is used for both the IDE itself as well as any additional virtual website windows.
+ * This is used for just the IDE itself.
  *
  */
 
-closure termIDE(track, name, workerID, naancont, title, local target, connected) {
+closure termIDE(track, name, workerID, naancont, local target, connected) {
     global(js)
-    target = findIDEtarget(track, name, workerID, title, naancont)
-    if target {                                                             // new naancont on existing target
-        if target.naancont && naancont !== target.naancont
-            target.targetClose()
-        target.updateController(naancont)
-        target.title = title
-        track.update(target)
-        return (target)
-    }
+    target = findIDEtarget(track, name, workerID)
+    if target
+        return (list(false, target))
     target = require("../running/executors.nlg").ExecutorBase(track, "Local", name)
     target.dispatcher = require("../running/taskexec.nlg").TaskDispatcher(false, false, "termIDE")
     target.name = name
-    target.title = title
     target.workerID = workerID
     target.naancont = naancont
+    target.jsterms = new(weakmap)
     naancont.ioctl_open(ioctl_callback.proc)
     connected = []
 
@@ -265,8 +352,11 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
     // Create a closure for an attaching terminal.
     //
     target.termAttach = closure termAttach(term, db, notify, local connection, jsterm, inbound) {
-        connection = new(object, this)
         jsterm = term.jsAcquire()                                           // termIDE must be direct
+        if target.jsterms[jsterm]
+            return                                                          // return existing connection
+        connection = new(object, this)
+        target.jsterms[jsterm] = connection
 
         function oninterrupt() {
             naancont.Interrupt(inbound)
@@ -301,10 +391,13 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         }
 
         connection.termDetach = function termDetach() {                     // disconnect the terminal
+            if !target.jsterms[jsterm]
+                return                                                      // already released
             db.detach(target)
             if inbound
                 naancont.Detach(inbound)
             connected = connected.filter(function(conn) { conn !== connection })
+            target.jsterms[jsterm] = undefined
             term.jsRelease()
         }
 
@@ -362,74 +455,6 @@ closure termIDE(track, name, workerID, naancont, title, local target, connected)
         connection
     }
     
-    // updateController
-    //
-    //     Update the naan controller on this target, which means updating for all the terminals.
-    //
-    target.updateController = function updateController(newnc, local conn) {
-        naancont.ioctl_close()
-        naancont = newnc
-        naancont.ioctl_open(ioctl_callback.proc)
-        target.naancont = newnc
-        for conn in connected {
-            if naancont {
-                naancont.Attach(conn.inbound)                               // tell the controller about terminals
-                conn.db.attach(target)                                      // re-attach since remote changed
-                conn.termActive()
-            } else
-                conn.db.detach(target)                                      // nothing left to debug
-        }
-        target.execReset()                                                  // reset our parent class
-    }
-
-    // targetClose
-    //
-    //     Mark the target window as closed.
-    //
-    target.targetClose = function targetClose(local conn) {
-        for conn in connected {
-            conn.db.detach(target)
-            conn.WriteLn("\x1b[90m\x1b[3m".concat("\ntarget closed", "\x1b[0m"))
-        }
-        target.execReset()
-        naancont.ioctl_close()
-        target.naancont = naancont = false
-    }
-
-    // setCheckStatus
-    //
-    //     Begin or end checking status on the worker to see if stopped responding. The challenge
-    // here is that we open vsite windows in the main thread, but there is no reliable event to learn
-    // when they are closed. The solution is to start checking if the window is closed after it gets
-    // a visibilityChange event to hidden. This terminates when the window gets marked closed or when
-    // it becomes visible again--which is quite unlikely unless someone uses the explicit hide/show
-    // window methods.
-    //
-    target.setCheckStatus = closure setCheckStatus(hidden, window) {
-        if hidden {
-            if !target.statusPoll
-                target.statusPoll = future(function() {
-                    while target.statusPoll {
-                        if window.closed {
-                            targetClose()
-                            target.statusPoll = false
-                            break
-                        } else
-                            sleep(100)                                      // check 10x/second
-                    }
-                }, 10)                                                      // start after 10 msec
-        } else
-            target.statusPoll = false
-    }
-
-    // vsiteRefresh
-    //
-    //     The vsite upon which we are based has changed.
-    //
-    target.vsiteRefresh = function vsiteRefresh(url_origin) {
-        naancont.VsiteRefresh(url_origin)
-    }
-    
     // destroy
     //
     //     Destroy the execution instance.
@@ -460,13 +485,15 @@ closure termInstallVirtualWatcher(track, naancont) {
 
     function watchVsites(msg, local error, target) {
         if msg.op == "VsiteOpen" {
-            `(error, target) = termIDE(track, msg.name, "NaanVsite", msg.naancont, msg.title)
+            `(error, target) = TermLocal(track, msg.name, {
+                workerID: "NaanVsite", worker: msg.window, title: msg.title, naancont: msg.naancont
+            })
             target.attention()
         }
         else if msg.op == "VsiteClose" {
             target = findIDEtarget(track, msg.name, "NaanVsite", msg.title, msg.naancont)
             if target
-                target.updateController()
+                target.updateController({ naancont: false })                // allow re-use of instance
         }
         else if msg.op == "VsiteVisibilityChange" {
             target = findIDEtarget(track, msg.name, "NaanVsite", msg.title, msg.naancont)

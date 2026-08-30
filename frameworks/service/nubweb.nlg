@@ -29,7 +29,7 @@ closure WebWorkerNub(imp, options, local wonub) {
         type: "web-worker-nub"
     }, options)
     wonub = new(object, this)
-    wonub.instanceID = imp.us.instanceID || UUID()
+    wonub.instanceID = imp.us.instanceID || imp.getUUID("WebWorkerNub(${options.name}) instanceID")
     wonub.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher(false, false, "WebWorkerNub")
 
     // impReceive
@@ -75,12 +75,12 @@ closure WebWorkerNub(imp, options, local wonub) {
 
     // message event
     //
-    // Incoming data.
+    // Incoming data to the worker.
     //
     js.w.addEventListener("message", function message(e, local msg) {
-        msg = new(e.data)
-        if msg.scope == "naan-imp-web"
-            wonub.impconn.dispatch(msg.data)
+        msg = e.data
+        if msg.scope == "naan-imp-in"
+            wonub.impconn.dispatch(new(msg.data))
     })
 
     // register our connects *after* the receivers are configured above
@@ -94,7 +94,7 @@ closure WebWorkerNub(imp, options, local wonub) {
     })
     wonub.impconn = imp.requester(function(data) {
         js.w.postMessage({                                                  // send to main
-            scope: "naan-imp-web",
+            scope: "naan-imp-out"
             data: data
         })
         list(false, { sent: true })

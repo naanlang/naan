@@ -52,7 +52,7 @@ closure RelayCon(imp, options, local relay, nlregex)
         serverID: "Workers"
         workerID: "NideServer"
     }, options.config)
-    relay.instanceID = UUID()
+    relay.instanceID = imp.getUUID("RelayCon(${options.name}) instanceID")
     relay.exec = execsMod.ExecutorBase(false, "Host", options.name)
     nlregex = RegExp("\\n", "g")
 

@@ -44,7 +44,7 @@ closure APIServer(options, local server, chroot) {
     server.guid = options.guid
     server.notifyq = []
     server.responseq = []
-    server.instanceID = UUID()
+    server.instanceID = App.imp.getUUID("APIServer instanceID")
     options = merge({
         relpath: ""
         name: "NaanServer"
