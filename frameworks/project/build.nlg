@@ -427,6 +427,16 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     }
 
     //
+    // init1
+    //
+    // Initialize a build worker.
+    //
+
+    function init1() {
+        require("../common").LiveImport()
+    }
+
+    //
     // parseAndPack1
     //
     // Parse the specified content and convert to a package format. The symbol NideBuild is assigned
@@ -434,7 +444,8 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
     // autoquoted to itself, a symbol. This can be used to detect build time vs. runtime.
     
     function parseAndPack1(text, fpath, options, operation,
-        local util, lib, penv, naansym, dlogsym, pmod, pcomp, ournn, output, textout, annerror, annotations, package)
+        local util, lib, modid, penv, naansym, dlogsym, pmod, pcomp, ournn,
+            output, textout, annotations, package)
     {
         //
         // textline
@@ -453,6 +464,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         lib = Naan.module.modlist().Lib.exports
         if !util || !lib
             return (list("Build packager cannot access support functions"))
+        modid = JSpath.basename(JSpath.dirname(fpath))
         //
         // The following crazy rigmarole is about customizing the ParsEnvironment so we can glean
         // enough information to build a package without actually executing the code. To do this we
@@ -469,7 +481,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         pcomp = { }                                                         // our component object
         ournn.module = {
             build: function(modname, compname, proc) {
-                pmod.id = module.id
+                pmod.id = modid
                 pmod.exports = { }
                 pcomp.name = compname
                 call(proc, pmod, pcomp)                                     // obtain manifest
@@ -513,23 +525,39 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         //
         textout = ""
         try {
-            if !pcomp.name
-                annerror = "Component required to build package"
-            else if output.errors.length > 0
-                annerror = output.errors[0]
-            annotations = output.annotations
-            if annotations {
-                if annotations.length == 0 {                                // empty annotations list
-                    if annerror
-                        annotations = [{                                    // first error becomes annotation
-                            row: 0
-                            column: 0
-                            text: annerror
-                            type: "error"
-                        }]
-                    else
-                        annotations = false }                               // no errors or annotations
+            if output.annotations.length == 0 && output.errors.length == 0
+                && (options.naanpack || options.jspack) {                   // actually building a package
+                if !pcomp.name {
+                    //
+                    // Some components cannot use a build function because they are too early in the
+                    // boot process, but we still need a component. We look for NaanBuildComponent
+                    // to define a dictionary with filename, name and manifest fields. For example,
+                    // see Util:Module.nlg
+                    //
+                    pcomp = penv.evalq(car(compress(NaanBuildComponent)))
+                    if !pcomp || !fpath.endsWith("/".concat(pcomp.filename))
+                        output.errors.push("Build cannot package without component, use NaanBuildComponent?")
+                }
+                if output.errors.length == 0 {
+                    package = util.pkgSave(compress(pcomp.name), pcomp.manifest)
+                    if string(package) {
+                        output.errors.push("Build cannot generate package: ".concat(package))
+                        package = false
+                    }
+                }
             }
+
+            annotations = output.annotations
+            if annotations.length == 0 {                                    // empty annotations list
+                if output.errors.length > 0
+                    annotations.push({                                      // first error becomes annotation
+                        row: 0
+                        column: 0
+                        text: output.errors[0]
+                        type: "error"
+                    })
+                else
+                    annotations = false }                                   // no errors or annotations
             if output.errors.length > 0 || output.text.length > 0 {
                 textline("-".repeat(79))
                 textline("While processing ", fpath)
@@ -548,22 +576,6 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
             //
             // Build the package, if not just doing syntax checking
             //
-            if options.naanpack || options.jspack {                         // actually building a package?
-                if !pcomp.name {
-                    //
-                    // Some components cannot use a build function because they are too early in the
-                    // boot process, but we still need a component. We look for NaanBuildComponent
-                    // to define a dictionary with filename, name and manifest fields. For example,
-                    // see Util:Module.nlg
-                    //
-                    pcomp = penv.evalq(car(compress(NaanBuildComponent)))
-                    if !pcomp || !fpath.endsWith("/".concat(pcomp.filename))
-                        return (list("Build cannot package without component in ".concat(fpath), false, annotations, textout))
-                }
-                package = util.pkgSave(compress(pcomp.name), pcomp.manifest)
-                if string(package)
-                    return (list("Build cannot generate package for ".concat(fpath), false, annotations, textout))
-            }
         } catch {
             if true
                 return (list("Packaging exception in ".concat(fpath, ": ", tostring(exception)), false, annotations, textout))
@@ -593,7 +605,7 @@ closure Builder(rules, operation, fs, srcpath, destpath, track, local build, gro
         if !build.parallel
             build.parallel = ExecutorParallel(track, {                      // create worker pool
                 basename: "build"
-                initeval: `(false, (parseAndPack1))
+                initeval: list(quote(init1()), `(init1, parseAndPack1))
             })
         result = build.parallel.rpc(parseAndPack1, list(text, fpath, options, operation))
         if !result.0 {

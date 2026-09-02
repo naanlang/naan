@@ -151,7 +151,18 @@ closure ServiceWorker(pubID, pubVersion, local serv, callback) {
             message: "opened"
         })
     }
-    
+
+    // update
+    //
+    // Go get the latest version of the service worker and update if changed.
+    //
+    serv.update = closure update(local err, reg) {
+        `(err, reg) = await(serv.reg.update())
+        if err
+            return (list(Error("service worker update failed", err)))
+        list(false, reg)
+    }
+
     // reload
     //
     // If a sevice worker is waiting, then terminate the old one and activate the new one -- which
