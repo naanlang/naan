@@ -35,7 +35,9 @@ closure APIClient(imp, options, local client, url, guid) {
     options = merge({
     }, options)
     url = options.url
-    if !url.match(RegExp("^https?:\/\/", "i"))
+    if url.match(RegExp("^https?:\/\/", "i"))
+        client.https = true
+    else
         url = "http://${url}"                                               // a protocol is required
     if url.slice(-1) != "/"
         url = url.concat("/")                                               // must end in "/"
@@ -45,14 +47,19 @@ closure APIClient(imp, options, local client, url, guid) {
     client.notifyAfter = 0
     client.requester = clirRequester()
 
-    //
     // connect
     //
-
-    client.connect = function connect(error) {
+    // For secure connections this automatically makes a GET request on the root to ensure that any
+    // required client TLS certificate is presented before we attempt websocket communication.
+    // Without this browsers like Chrome may fail the connection.
+    //
+    client.connect = function connect(local error) {
         if !client.wesc
-            client.wesc = WebSocketClient(options, imp)
-        `(error) = client.wesc.connect()
+            client.wesc = WebSocketClient(imp, options)
+        if client.https
+            `(error) = clientRequest(url)                                   // present client cert if any
+        if !error
+            `(error) = client.wesc.connect()
         if error {
             ErrorDebuglog("APIClient: cannot connect to", url, error)
             return (list(error))
@@ -61,8 +68,10 @@ closure APIClient(imp, options, local client, url, guid) {
         list(false, { connected: true })
     }
 
-    // clientRequest() - append our guid to the headers
-
+    // clientRequest()
+    //
+    // Append our guid to the headers.
+    //
     closure clientRequest(url, reqops) {
         reqops = merge(reqops)
         if options.guid
@@ -70,19 +79,19 @@ closure APIClient(imp, options, local client, url, guid) {
         client.requester(url, reqops)
     }
 
+    // docs
     //
-    // docs()
+    // Here out of history.
     //
-
     client.docs = closure docs(local error, content, extra) {
         `(error, content, extra) = clientRequest(url)
         printline(content)
     }
 
+    // status
     //
-    // status(callback, timeoutMS)
+    // Does a long request poll, from the era before websockets.
     //
-
     client.status = closure status(cbStatus, timeoutms, local query, error, content, extra, queued) {
         query = EncodeQuery("status/?", {
             timeout: timeoutms
@@ -103,10 +112,10 @@ closure APIClient(imp, options, local client, url, guid) {
         }
     }
 
-    //
     // get
     //
-
+    // Do a regular GET request.
+    //
     client.get = closure get(path, options, local requrl, error, content, extra) {
         if App.cache
             requrl = url.concat(EncodeQuery(path.concat("?"), { naanver: App.cache }))
@@ -123,10 +132,10 @@ closure APIClient(imp, options, local client, url, guid) {
             list(error, content, extra)
     }
 
+    // readFile
     //
-    // readFile(filepath, options)
+    // Read a file at the specified path.
     //
-
     client.readFile = closure readFile(filepath, options, local query, error, content, extra) {
         query = EncodeQuery("readfile/?", {
             path: filepath
@@ -142,11 +151,10 @@ closure APIClient(imp, options, local client, url, guid) {
             list(error, content, extra)
     }
 
-    //
-    // psmRemote(options, data, callback)
+    // psmRemote
     //
     // Perform an operation and call back when done.
-
+    //
     client.psmRemote = closure psmRemote(options, data, callback, 
         local query, reqOptions, error, content, extra) {
         query = EncodeQuery("psm/?", options)
@@ -205,7 +213,7 @@ closure APIClient(imp, options, local client, url, guid) {
  *
  */
 
-closure WebSocketClient(options, imp, local wesc, ws, pending) {
+closure WebSocketClient(imp, options, local wesc, ws, pending) {
     global(js)
     wesc = new(object, this)
     
