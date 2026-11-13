@@ -26,11 +26,13 @@
  *      onmessage:  <proc>(e, message)          // message received
  *      onerror:    <proc>(e)                   // error occurred
  *      onclose:    <proc>(e)                   // connection has closed
+ *      pfx:        <blob>                      // client certificate bundle
+ *      passphrase: <string>                    // decryption key for pfx
  *  }
  *
  */
 
-closure WebSocket(urlstr, options, local error, wslib, url, ws) {
+closure WebSocket(urlstr, options, local error, wslib, url, reqOptions, crypto, bundle, ws) {
     `(error, wslib) = await(js.i("ws"))
     if error
         return (list(error))
@@ -48,7 +50,24 @@ closure WebSocket(urlstr, options, local error, wslib, url, ws) {
         url = "wss://${url.host}${options.query}"
     else
         url = "ws://${url.host}${options.query}"
-    ws = xnew(wslib.default, url)
+    reqOptions = {}
+    if options.pfx {
+        `(error, crypto) = await(js.i("node:crypto"))
+        if error || !crypto.parsePKCS12
+            return (list(Error("PKCS#12 bundles not supported in this NodeJS")))
+        try {
+            bundle = crypto.parsePKCS12(options.pfx, {
+                passphrase: options.passphrase || undefined
+            })
+        } catch {
+            return (list(Error("failed to parse PKCS#12 bundle", exception)))
+        }
+        if !bundle || !bundle.privateKey || !bundle.certificate
+            return (list(Error("PKCS#12 bundle missing required elements")))
+        reqOptions.cert = bundle.certificate.toString()
+        reqOptions.key = bundle.privateKey.export({ type: 'pkcs8', format: 'pem' })
+    }
+    ws = xnew(wslib.default, url, reqOptions)
     ws.onopen = options.onopen
     ws.onmessage = options.onmessage
     ws.onerror = options.onerror

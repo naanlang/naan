@@ -99,6 +99,8 @@ closure httpsApiReqOnce(url, options,
         reqOptions.key = options.ssl.key || undefined
         reqOptions.passphrase = options.ssl.passphrase || undefined
     }
+    reqOptions.pfx = options.pfx || undefined                               // client cert bundle
+    reqOptions.passphrase = options.passphrase || undefined
     pending = new(nonce)
     chunks = []
     request = nodeHttps.request(url, reqOptions, closure (response) {

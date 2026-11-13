@@ -19,30 +19,38 @@ serviceMod;;
 /*
  * APIClient
  *
- * Make an API client object. If you want websockets, and you do, call connect() on the object.
+ * Make an API client object. If you want websockets, and you do, call connect() on the object. When
+ * a client certificate is required, this will prompt the user in the browser to specify a cert from
+ * the OS store. However for NodeJS you must specify a PKCS#12 (.p12) certificate bundle in advance.
  *
  * Options:
  *  {
- *      url:            <string>                // hostname or URL of the remote server
+ *      url:            <string>                // URL of the remote server, optionally with guid etc.
  *      guid:           <string>                // shared secret for access to remote server
+ *      pfx:            <blob>                  // client certificate bundle
+ *      passphrase:     <string>                // decryption key for pfx
  *  }
  *
  */
 
-closure APIClient(imp, options, local client, url, guid) {
-    global(App, serviceMod)
+closure APIClient(imp, options, local client, url, urlob, guid) {
+    global(App, serviceMod, URL)
     client = new(object, this)
     options = merge({
     }, options)
-    url = options.url
-    if url.match(RegExp("^https?:\/\/", "i"))
-        client.https = true
-    else
-        url = "http://${url}"                                               // a protocol is required
-    if url.slice(-1) != "/"
-        url = url.concat("/")                                               // must end in "/"
-    client.url = url
-    options.url = url
+    if !options.url.match(RegExp("^(ws|http)s?://", "i"))
+        options.url = "http://${options.url}"                               // a protocol is required
+    try {
+        urlob = xnew(URL, options.url)
+    } catch {
+        debuglog("APIClient: bad URL", options.url, exception)
+        urlob = { }
+    }
+    if urlob.protocol == "https:" || urlob.protocol == "wss:"
+        client.tls = true
+    options.url = client.url = url = urlob.toString()
+    if !options.guid && urlob.searchParams.get("guid")
+        options.guid = urlob.searchParams.get("guid")
     client.guid = options.guid
     client.notifyAfter = 0
     client.requester = clirRequester()
@@ -56,8 +64,11 @@ closure APIClient(imp, options, local client, url, guid) {
     client.connect = function connect(local error) {
         if !client.wesc
             client.wesc = WebSocketClient(imp, options)
-        if client.https
-            `(error) = clientRequest(url)                                   // present client cert if any
+        if client.tls
+            `(error) = clientRequest(url, {                                 // present client cert if any
+                pfx: options.pfx || undefined                               // not specified here in browser
+                passphrase: options.passphrase || undefined
+            })
         if !error
             `(error) = client.wesc.connect()
         if error {
@@ -209,6 +220,8 @@ closure APIClient(imp, options, local client, url, guid) {
  *  {
  *      url:            <string>                // hostname or URL of the remote server
  *      guid:           <string>                // shared secret for access to remote server
+ *      pfx:            <blob>                  // client certificate bundle
+ *      passphrase:     <string>                // decryption key for pfx
  *  }
  *
  */
@@ -306,12 +319,13 @@ closure WebSocketClient(imp, options, local wesc, ws, pending) {
             pending = false
         }
 
-        `(error, ws) = call(clirWebsocket(), options.url, {
+        options = merge(options, {
             onopen: onopen.proc
             onmessage: onmessage.proc
             onerror: onerror.proc
             onclose: onclose.proc
         })
+        `(error, ws) = call(clirWebsocket(), options.url, options)
         if error
             return (list(wesc.fatal = error))                               // failed to even get started
 

@@ -61,10 +61,13 @@ closure RelayCon(imp, options, local relay, nlregex)
     // Connect with the destination if not already connected.
     //
     relay.connect = closure connect(destID) {
-        if relay.curDestID
-            return (list(false, { connectedID: relay.curDestID }))
         if !string(destID)
             return (list(Error("invalid connect destination")))
+        if relay.curDestID {
+            if destID == relay.curDestID
+                return (list(false, { connectedID: relay.curDestID }))
+            close()
+        }
         relay.curDestID = destID
 
         relay.sender = imp.register(relay, {
@@ -189,14 +192,9 @@ closure RelayCon(imp, options, local relay, nlregex)
     //      (JSON serializationn converts the date to an ISO string)
     //
     relay.context = closure context(destID, local result) {
-        if destID != relay.curDestID {
-            if relay.curDestID
-                close()
-            result = connect(destID)
-            if result.0
-                return (result)
-        }
-        connect(destID)
+        result = connect(destID)
+        if result.0
+            return (result)
         if imp.us.instanceID != destID
             imp.inform(imp.us.instanceID, destID)                           // ensure our IMP is reachable by them
         relay.exec.context()

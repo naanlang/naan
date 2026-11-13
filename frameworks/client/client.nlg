@@ -65,5 +65,9 @@ function clirInit(local manifest) {
     Naan.module.build(module.id, "client", function(modobj, compobj) {
         require("../common/").LiveImport()
         compobj.manifest = manifest
+        function clirReload() {
+            URL = (js.g||js.w).URL
+        }()
+        module.reload = clirReload
     })
 } ();

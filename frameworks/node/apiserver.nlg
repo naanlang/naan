@@ -51,7 +51,7 @@ closure APIServer(options, local server, chroot) {
     options = merge({
         relpath: ""
         name: "NaanServer"
-        listenIP: "0.0.0.0"
+        listenIP: "localhost"
     }, options)
     if options.abspath
         chroot = options.abspath
@@ -63,7 +63,7 @@ closure APIServer(options, local server, chroot) {
     // Update our state based on the specified port number.
     //
     function updatePort(port, local hostname) {
-        if !options.listenIP || options.listenIP == "0.0.0.0"
+        if !options.listenIP
             hostname = "localhost"                                          // bound to loopback
         else
             hostname = options.listenIP                                     // specific interface
@@ -101,7 +101,7 @@ closure APIServer(options, local server, chroot) {
                     pending.signal(false)
                 }
                 else
-                    pending.signal(list(Error("server listen error", err, { code: err.code })))
+                    pending.signal(list(Error("server listen error:", err, { code: err.code })))
             })
             result = pending.wait()
             pending.reset()
@@ -646,11 +646,11 @@ function ApisInit(local manifest) {
 
     Naan.module.build(module.id, "apiserver", function(modobj, compobj) {
         require("./node.nlg")
+        require("./filesystem.nlg")
+        psmServerMod = require("./psm_server.nlg")
+        workerMod = require("./worker.nlg")
+        serviceMod = require("../service/imp.nlg")
         compobj.manifest = manifest
         modobj.exports.APIServer = APIServer
     })
-    require("./filesystem.nlg")
-    psmServerMod = require("./psm_server.nlg")
-    workerMod = require("./worker.nlg")
-    serviceMod = require("naanlib:frameworks/service/imp.nlg")
 }();

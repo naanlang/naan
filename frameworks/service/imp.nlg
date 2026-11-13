@@ -35,7 +35,6 @@ closure Imp(us, local imp) {
         name: "imp-generic"
         type: "imp-type"
     }, us)
-    imp.verbose = false
     if !us.instanceID
         us.instanceID = getUUID("Imp(${imp.us.name}) instanceID")
     else if imp.verbose >= 1
@@ -45,53 +44,47 @@ closure Imp(us, local imp) {
     imp.gateways = { }                                                      // routing gateways for next hop
     imp.discovering = []                                                    // nonces for current discoveries
     imp.unknowns = { }                                                      // unknown ID notices we have sent
+    imp.renameIDs = { }                                                     // these IDs renamed
 
     // send_hello
     // Send an hello request to the other side.
     function send_hello(destID, local dest, message) {
         dest = imp.pipes[destID]
         message = {
-            id:     "imp-hello"
-            from:   us.instanceID
-            secret: dest.secret
-            name:   us.name
-            type:   us.type
-            meta:   us.meta || undefined
+            id:             "imp-hello"
+            from:           us.instanceID
+            to:             destID
+            secret:         dest.secret
+            name:           us.name
+            type:           us.type
+            meta:           us.meta || undefined
+            temporaryID:    dest.temporaryID || undefined
         }
-        if !dest.idsymbol
-            message.to = destID                                             // must match
         dest.sendconn(message)
         dest.state = `hello
     }
 
     // validate_destination
-    // Check the handshake destination, returning true iff unique
-    function validate_destination(fakeID, realID, local dest) {
-        if fakeID == realID
+    // Check the handshake destination, updating destination and returning true iff unique.
+    function validate_destination(expectID, actualID, local dest) {
+        if expectID == actualID
             return (true)
-        dest = imp.pipes[realID]
+        dest = imp.pipes[actualID]
         if dest && dest.state != `closed
             return (false)
-        dest = imp.pipes[fakeID]
-        if !dest.idsymbol
-            return (false)
-        assign(dest.idsymbol, realID)
-        dest.idsymbol = undefined
-        dest.destID = realID
-        imp.pipes[realID] = dest
-        imp.pipes[fakeID] = undefined
+        dest = imp.pipes[expectID]
+        assign(dest.idsymbol, actualID)
+        dest.destID = actualID
+        imp.pipes[actualID] = dest
+        imp.pipes[expectID] = undefined
         return (true)
     }
 
     // disp_hello
     // Dispatch an hello request from destID.
-    function disp_hello(message, destID, local dest, reject) {
+    function disp_hello(message, destID, local dest, updateID) {
         if imp.direct[message.from] {                                       // wasteful, I think
             debuglog("Imp.disp_hello: ignoring hello from direct:", message.from)
-            return
-        }
-        if message.to && message.to != us.instanceID {                      // required uuid mismatch
-            debuglog("Imp.disp_hello: ignoring hello from ${message.from} to ${message.to}, we are ${us.instanceID}")
             return
         }
         if message.secret != imp.pipes[destID].secret {                     // invalid hello secret
@@ -101,7 +94,7 @@ closure Imp(us, local imp) {
         dest = imp.pipes[message.from]
         if destID != message.from {                                         // educate pipe on his real destID
             dest = imp.pipes[destID]
-            if !dest || !dest.idsymbol {
+            if !dest {                                                      // really should never happen
                 debuglog("Imp.disp_hello: hello ${message.from} sequencing error")
                 return
             }
@@ -111,8 +104,18 @@ closure Imp(us, local imp) {
                     debuglog("Imp.disp_hello: pipe ${destID} promoted from indirect ${imp.gateways[destID]}")
                     imp.gateways[destID] = undefined
                 }
-            } else
-                reject = "duplicate"
+            } else {                                                        // additional pipe opened
+                // ### unclear if this can still happen
+                debuglog("Imp.disp_hello: from ${message.from} is duplicate to existing ${destID}")
+            }
+        }
+        if !message.temporaryID && message.to && message.to != us.instanceID {
+            if imp.verbose >= 1
+                debuglog("Imp.disp_hello: sender ${destID}\n"               // their expected uuid did not match us
+                         "         thinks we are ${message.to}\n"
+                         "            but we are ${us.instanceID}")
+            updateID = message.to                                           // tell them we were re-created
+            imp.renameIDs[message.to] = us.instanceID                       // rename IDs in transit
         }
         dest.name = message.name
         dest.type = message.type
@@ -125,7 +128,7 @@ closure Imp(us, local imp) {
             type:       us.type
             meta:       us.meta
             defaultID:  dest.info.defaultID || undefined
-            reject:     reject || undefined
+            updateID:   updateID || undefined
         })
         dest.state = `active                                                // responder now active
         dest.handshake.signal(list(false, destID))
@@ -141,21 +144,19 @@ closure Imp(us, local imp) {
             debuglog("Imp.disp_active: wrong sequence for state", dest.state)
             return
         }
-        if message.reject {                                                 // we were rejected
-            debuglog("Imp.disp_active: duplicate requesterID", message.to, "(${message.name} / ${message.type})")
-            dest.handshake.signal(list(Error("duplicate requesterID", message.to)))
-            return
-        }
         if !validate_destination(destID, message.from) {                    // we are rejecting them
             debuglog("Imp.disp_active: duplicate responderID", message.from, "(${message.name} / ${message.type})")
             dest.handshake.signal(list(Error("duplicate responderID", message.from)))
             return
         }
+        if message.updateID
+            update_destIDs(message.updateID, message.from)                  // responder has new ID
         destID = message.from
         dest.name = message.name
         dest.type = message.type
         dest.meta = message.meta || undefined
         dest.defaultID = message.defaultID
+        dest.temporaryID = undefined                                        // no longer temporary
         dest.state = `active                                                // both sides now active
         if message.defaultID
             imp.gateways[message.defaultID] = destID                        // how to get there
@@ -202,10 +203,11 @@ closure Imp(us, local imp) {
     // and the sender is the IMP node that first noticed the destID was undefined.
     //
     closure send_message(sourceID, destID, message, local dest, hopID) {
-        if sourceID == destID || !sourceID || !destID || !message {
+        if sourceID == destID && sourceID != us.instanceID || !sourceID || !destID || !message {
             debuglog("Imp.send_message: invalid parameters", sourceID, destID, message)
             return (list(Error("invalid send parameters")))                 // invalid
         }
+        destID = imp.renameIDs[destID] || destID                            // rename in-transit destination
         dest = imp.direct[destID]
         if dest {                                                           // send to direct connect
             if imp.direct[sourceID] || us.instanceID == sourceID {          // direct -> direct
@@ -297,6 +299,21 @@ closure Imp(us, local imp) {
         }
     }
 
+    // update_destIDs
+    // Update when a destID (and probably transitive children) have changed
+    function update_destIDs(oldID, newID, local toverify, fromID, peerID) {
+        toverify = []
+        for `(fromID, peerID) in imp.gateways
+            if peerID == oldID {
+                imp.gateways[fromID] = newID                                // our gateway to fromID is newID
+                toverify.push(fromID)                                       // need verification
+            }
+        imp.renameIDs[oldID] = newID
+        if imp.pipes[newID].info.destID == oldID
+            imp.pipes[newID].info.destID = newID
+        imp.dispatchEvent("update", oldID, newID, toverify)
+    }
+
     // disc_dests
     // Return an array of our discovery destinations.
     function disc_dests(local output, uuid, dest) {
@@ -375,7 +392,7 @@ closure Imp(us, local imp) {
             dispatch(message, destID)
         }
 
-        // sender - send a message, resturning result tuple
+        // sender - send a message, returning result tuple
         function sender(message, senderID, local result) {
             if !imp.pipes[destID]
                 return (list(Error("connection destroyed")))                // cannot open
@@ -446,6 +463,7 @@ closure Imp(us, local imp) {
             state: `closed
             secret: info.secret || undefined
             info: info
+            idsymbol: quote(destID)
         }
         dest.info.secret = undefined                                        // no need to spread it around
         if initiator
@@ -458,8 +476,8 @@ closure Imp(us, local imp) {
             dest.info.services = [ service ]
         destID = info.destID
         if !destID {
-            destID = getUUID("imp temporary for requester")                 // temporary destID to be updated
-            dest.idsymbol = quote(destID)
+            destID = getUUID("temporary for ${service}")                    // temporary destID to be updated
+            dest.temporaryID = destID
         }
         imp.pipes[destID] = dest
         if !info.delayOpen

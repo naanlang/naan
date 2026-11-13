@@ -4,7 +4,7 @@
 NaaN is an async-first software platform for rapid development.
 
 #### Release:
-     **NaaN for NPM** version **1.7.3+1**  
+     **NaaN for NPM** version **1.7.4+1**  
      Copyright (c) 2017-2026 Zulch Laboratories, Inc.
 
 #### Features
