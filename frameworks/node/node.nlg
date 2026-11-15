@@ -134,7 +134,6 @@ function nodrInit(local manifest) {
             stream = js.r("stream")
             nodeHttps = js.r("https")
             nodeHttp = js.r("http")
-            nodeUrl= js.r("url")
             threads = js.r("worker_threads")
             stringDecoder = js.r("string_decoder")
         }()

@@ -82,15 +82,15 @@ closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
     //
     // Execute a shell command in a PTY terminal with optional current-working-directory.
     //
-    shob.pty = closure pty(cmd, args, cwd, local exec, error, options, ptyp) {
-        exec = App.exec
-        if !exec
-            `(error, exec) = App.workerNub.execProxy()
+    shob.pty = closure pty(cmd, args, cwd, local mainx, error, options, ptyp) {
+        mainx = App.exec
+        if !mainx
+            `(error, mainx) = App.workerNub.execProxy()
         if !error {
             options = { input:"keyboard", output:"display", raw:true }
             if cwd
                 options.spawn = { cwd: cwd }
-            `(error, ptyp) = exec.subprocess(cmd, args, options)
+            `(error, ptyp) = mainx.subprocess(cmd, args, options)
         }
         if ptyp
             list(false, ptyp)

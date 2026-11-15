@@ -1,0 +1,208 @@
+/*
+ * operations.nlg
+ * Naanlib/frameworks/service
+ *
+ * Naan service operations.
+ *
+ * column positioning:                          //                          //                      !
+ *
+ * Copyright (c) 2026 by Richard C. Zulch
+ *
+ */
+
+
+/*
+ * Operations
+ *
+ * The Operations layer provides a services abstraction on top of the gory details of IMP. Clients
+ * can search and discover IMP nodes and their available services, and get/create remote evaluation
+ * and execution contexts. One operations object corresponds to one IMP object.
+ *
+ * `exec            - remote evaluation
+ * `term            - terminal access
+ * `discovery       - supports IMP discovery
+ * `utils           - has direct utilities
+ *
+ */
+
+closure Operations(imp, local ops, services_decode) {
+    global(App)
+    ops = new(object, this)
+
+    services_decode = {
+        "discovery" : {                                                     // service::Imp
+            direct: [ `discovery ]                                          // can be discovered
+            piped:  [ `discovery ]
+        }
+        "imp-pipe-req" : {                                                  // service::Imp.requester
+        }
+        "imp-pipe-res" : {                                                  // service::Imp.responder
+        }
+        "naan-executor": {                                                  // running::InTop
+            direct: [ `exec, `term ]                                        // runs anywhere / provides `remote
+        }
+        "naan-node-main": {                                                 // node::CurBot
+            piped:  [ `exec, `term ]                                        // runs in node main / provides main
+        }
+        "naan-node-worker": {                                               // node::NowBot
+            piped:  [ `exec, `term ]                                        // runs in node main / provides worker
+        }
+        "naan-node-worker-nub": {                                           // service::NodeWorkerNub
+            direct: [ `utils ]                                              // runs in node worker
+            piped:  [ `exec, `term ]                                        // exposes worker
+        }
+        "naan-remote-requester": {                                          // running::RemoteRequester
+            direct: [ `exec ]                                               // runs anywhere / provides `exec
+        }
+        "naan-remote-responder": {                                          // running::RemoteResponder
+            direct: [ `exec ]                                               // runs anywhere
+            piped:  [ `exec ]                                               // exposes `exec
+        }
+        "naan-web-main": {                                                  // browser::MewBot
+            piped:  [ `exec, `term ]                                        // runs in web main / provides main
+        }
+        "naan-web-worker": {                                                // browser::WowBot
+            piped:  [ `exec, `term ]                                        // runs in web main / provides worker
+        }
+        "naan-web-worker-nub": {                                            // service::WebWorkerNub
+            direct: [ `utils ]                                              // runs in web worker
+            piped:  [ `exec, `term ]                                        // exposes worker
+        }
+        "term-client": {                                                    // client::RelayCon
+            direct: [ `exec, `term ]                                        // ### `term is aspirational
+        }
+    }
+
+    // probe
+    //
+    // Probe a specific discovery record to determine its capabilities for our internal use.
+    //
+    closure probe(record, imprec
+        local output, service, op, base) {
+        output = {}
+        for service in record.services {
+            base = length(output)
+            if imp.us.instanceID == record.direct
+                for op in services_decode[service].direct
+                    output[op] = true
+            for op in services_decode[service].piped
+                output[op] = true
+        }
+        if !record.direct
+            for op in record.env
+                output[op] = true
+        return (output)
+    }
+
+    // info
+    //
+    // Return operations info about an IMP node.
+    //
+    ops.info = function info(destID) {
+        
+    }
+
+    // list
+    //
+    // List IMP nodes compatible with the specified operation. If no IMP destID is specified then
+    // App.imp is used. Operations are specified by the following symbols. If an array of operations
+    // is specified then all must match. Type and name are optional and further filter the results.
+    // This returns a standard result tuple with array of results.
+    //
+    //  term            - supports remote evaluation and terminal interface
+    //  exec            - supports remote evaluation
+    //  discovery       - supports IMP discovery
+    //  main            - is the main thread of a JS execution instance
+    //  worker          - is a JS worker
+    //  node            - node runtime
+    //  web             - web browser runtime
+    //
+    ops.list = closure list(destID, filter, type, name,
+        local output, error, discover, record, spec) {
+        // test_filter
+        // Test if the spec is accepted by the filter
+        function test_filter(spec, local op) {
+            for op in filter
+                if !spec[op]
+                    return (false)
+            true
+        }
+
+        if filter && name(filter)
+            filter = [filter]
+        output = []
+        `(error, discover) = App.imp.discover(destID)
+        if error
+            return (list(error))
+        for record in discover {
+            if record.route == imp.us.instanceID
+                continue                                                    // ignore if routes back to us
+            if type && record.type != type
+                continue
+            if name && record.name != name
+                continue
+            spec = probe(record, discover[destID])
+            if length(spec) == 0
+                continue
+            if test_filter(spec)
+                output.push({
+                    destID: record.destID
+                    name: record.name
+                    type: record.type
+                    direct: imp.us.instanceID == record.direct || undefined
+                    ops: spec.*.toarray.sort()
+                })
+        }
+        output
+    }
+
+    // context
+    //
+    // Return a remote evaluation context for the specified node. This returns an existing context if
+    // available, unless unique is specified. This returns a standard result tuple.
+    //
+    ops.context = closure context(destID, unique) {
+    }
+
+    // exec
+    //
+    // Return an executor for the specified node. If options are specified, even a blank {}, then the
+    // executor will be created with those options if it does not already exist. Without options this
+    // only looks for an existing executor. Options with unique always creates a new executor without
+    // sharing it later. This returns a standard result tuple.
+    //
+    ops.exec = closure exec(destID, options, unique) {
+    }
+
+    // repl
+    //
+    // Return a repl interface for the specified node. If options are specified, even a blank {},
+    // then the repl will be created with those options if it does not already exist. Without options
+    // this only looks for an existing repl. Options with unique always creates a new repl without
+    // sharing it later. This returns a standard result tuple.
+    //
+    ops.repl = closure repl(destID, options, unique) {
+    }
+
+    // finis
+
+    ops
+};
+
+
+/*
+ * opsInit
+ *
+ * Initialize the component.
+ *
+ */
+
+function opsInit(local manifest) {
+    manifest = `(Operations, opsInit)
+
+    Naan.module.build(module.id, "operations", function(modobj, compobj) {
+        require("./service.nlg")
+        compobj.manifest = manifest
+        modobj.exports.Operations = Operations
+    })
+} ();

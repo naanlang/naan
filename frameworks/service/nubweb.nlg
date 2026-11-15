@@ -90,7 +90,7 @@ closure WebWorkerNub(imp, options, local wonub) {
         type: options.type
         meta: options.meta || undefined
         instanceID: wonub.instanceID
-        services: [ "naan-web-worker" ]
+        services: [ "naan-web-worker-nub" ]
     })
     wonub.impconn = imp.requester(function(data) {
         js.w.postMessage({                                                  // send to main

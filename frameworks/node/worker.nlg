@@ -49,7 +49,7 @@ closure CurBot(options, local curbot) {
         name: curbot.name
         type: curbot.type
         instanceID: curbot.instanceID
-        services: ["naanide-server-main"]
+        services: ["naan-node-main"]
     })
 
     // subscribe
@@ -271,7 +271,7 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
         name: options.name
         type: options.type
         instanceID: nowbot.instanceID
-        services: ["node-worker"]
+        services: ["naan-node-worker"]
     })
 
     // If this NowBot is created remotely then we need to send a message from our new instanceID

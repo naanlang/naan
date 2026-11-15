@@ -18,7 +18,7 @@
  *
  * Options:
  *  {
- *      serverID:     <string>                  // target server if not our Host
+ *      serverID:   <string>                    // target server if not our Host
  *      type:       <string>                    // target category, e.g. "Remote", "api.yyy.com"
  *      workerID:   <string>                    // kind of worker in server subsystem
  *      startup:    <dictionary>                // startup options
@@ -63,9 +63,9 @@ closure TermHost(track, name, options,
                 else
                     return (list(false, dest.destID))
             }
-            dest = found.find(function(item) { item.name == "NaanIDE Server" && item.type == "Node Remote" })
+            dest = found.find(function(item) { item.type == "Server IMP" })
             if !dest
-                return (list(Error("cannot locate NaanIDE Server Remote")))
+                return (list(Error("cannot locate Server IMP")))
             `(error, xc) = relay.context(dest.destID)
             if !error {
                 `(error) = xc.evalq(chns("node"))

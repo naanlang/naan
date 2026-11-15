@@ -24,22 +24,31 @@
  *
  */
 
-closure RemoteResponder(destID, options, local remo, name)
+closure RemoteResponder(destID, options, local info, remo, name)
 {
     global(App)
-    options = merge({
-        name: "Remote Nub"
-        type: "Remote Responder"
-    }, options)
+    if destID == App.imp.us.instanceID {                                    // this is the Imp connection
+        if options.name || options.type
+            debuglog("RemoteResponder: no name/type for Imp connections:", options.name || "", options.type || "")
+        info = {
+            name: App.imp.us.name
+            type: App.imp.us.type
+            meta: App.imp.us.meta
+            instanceID: App.imp.us.instanceID
+            services: [ "discovery", "naan-remote-responder" ]
+        }
+    } else {
+        info = merge({                                                      // ensure name/type exist
+            name: "Remote Nub"
+            type: "Remote Responder"
+        }, options)
+        info.instanceID = destID || App.imp.getUUID("RemoteResponder(${options.name}) instanceID")
+        info.services = [ "naan-remote-responder" ]
+    }
     remo = ExecutorBase(App.nide.track, "remote-responder", name)
     remo.dispatcher = TaskDispatcher(false, false, "RemoteResponder")
-    remo.instanceID = destID || App.imp.getUUID("RemoteResponder(${options.name}) instanceID")
-    remo.sender = App.imp.register(remo, {
-        name: options.name
-        type: options.type
-        instanceID: remo.instanceID
-        services: [ "naan-remote-responder" ]
-    })
+    remo.instanceID = info.instanceID
+    remo.sender = App.imp.register(remo, info)
 
     // impUnknown
     //

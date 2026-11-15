@@ -48,7 +48,7 @@
 
 closure httpsApiReqOnce(url, options,
     local urlq, reqOptions, putdata, error, item, xurl, pending, chunks, request) {
-    global(js, nodeHttps, nodeUrl)
+    global(js, nodeHttps)
     if options.query
         urlq = url.concat(EncodeQuery("?", options.query))
     else
@@ -71,7 +71,7 @@ closure httpsApiReqOnce(url, options,
             reqOptions.headers['Content-Type'] = "application/json"
             `(error, putdata) = JsonStringify(options.putdata)
             if error
-                return (list(Error("HttpsApiRequest encode:", url)))
+                return (list(Error("invalid JSON request for:", url)))
         }
         reqOptions.body = putdata
     }
@@ -81,7 +81,9 @@ closure httpsApiReqOnce(url, options,
     if options.auth
         reqOptions.auth = options.auth
     if options.allowSelfSigned {
-        xurl = nodeUrl.parse(url)
+        `(error, xurl) = URL(url)
+        if error
+            return (list(Error("malformed URL:", url)))
         reqOptions.agent = xnew(nodeHttps.Agent({
             host: xurl.hostname
             port: xurl.port

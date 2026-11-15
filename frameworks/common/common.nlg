@@ -349,14 +349,29 @@ function comrInit(local manifest) {
             jspath = JSpath                                                 // ### temporary during transition
             //
             // everywhere: Text
+            //
             TextEncoder = wsg.TextEncoder
             TextDecoder = wsg.TextDecoder
             EncodeURIComponent = wsg.encodeURIComponent
             DecodeURIComponent = wsg.decodeURIComponent
             //
             // everywhere: JSON
+            //
             JSONstringify = wsg.JSON.stringify
             JSONparse = wsg.JSON.parse
+            //
+            // everywhere: URL
+            //
+            URL = function URL args {
+                if !args
+                    wsg.URL
+                else
+                    try {
+                        list(false, xnew(wsg.URL, args.0, args.1 || undefined))
+                    } catch {
+                        list(Error(exception))
+                    }
+            }
             //
             // everywhere: Uint8ArrayFromString
             //
@@ -560,6 +575,7 @@ function comrInit(local manifest) {
             modobj.exports.JSONparse = JSONparse
             modobj.exports.JsonStringify = JsonStringify
             modobj.exports.JsonParse = JsonParse
+            modobj.exports.URL = URL
             modobj.exports.VersionCheck = VersionCheck
             modobj.exports.Uint8ArrayFromString = Uint8ArrayFromString
             modobj.exports.EncodeBase64url = EncodeBase64url

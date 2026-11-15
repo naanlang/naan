@@ -107,10 +107,29 @@ closure ptyManagerMain(local ptym, pty) {
             worker.kill()
     }
 
+    // findBashShell
+    //
+    // Contributed by Andrew Sokolinskii.
+    //
+    function findBashShell(local candidates, cand) {
+        if os.platform() != "win32"
+            return ("bash")
+        candidates = [
+            JSpath.join(js.g.process.env.ProgramFiles || "C:\\Program Files", "Git", "bin", "bash.exe"),
+            JSpath.join(js.g.process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Git", "bin", "bash.exe"),
+            JSpath.join(js.g.process.env.LocalAppData || "", "Programs", "Git", "bin", "bash.exe")
+        ]
+        for cand in candidates
+            if cand && fs.existsSync(cand)
+                return (cand)
+        "bash.exe"
+    }
+
     // spawn
     //
     // Spawn a new pty process, returning a result tuple. If executable is omitted then a shell is
-    // spawned.
+    // spawned. If executable is "bash" then it's replaced with an appropriate shell for running bash
+    // scripts on the current platform.
     // 
     // options: (all optional)
     //  {
@@ -128,7 +147,8 @@ closure ptyManagerMain(local ptym, pty) {
                 executable = "powershell.exe"
             else
                 executable = js.g.process.env.SHELL || "/bin/bash"          // default shell with safe fallback
-        }
+        } else if !(executable = ptym.bashPath)
+            executable = ptym.bashPath = findBashShell()
         if !array(args)
             args = []
         options = merge({
@@ -143,13 +163,17 @@ closure ptyManagerMain(local ptym, pty) {
         if error
             return (list(error))
 
-        ptySpawned = pty.spawn(executable, args, {                          // spawn the pty process
-            name: options.name
-            cols: options.cols
-            rows: options.rows
-            cwd: options.cwd
-            env: options.env
-        })
+        try {
+            ptySpawned = pty.spawn(executable, args, {                      // spawn the pty process
+                name: options.name
+                cols: options.cols
+                rows: options.rows
+                cwd: options.cwd
+                env: options.env
+            })
+        } catch {
+            return (list(Error("spawn ${executable} failed:", exception)))
+        }
 
         ptypro = ptyProcess(ptySpawned, notify)
         ptym.workers.push({                                                 // track all pty processes

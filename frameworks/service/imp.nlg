@@ -29,11 +29,12 @@
  */
 
 closure Imp(us, local imp) {
-    global()
+    global(js)
     imp = new(object, this)
     imp.us = us = merge({                                                   // start with rando defaults
         name: "imp-generic"
         type: "imp-type"
+        services: [ "discovery" ]
     }, us)
     if !us.instanceID
         us.instanceID = getUUID("Imp(${imp.us.name}) instanceID")
@@ -45,6 +46,29 @@ closure Imp(us, local imp) {
     imp.discovering = []                                                    // nonces for current discoveries
     imp.unknowns = { }                                                      // unknown ID notices we have sent
     imp.renameIDs = { }                                                     // these IDs renamed
+
+    // get_environment
+    // Get an environment record about us for discovery
+    function get_environment(local output) {
+        output = {
+            type: []
+        }
+        if js.g {
+            output.type.push(`node)
+            if js.k.threadId == 0
+                output.type.push(`main)
+            else
+                output.type.push(`worker)
+        } else {
+            output.type.push(`web)
+            if jsInstanceOf(js.w, js.w.WorkerGlobalScope)
+                output.type.push(`worker)
+            else
+                output.type.push(`main)
+        }
+        output.type.sort()
+    }
+    imp.us.env = get_environment()
 
     // send_hello
     // Send an hello request to the other side.
@@ -58,6 +82,8 @@ closure Imp(us, local imp) {
             name:           us.name
             type:           us.type
             meta:           us.meta || undefined
+            env:            us.env || undefined
+            services:       us.services || undefined
             temporaryID:    dest.temporaryID || undefined
         }
         dest.sendconn(message)
@@ -120,15 +146,19 @@ closure Imp(us, local imp) {
         dest.name = message.name
         dest.type = message.type
         dest.meta = message.meta || undefined
+        dest.env = message.env
+        dest.services = message.services || dest.services
         dest.sendconn({
-            id:         "imp-active"
-            from:       us.instanceID
-            to:         message.from
-            name:       us.name
-            type:       us.type
-            meta:       us.meta
-            defaultID:  dest.info.defaultID || undefined
-            updateID:   updateID || undefined
+            id:             "imp-active"
+            from:           us.instanceID
+            to:             message.from
+            name:           us.name
+            type:           us.type
+            meta:           us.meta
+            env:            us.env
+            services:       us.services || undefined
+            defaultID:      dest.info.defaultID || undefined
+            updateID:       updateID || undefined
         })
         dest.state = `active                                                // responder now active
         dest.handshake.signal(list(false, destID))
@@ -155,6 +185,8 @@ closure Imp(us, local imp) {
         dest.name = message.name
         dest.type = message.type
         dest.meta = message.meta || undefined
+        dest.env = message.env
+        dest.services = message.services || dest.services
         dest.defaultID = message.defaultID
         dest.temporaryID = undefined                                        // no longer temporary
         dest.state = `active                                                // both sides now active
@@ -250,7 +282,7 @@ closure Imp(us, local imp) {
         if message.discover {
             if message.to == us.instanceID || imp.direct[message.to] {      // we are handling this
                 if message.to == us.instanceID
-                    message.found = disc_dests(message.discover)            // querying this IMP
+                    message.found = disc_dests()                            // querying this IMP
                 else
                     message.found = []                                      // querying a leaf
                 message.to = message.from
@@ -326,6 +358,7 @@ closure Imp(us, local imp) {
                 meta:       dest.meta || undefined
                 services:   dest.info.services
                 direct:     us.instanceID                                   // direct IMP owner
+                env:        uuid==imp.us.instanceID && imp.us.env || undefined
             })
         for `(uuid, dest) in imp.pipes
             output.push({
@@ -333,6 +366,7 @@ closure Imp(us, local imp) {
                 name:       dest.name
                 type:       dest.type
                 meta:       dest.meta || undefined
+                env:        dest.env
                 services:   dest.info.services
                 pipe:       us.instanceID
             })
@@ -424,6 +458,8 @@ closure Imp(us, local imp) {
                 info.name = dest.name
                 info.type = dest.type
                 info.meta = dest.meta
+                info.env = dest.env
+                info.services = dest.services
                 dest.conn.dispatchEvent("active", info)
                 imp.dispatchEvent("active", info)
             }, 0)
@@ -616,15 +652,18 @@ closure Imp(us, local imp) {
     //      name:       dest.name
     //      type:       dest.type
     //      meta:       dest.meta
+    //      env:        dest.env
     //      direct:     ownerID                 // direct IMP owner, or
-    //      pipe:     destID                    // pipe IMP, but not both
+    //      pipe:       destID                  // pipe IMP, but not both
     //  }...]
     //
     imp.discover = closure discover(destID, local error, pending, timeout, result) {
         if !destID || destID == us.instanceID
-            return (list(false, disc_dests(1)))                             // report this IMP itself
+            return (list(false, disc_dests()))                              // report this IMP itself
         if imp.direct[destID]
             return (list(false, []))                                        // direct objects don't report
+        if !imp.pipes[destID] && !imp.gateways[destID]
+            return (list(Error("unknown ID:", destID)))                     // never heard of it
         `(error) = send_message(us.instanceID, destID, {
             discover: 1
         })
@@ -659,6 +698,13 @@ closure Imp(us, local imp) {
             return (list(Error("unknown sourceID:", sourceID)))
         send_message(sourceID, destID, { })                                 // just a ping
     }
+
+    // list
+    //
+    // Shortcut to access the Operations.list function, after initializing our operations object.
+    //
+    imp.ops = Operations(imp)
+    imp.list = imp.ops.list
 
     // check_us
     // Report anything wrong with our identity.
@@ -778,6 +824,7 @@ function impInit(local manifest) {
 
     Naan.module.build(module.id, "imp", function(modobj, compobj) {
         require("./service.nlg")
+        require("./operations.nlg")
         require("../common/events.nlg")
         compobj.manifest = manifest
         module.exports.Imp = Imp

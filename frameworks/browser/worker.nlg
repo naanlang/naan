@@ -29,11 +29,12 @@
  *
  * Options:
  *  {
- *      name:       <string>                    // target name, e.g. "Play"
- *      type:       <string>                    // target category, e.g. "Local"
- *      startup:    <dictionary>                // startup options
- *      workerID:   <string>                    // initialize worker with this
- *      topOriginID:  <string>                  // so top can route to us through IMP
+ *      name:           <string>                // target name, e.g. "Play"
+ *      type:           <string>                // target category, e.g. "Local"
+ *      startup:        <dictionary>            // startup options
+ *      workerID:       <string>                // initialize worker with this
+ *      topOriginID:    <string>                // so top can route to us through IMP
+ *      impServices:    <array>                 // array of services we provide
  *  }
  *
  */
@@ -54,7 +55,7 @@ closure InBot(worker, options, local inbot)
         name: options.name
         type: options.type
         instanceID: inbot.instanceID
-        services: ["naan-worker"]
+        services: options.services
     })
 
     // If this InBot is created remotely then we need to send a message from our new instanceID
@@ -218,6 +219,9 @@ closure InBot(worker, options, local inbot)
 closure MewBot(exec, options, local mewbot, inbot_impReceive)
 {
     global(App)
+    options = merge({
+        impServices: "naan-web-main"
+    }, options)
     mewbot = InBot(exec, options)
     mewbot.dispatcher = require("naanlib:frameworks/running/taskexec.nlg").TaskDispatcher()
     inbot_impReceive = mewbot.impReceive
@@ -255,6 +259,9 @@ closure MewBot(exec, options, local mewbot, inbot_impReceive)
 closure WowBot(worker, options, local wowbot)
 {
     global(App)
+    options = merge({
+        impServices: "naan-web-worker"
+    }, options)
     wowbot = InBot(worker, options)
 
     App.imp.addEventListener("active", function(event, info) {

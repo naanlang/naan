@@ -74,7 +74,7 @@ closure RelayCon(imp, options, local relay, nlregex)
             name: options.name
             type: relay.config.workerID
             instanceID: relay.instanceID
-            services: [ "term_client" ]
+            services: [ "term-client" ]
         })
 
         function initWorker(local spawner) {
