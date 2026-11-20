@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2023-2024 by Richard C. Zulch
+ * Copyright (c) 2023-2026 by Richard C. Zulch
  *
  */
 
@@ -96,6 +96,41 @@ closure ExbackFactory(backoff, deadline, local expon, total)
 
 
 /*
+ * TimeoutFactory
+ *
+ * Calling this returns a nonce that invokes callback after toms milliseconds. Call prolong() to
+ * start the initial timer, cancel() to stop it, or run(msec) to delay an arbitrary interval.
+ * The fun function is passed to the callback so you can change the schedule inside. This starts
+ * active, but you can cancel and prolong later.
+ *
+ */
+
+closure TimeoutFactory(toms, callback, local tof) {
+    function timeout() {
+        tof = future(function() {
+            rerun(toms)
+            callback(rerun)
+        }, toms)
+        
+        closure rerun(delay) {
+            future(function() { tof.run(delay) }, 0)
+        }
+        
+        // prolong
+        //
+        // Prolong the timeout for another interval.
+        //
+        tof.prolong = function() {
+            tof.run(toms)
+        }
+
+        // finis
+        tof
+    }()
+};
+
+
+/*
  * utilsInit
  *
  *     Initialize the component.
@@ -103,13 +138,14 @@ closure ExbackFactory(backoff, deadline, local expon, total)
  */
 
 function utilsInit(local manifest) {
-    manifest = `(DictCompare, ExbackFactory, utilsInit)
+    manifest = `(DictCompare, ExbackFactory, TimeoutFactory, utilsInit)
 
     Naan.module.build(module.id, "utils", function(modobj, compobj) {
         require("./common.nlg")
         compobj.manifest = manifest
         module.exports.DictCompare = DictCompare
         module.exports.ExbackFactory = ExbackFactory
+        module.exports.TimeoutFactory = TimeoutFactory
         updateExports()
     })
 } ();

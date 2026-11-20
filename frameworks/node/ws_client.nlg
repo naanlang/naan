@@ -32,16 +32,14 @@
  *
  */
 
-closure WebSocket(urlstr, options, local error, wslib, url, reqOptions, crypto, bundle, ws) {
+closure WebSocket(urlstr, options, local error, url, wslib, reqOptions, crypto, bundle, ws) {
     `(error, wslib) = await(js.i("ws"))
     if error
         return (list(error))
 
-    try {
-        url = xnew(js.g.URL, urlstr)
-    } catch {
-        return (list(Error("invalid URL ${urlstr}", exception)))
-    }
+    `(error, url) = URL(urlstr)
+    if error
+        return (list(Error("bad URL ${urlstr}:", error)))
     options = merge({
         query: url.search || ''
         wss: url.protocol == "https:"
@@ -50,7 +48,9 @@ closure WebSocket(urlstr, options, local error, wslib, url, reqOptions, crypto, 
         url = "wss://${url.host}${options.query}"
     else
         url = "ws://${url.host}${options.query}"
-    reqOptions = {}
+    reqOptions = {
+        closeTimeout: 5000                                                  // replace default 30 second close timeout
+    }
     if options.pfx {
         `(error, crypto) = await(js.i("node:crypto"))
         if error || !crypto.parsePKCS12

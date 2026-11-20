@@ -35,8 +35,10 @@ closure Operations(imp, local ops, services_decode) {
             piped:  [ `discovery ]
         }
         "imp-pipe-req" : {                                                  // service::Imp.requester
+            // generic service: should be replaced with a concrete one
         }
         "imp-pipe-res" : {                                                  // service::Imp.responder
+            // generic service: should be replaced with a concrete one
         }
         "naan-executor": {                                                  // running::InTop
             direct: [ `exec, `term ]                                        // runs anywhere / provides `remote
@@ -48,8 +50,8 @@ closure Operations(imp, local ops, services_decode) {
             piped:  [ `exec, `term ]                                        // runs in node main / provides worker
         }
         "naan-node-worker-nub": {                                           // service::NodeWorkerNub
-            direct: [ `utils ]                                              // runs in node worker
-            piped:  [ `exec, `term ]                                        // exposes worker
+            direct: [ `discovery, `utils ]                                  // runs in node worker
+            piped:  [ `discovery ]                                          // exposes node worker IMP
         }
         "naan-remote-requester": {                                          // running::RemoteRequester
             direct: [ `exec ]                                               // runs anywhere / provides `exec
@@ -65,8 +67,8 @@ closure Operations(imp, local ops, services_decode) {
             piped:  [ `exec, `term ]                                        // runs in web main / provides worker
         }
         "naan-web-worker-nub": {                                            // service::WebWorkerNub
-            direct: [ `utils ]                                              // runs in web worker
-            piped:  [ `exec, `term ]                                        // exposes worker
+            direct: [ `discovery, `utils ]                                  // runs in web worker
+            piped:  [ `discovery ]                                          // exposes web worker IMP
         }
         "term-client": {                                                    // client::RelayCon
             direct: [ `exec, `term ]                                        // ### `term is aspirational
@@ -117,7 +119,7 @@ closure Operations(imp, local ops, services_decode) {
     //  node            - node runtime
     //  web             - web browser runtime
     //
-    ops.list = closure list(destID, filter, type, name,
+    ops.list = closure opsList(destID, filter, type, nname,
         local output, error, discover, record, spec) {
         // test_filter
         // Test if the spec is accepted by the filter
@@ -139,7 +141,7 @@ closure Operations(imp, local ops, services_decode) {
                 continue                                                    // ignore if routes back to us
             if type && record.type != type
                 continue
-            if name && record.name != name
+            if nname && record.name != nname
                 continue
             spec = probe(record, discover[destID])
             if length(spec) == 0

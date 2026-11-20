@@ -83,7 +83,7 @@ closure httpsApiReqOnce(url, options,
     if options.allowSelfSigned {
         `(error, xurl) = URL(url)
         if error
-            return (list(Error("malformed URL:", url)))
+            return (list(Error("bad URL ${url}:", url)))
         reqOptions.agent = xnew(nodeHttps.Agent({
             host: xurl.hostname
             port: xurl.port

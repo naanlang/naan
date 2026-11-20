@@ -6,7 +6,7 @@
  *
  * column positioning:                          //                          //                      !
  *
- * Copyright (c) 2021-2024 by Richard C. Zulch
+ * Copyright (c) 2021-2026 by Richard C. Zulch
  *
  */
 
@@ -169,7 +169,7 @@ function procstring(procdef, options, local name, output, parm) {
  *
  */
 
-closure packageCoder(evalf, local coder) {
+closure packageCoder(evalf, rpc, local coder) {
     global()
     coder = new(object, this)
     coder.wmapEncoding = new(weakmap)
@@ -196,6 +196,12 @@ closure packageCoder(evalf, local coder) {
     //
     // Decode the ident dictionary into a proxy object allowing method invocation.
     //
+    // Proxy methods or all methods on a proxy object can be configured to use RPC instead of evalf.
+    // This is faster if NaaN datatype fidelity need not be preserved.
+    //
+    //  method: <method-symbol>@\.rpc = true
+    //  object: <proxy-object>@\.rpc = true
+    //
     coder.decodeObject = closure decodeObject(ident, local x, obj) {
         if coder.mapDecoding[ident.objectID]
             { }
@@ -207,7 +213,10 @@ closure packageCoder(evalf, local coder) {
                     quote(x@\.tostring = function() { "{proxy ${nn}}" }),
                     quote(x@\.undefined = closure undef args {
                         let (result) {
-                            result = evalf(list(`\.invoke\-method, objectID, args))
+                            if args.0@\.rpc || x@\.rpc
+                                result = rpc(`\.invoke\-method, cons(objectID, args))
+                            else
+                                result = evalf(list(`\.invoke\-method, objectID, args))
                             if result.0
                                 throw("remoting failure: ${ErrorString(result.0)}")
                             else

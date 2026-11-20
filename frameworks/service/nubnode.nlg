@@ -102,7 +102,7 @@ closure NodeWorkerNub(imp, options, local nownub) {
         type: options.type
         meta: options.meta || undefined
         instanceID: nownub.instanceID
-        services: [ "naan-node-worker" ]
+        services: [ "naan-node-worker-nub" ]
     })
     nownub.impconn = imp.requester(function(data) {
         js.t.msgPort.postMessage({                                          // send to main

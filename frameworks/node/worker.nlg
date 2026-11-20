@@ -27,6 +27,7 @@
 closure CurBot(options, local curbot) {
     global(App, js)
     curbot = new(object, this)
+    curbot.threads = { }
     curbot.topsubs = []
     options = merge({
         type: "Host"
@@ -253,6 +254,9 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     options = merge({
         type: "node-worker"
     }, options)
+    nowbot.type = options.type
+    nowbot.name = options.name
+    nowbot.pending = new(nonce)
 
     nodeops = merge({
         // execArgv: ["--inspect-brk"]          // unfortunately doesn't work; use VS Code instead
@@ -266,13 +270,15 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     nowbot.thread.postMessage({ hereIsYourPort: subChannel.port1 }, [subChannel.port1])
     nowbot.msgport = subChannel.port2
 
-    nowbot.instanceID = App.imp.getUUID("NowBot(${options.name}) instanceID")
+    nowbot.instanceID = App.imp.getUUID("NowBot(${nowbot.name}) instanceID")
     nowbot.sender = App.imp.register(nowbot, {
-        name: options.name
-        type: options.type
+        name: nowbot.name
+        type: nowbot.type
         instanceID: nowbot.instanceID
         services: ["naan-node-worker"]
     })
+
+    App.exec.threads[nowbot.instanceID] = nowbot                            // keep track of threads
 
     // If this NowBot is created remotely then we need to send a message from our new instanceID
     // to the InTop origin so that it can send messages to us. The intermediate gateways save the
@@ -358,7 +364,7 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     //
     nowbot.impReceive = function impReceive(message, sourceID) {
         if message.id == "destroy"
-            terminate()
+            destroy()
         else if message.id == "subscribe"
             subscribe(sourceID)
         else if message.id == "unsubscribe"
@@ -405,11 +411,12 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
     // not occur normally.
     //
     nowbot.thread.on("error", function onerror(error) {
-        debuglog("worker terminated with error", options.type, options.name, error)
+        debuglog("worker terminated with error", nowbot.type, nowbot.name, error)
         notifyAll({
             id: "terminated"
             error: error
         })
+        nowbot.pending.signal(list(Error("worker terminated", error)))
         nowbot.dispatchEvent("terminated", nowbot.instanceID, { error: error })
         nowbot.thread = false
         destroy()
@@ -424,6 +431,7 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
             id: "terminated"
             exitCode: exitCode
         })
+        nowbot.pending.signal(list(false, { exitCode: exitCode }))
         nowbot.dispatchEvent("terminated", nowbot.instanceID, { exitCode: exitCode })
         nowbot.thread = false
         destroy()
@@ -441,12 +449,25 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
 
     // destroy
     //
-    // Ensure the worker is destroyed.
+    // Terminate and destroy the worker, returning a standard tuple of the final result.
     //
-    nowbot.destroy = function destroy() {
-        terminate()
+    nowbot.destroy = function destroy(local result) {
+        if nowbot.thread
+            result = await(nowbot.thread.terminate())                       // notified by on-error and on-exit
+        else
+            result = list(false, { terminated: true })                      // already terminated
         nowbot.thread = false
         close()
+        App.exec.threads[nowbot.instanceID] = undefined                     // also NobBot cleanup
+        return (result)
+    }
+
+    // terminate
+    //
+    //  Terminate this worker asap, a synonym for destroy.
+    //
+    nowbot.terminate = function terminate() {
+        destroy()
     }
 
     // NaaN message
@@ -466,7 +487,7 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
                 workerID: workerID
                 metadata: {
                     mainInstanceID: App.imp.us.instanceID
-                    name: options.name
+                    name: nowbot.name
                     maintext: options.startup.maintext.concat("\n")
                 }
             }
@@ -476,23 +497,13 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
             notifyAll({
                 id: "started"
             })
+            nowbot.pending.signal(list(false, { started: true }))
             nowbot.dispatchEvent("started", nowbot.instanceID)
         } else if msg.id == "textout" && nowbot.naanin
             nowbot.naanin(msg.text)                                         // naan output -> pty subprocess
         else
             notifyAll(msg)
     })
-
-    // terminate
-    //
-    //  Terminate this worker asap.
-    //
-    nowbot.terminate = function terminate(local error, exitCode) {
-        if nowbot.thread
-            `(error, exitCode) = await(nowbot.thread.terminate())           // notified by on-error and on-exit
-        else
-            list(false, { terminated: true })                               // already terminated
-    }
 
     // PostMessage
     //
@@ -504,6 +515,14 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
             data: data
         })
         list(false, { posted: true })
+    }
+
+    // wait
+    //
+    // Wait for a signal.
+    //
+    nowbot.wait = function wait() {
+        nowbot.pending.wait(5000, list(Error("worker creation timeout")))
     }
 
     nowbot.subprocess = MakeSubProcessor(nowbot)                            // Enable PTY subprocesses on our terminal
@@ -523,10 +542,11 @@ closure NowBot(options, local nowbot, nodeops, subChannel, ptySpawned) {
  *
  */
 
-closure NobBot(options, local nobbot)
+closure NobBot(options, local nobbot, pending)
 {
     global(App)
     nobbot = NowBot(options)
+    pending = new(nonce)
 
     // informAll
     //
@@ -540,6 +560,7 @@ closure NobBot(options, local nobbot)
     App.imp.addEventListener("active", function(event, info) {
         if info.ourID == nobbot.instanceID {
             nobbot.workerDestID = info.destID                               // handshake completed
+            pending.signal(list(false, nobbot.workerDestID))
             informAll(nobbot.workerDestID)                                  // provide path to workerID
             nobbot.notifyAll({                                              // send to subscribers
                 id: "workerDestID"
@@ -557,6 +578,18 @@ closure NobBot(options, local nobbot)
     }, {
         ourID: nobbot.instanceID
     })
+
+    // wait
+    //
+    // Wait for handshake and our workerDestID, returning a result tuple.
+    //
+    nobbot.wait = function wait(local error, status) {
+        `(error, status) = nobbot.pending.wait(30000, list(Error("worker creation timeout")))
+        if error
+            list(error)
+        else
+            pending.wait(30000, list(Error("IMP handshake timeout")))
+    }
 
     // finis
 

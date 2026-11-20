@@ -13,6 +13,7 @@
 
 // Globals
 
+comMod;;
 serviceMod;;
 
 
@@ -33,17 +34,16 @@ serviceMod;;
  *
  */
 
-closure APIClient(imp, options, local client, url, urlob, guid) {
-    global(App, serviceMod, URL)
+closure APIClient(imp, options, local client, error, url, urlob, guid) {
+    global(App, serviceMod)
     client = new(object, this)
     options = merge({
     }, options)
     if !options.url.match(RegExp("^(ws|http)s?://", "i"))
         options.url = "http://${options.url}"                               // a protocol is required
-    try {
-        urlob = xnew(URL, options.url)
-    } catch {
-        debuglog("APIClient: bad URL", options.url, exception)
+    `(error, urlob) = URL(options.url)
+    if error {
+        ErrorDebuglog("APIClient: bad URL ${options.url}:", error)
         urlob = { }
     }
     if urlob.protocol == "https:" || urlob.protocol == "wss:"
@@ -227,9 +227,12 @@ closure APIClient(imp, options, local client, url, urlob, guid) {
  */
 
 closure WebSocketClient(imp, options, local wesc, ws, pending) {
-    global(js)
+    global(comMod, js)
     wesc = new(object, this)
-    
+    wesc.keepAlive = comMod.TimeoutFactory(14000, function(run) {
+        ws.send("<ping>")
+    })
+
 
     // reconnect
     //
@@ -271,6 +274,7 @@ closure WebSocketClient(imp, options, local wesc, ws, pending) {
                 if error
                     return (list(error))
                 ws.send(text)
+                wesc.keepAlive.prolong()
                 list(false, { sent: true })
             }, {
                 secret: options.guid
@@ -286,6 +290,8 @@ closure WebSocketClient(imp, options, local wesc, ws, pending) {
         // onmessage
         // A message was received via WebSockets.
         function onmessage(e, local error, message) {
+            if e.data == "<ping>"
+                return
             `(error, message) = JsonParse(e.data)
             if !error {
                 message = new(message)
@@ -396,7 +402,8 @@ function apicInit(local manifest) {
 
     Naan.module.build(module.id, "apiclient", function(modobj, compobj) {
         Naan.module.require("./client.nlg")
-        serviceMod = Naan.module.require("naanlib:frameworks/service/imp.nlg")
+        serviceMod = require("../service/imp.nlg")
+        comMod = require("../common/utils.nlg")
         compobj.manifest = manifest
         modobj.exports.APIClient = APIClient
     })

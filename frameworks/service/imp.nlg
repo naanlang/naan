@@ -90,19 +90,20 @@ closure Imp(us, local imp) {
         dest.state = `hello
     }
 
-    // validate_destination
-    // Check the handshake destination, updating destination and returning true iff unique.
-    function validate_destination(expectID, actualID, local dest) {
-        if expectID == actualID
+    // update_conn
+    // Update the fromID destination with a new connID connection object.
+    function update_conn(connID, fromID, local destconn) {
+        if connID == fromID
             return (true)
-        dest = imp.pipes[actualID]
-        if dest && dest.state != `closed
-            return (false)
-        dest = imp.pipes[expectID]
-        assign(dest.idsymbol, actualID)
-        dest.destID = actualID
-        imp.pipes[actualID] = dest
-        imp.pipes[expectID] = undefined
+        destconn = imp.pipes[connID]
+        assign(destconn.idsymbol, fromID)
+        destconn.destID = fromID
+        imp.pipes[fromID] = destconn
+        imp.pipes[connID] = undefined
+        if imp.gateways[fromID] {
+            debuglog("Imp.update_conn: pipe ${fromID} promoted from indirect ${imp.gateways[fromID]}")
+            imp.gateways[fromID] = undefined
+        }
         return (true)
     }
 
@@ -124,16 +125,8 @@ closure Imp(us, local imp) {
                 debuglog("Imp.disp_hello: hello ${message.from} sequencing error")
                 return
             }
-            if validate_destination(destID, message.from) {
-                destID = message.from
-                if imp.gateways[destID] {
-                    debuglog("Imp.disp_hello: pipe ${destID} promoted from indirect ${imp.gateways[destID]}")
-                    imp.gateways[destID] = undefined
-                }
-            } else {                                                        // additional pipe opened
-                // ### unclear if this can still happen
-                debuglog("Imp.disp_hello: from ${message.from} is duplicate to existing ${destID}")
-            }
+            update_conn(destID, message.from)
+            destID = message.from
         }
         if !message.temporaryID && message.to && message.to != us.instanceID {
             if imp.verbose >= 1
@@ -174,14 +167,10 @@ closure Imp(us, local imp) {
             debuglog("Imp.disp_active: wrong sequence for state", dest.state)
             return
         }
-        if !validate_destination(destID, message.from) {                    // we are rejecting them
-            debuglog("Imp.disp_active: duplicate responderID", message.from, "(${message.name} / ${message.type})")
-            dest.handshake.signal(list(Error("duplicate responderID", message.from)))
-            return
-        }
-        if message.updateID
-            update_destIDs(message.updateID, message.from)                  // responder has new ID
+        update_conn(destID, message.from)
         destID = message.from
+        if message.updateID
+            update_destIDs(message.updateID, destID)                        // responder has new ID
         dest.name = message.name
         dest.type = message.type
         dest.meta = message.meta || undefined

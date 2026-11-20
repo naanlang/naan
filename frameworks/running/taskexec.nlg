@@ -18,9 +18,11 @@
  *
  */
 
-closure TaskDispatcher(replier, coder, name, local contexts, gohome, util) {
+closure TaskDispatcher(replier, coder, name,
+    local contexts, actives, nextgc, gohome, util) {
     global()
     contexts = { }
+    actives = { }
     gohome = makeActivator()
     util = modlist().Util.exports
     name = name || ""
@@ -30,43 +32,94 @@ closure TaskDispatcher(replier, coder, name, local contexts, gohome, util) {
     // A context-specific coder allowing remote-initiated communication.
     //
     closure ContextCoder(contextID, _guid, dynreply, local exec, error, context) {
-        contexts[contextID].coder = packageCoder(closure evalf(expr) {
-            if !exec {
-                exec = require("./executors.nlg").ExecutorBase(false, "reverser", "TD")
-                exec.PostMessage = closure(data) {
-                    if data.xmsg == "xstart" {                              // report ready locally
-                        data.xmsg = "xready"
-                        exec.execReceived(data)
-                    } else {
-                        data.reverse = true
-                        data._guid = _guid || undefined
-                        dynreply(data)
-                    }
-                    list(false)
+        // init_exec
+        // Initialize an executor to enable reverse communications.
+        closure init_exec() {
+            exec = require("./executors.nlg").ExecutorBase(false, "reverser", "TD")
+            exec.PostMessage = closure(data) {
+                if data.xmsg == "xstart" {                                  // report ready locally
+                    data.xmsg = "xready"
+                    exec.execReceived(data)
+                } else {
+                    data.reverse = true
+                    data._guid = _guid || undefined
+                    dynreply(data)
                 }
-                contexts[contextID].execReceived = exec.execReceived        // needed for registered reply
-                `(error, context) = exec.context({
-                    contextID: contextID
-                }, contexts[contextID].coder)
-                if error {
-                    ErrorDebuglog("Remoter(${name}).ContextCoder failed:", error)
-                    exec = false
-                    return (list(error))
-                }
+                list(false)
             }
+            contexts[contextID].execReceived = exec.execReceived            // needed for registered reply
+            `(error, context) = exec.context({
+                contextID: contextID
+            }, contexts[contextID].coder)
+            if error {
+                ErrorDebuglog("Remoter(${name}).ContextCoder failed:", error)
+                exec = false
+                return (list(error))
+            }
+        }
+
+        closure evalf(expr) {
+            if !exec
+                init_exec()
             context.eval(expr)
-        })
+        }
+
+        closure rpc(proc, args) {
+            if !exec
+                init_exec()
+            context.rpc(proc, args)
+        }
+
+        contexts[contextID].coder = packageCoder(evalf, rpc)
+    }
+
+    // gcactives
+    //
+    // ExecutorBase.execSend will resend requests where it has not seen a response in 10 seconds. We
+    // need to ignore such requests if we've already seen them. Incoming request xids are recorded
+    // and duplicates ignored. However we also need to discard obsolete requests after the requester
+    // is unlikely to resend them. The complexity:
+    //    - A long-dead connection can come back to life and we must not clear xids until we find
+    //      out if retries are coming.
+    //    - When a new request comes in, that means the connection is alive and any retries will be
+    //      sent within the 10-second timeout from that point. This is an assumption.
+    //    - But messages might come out of order, where a new message is received first but there
+    //      are retries pending. Clearing everything older than 15 seconds before now is unsafe.
+    // Algorithm:
+    //    - Mark the start of a request's processing as true, and the end with a timestamp
+    //    - Find the newest entry more than 15 seconds prior to now. This is the base.
+    //    - Remove all entries more than 15 seconds prior to the base.
+    //
+    function gcactives(local now, xid, ms, base) {
+        now = milliseconds()
+        if now < nextgc
+            return
+        for `(xid, ms) in actives
+            if now - ms > 15000 && (!base || ms > base)
+                base = ms                                                   // get newest entry > 15 seconds old
+        for `(xid, ms) in actives
+            if base - ms > 15000
+                actives[xid] = undefined                                    // > 15 seconds older than base
+        nextgc = now + 10000                                                // don't run too often
     }
 
     // dispatcher
     //
     // Return a new task dispatcher.
     //
-    closure dispatcher(data, dynreply, local reply, restorens, context, expr, roots, proc, args, result) {
+    closure dispatcher(data, dynreply,
+        local grid, reply, restorens, context, expr, roots, proc, args, result) {
         if data.reverse {
             data.reverse = false
             contexts[data.contextID].execReceived(data)
             return
+        }
+        if data.contextID && data.xid {
+            grid = strcat(data.contextID, data.xid)                         // Global Request ID
+            if actives[grid]
+                return
+            actives[grid] = true
+            gcactives()
         }
         if !dynreply
             dynreply = replier
@@ -108,9 +161,9 @@ closure TaskDispatcher(replier, coder, name, local contexts, gohome, util) {
                 //
                 context = contexts[data.contextID]
                 if !context
-                    reply.error = "Remoter(${name}): unknown context"
+                    reply.error = "Remoter(${name}): unknown eval context"
                 else if !context.namespace
-                    reply.error = "Remoter(${name}): namespace missing"
+                    reply.error = "Remoter(${name}): eval namespace missing"
                 else {
                     context.activator()
                     reply.xmsg = "evaluated"
@@ -152,21 +205,25 @@ closure TaskDispatcher(replier, coder, name, local contexts, gohome, util) {
                 //
                 context = contexts[data.contextID]
                 if !context
-                    reply.error = "Remoter(${name}): unknown context"
+                    reply.error = "Remoter(${name}): unknown rpc context"
                 else if !context.namespace
-                    reply.error = "Remoter(${name}): namespace missing"
+                    reply.error = "Remoter(${name}): rpc namespace missing"
                 else {
                     context.activator()
                     reply.xmsg = "executed"
                     reply.contextID = data.contextID
                     if data.args && !(args = new(data.args).totuple)
                         reply.error = "invalid arguments"
-                    else if !string(data.proc)
+                    else if !name(data.proc)
                         reply.error = "invalid procedure"
                     else {
-                        proc = compress(data.proc)
                         reply.error = undefined
-                        reply.result = apply(proc, args)
+                        if data.proc == "\.invoke\-method"                  // args: object, method-args
+                            reply.result = context.coder.invokeMethod(args.0, rest(args))
+                        else {
+                            proc = compress(data.proc)
+                            reply.result = apply(proc, args)
+                        }
                         if context.namespace !== nsactive().0
                         {                                                   // evaluation changed namespace
                             context.namespace = nsactive().0
@@ -187,6 +244,7 @@ closure TaskDispatcher(replier, coder, name, local contexts, gohome, util) {
             }
         } finally {
             restorens()
+            actives[grid] = milliseconds()                                  // processing complete
         }
         dynreply(reply)
     }

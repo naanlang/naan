@@ -563,19 +563,28 @@ closure WebSocketServer(server, local websocks) {
  *
  */
 
-closure WesCon(server, websocks, socket, request, local wescon) {
-    global(js)
+closure WesCon(server, websocks, socket, request, local wescon, pingbuf) {
+    global(comMod, js)
     wescon = new(object, this)
     wescon.socket = socket
     wescon.info = {
         destID: UUID()
         address: new(socket._socket.address())
     }
-    
+    pingbuf = js.g.Buffer.from("<ping>", 'utf8')                            // static ping pattern
+    wescon.keepAlive = comMod.TimeoutFactory(14000, function(run) {
+        socket.send("<ping>")
+    })
+
+    // responder
+    //
+    // This is our IMP responder, that sends data on the connection
+    //
     wescon.impconn = server.imp.responder(function(data) {
         if wescon.closed
             return
-        socket.send(JSONstringify(data)),
+        socket.send(JSONstringify(data))
+        wescon.keepAlive.prolong()
         list(false, { sent: true })
     }, {
         secret: server.guid
@@ -584,9 +593,11 @@ closure WesCon(server, websocks, socket, request, local wescon) {
 
     // on message
     //
-    // Incoming data.
+    // Incoming data, as a UInt8Array.
     //
     socket.on("message", closure(text, local error, message) {
+        if text.equals(pingbuf)
+            return                                                          // ignore the ping
         `(error, message) = JsonParse(text)
         if !error {
             message = new(message)
@@ -606,17 +617,17 @@ closure WesCon(server, websocks, socket, request, local wescon) {
 
     // on close
     //
-    // Connection has closed.
+    // Connection has closed, but it may reopen and we can get messages again.
     //
     socket.on("close", closure onclose(code, reason) {
         if code != 1000 && code != 1001 && code != 1005 && code != 1006
             debuglog("Wescon: connection has closed:", code, reason, JSONstringify(wescon.info))
+        wescon.keepAlive.cancel()
         wescon.closed = {
             code: code
             reason: reason
         }
-        wescon.impconn.destroy()
-        websocks.closeConn(wescon)
+        wescon.impconn.close()
     })
 
     // finis
@@ -650,6 +661,7 @@ function ApisInit(local manifest) {
         psmServerMod = require("./psm_server.nlg")
         workerMod = require("./worker.nlg")
         serviceMod = require("../service/imp.nlg")
+        comMod = require("../common/utils.nlg")
         compobj.manifest = manifest
         modobj.exports.APIServer = APIServer
     })

@@ -29,10 +29,8 @@ closure ExecutorBase(track, type, name, local exec) {
     // Initialize remote communications for a new or restarted instance.
     //
     exec.execReset = function execReset(error, local xid, pending) {
-        if !error
-            error = Error("execReset")
         for `(xid, pending) in exec.pending {
-            pending.signal(list(error))
+            pending.signal(list(`execReset, error))
             exec.pending[xid] = undefined
         }
         exec.pending = { }
@@ -44,10 +42,13 @@ closure ExecutorBase(track, type, name, local exec) {
 
     // execSend
     //
-    // Send a message to the running instance and return a nonce to wait on. If data is not a
-    // dictionary then it is ignored.
+    // Send a message to the running instance and return the result when it completes. If data is not
+    // a dictionary then the data is ignored. Because the underlying connection can drop silently,
+    // this automatically resends the data until a response is achieved. The TaskDispatcher far end
+    // knows enough to ignore pending xid values, providing some connection-layer idempotence, which
+    // is not a substitute for application-level checking, but is a decent resiliency optimization.
     //
-    exec.execSend = closure execSend(msg, data, local pending, error) {
+    exec.execSend = closure execSend(msg, data, local pending, error, result) {
         if !dictionary(data)
             data = { }
         data.xmsg = msg
@@ -55,10 +56,19 @@ closure ExecutorBase(track, type, name, local exec) {
         pending = new(nonce)
         pending.msgout = data
         exec.pending[data.xid] = pending
-        `(error) = exec.PostMessage(data)
-        if error
-            pending.signal(Error("execSend failed", error))
-        pending
+        loop {                                                              // repeat sends every 10 seconds
+            `(error) = exec.PostMessage(data)
+            if error
+                throw(Error("execSend failed", error))
+            result = pending.wait(10000, `execSend)
+            if result !== `execSend
+                break
+            if result.0 === `execReset
+                throw(Error("connection terminated", result.1))
+            // ### ultimate timeout could be tested here, just saying
+            pending.reset()                                                 // ready for next signal
+        }
+        return (result)
     }
 
     // execReceived
@@ -109,7 +119,7 @@ closure ExecutorBase(track, type, name, local exec) {
     exec.execFailed = closure execFailed(error, local xid, pending) {
         exec.inst_error = error
         for `(xid, pending) in exec.pending
-            pending.signal(list(error))
+            pending.signal(list(`execReset, error))
     }
 
     // execClosed
@@ -191,7 +201,7 @@ closure ExecutorContext(exec, state, coder, local context, util) {
             contextID: UUID()
         }
     context.state = state
-    context.coder = coder || packageCoder(evalf)
+    context.coder = coder || packageCoder(evalf, rpc)
     util = modlist().Util.exports
 
     // getState
@@ -206,11 +216,10 @@ closure ExecutorContext(exec, state, coder, local context, util) {
     //
     // Register or re-register our context with the worker.
     //
-    context.register = closure register(local pending, result) {
-        pending = exec.execSend("register", {
+    context.register = closure register(local result) {
+        result = exec.execSend("register", {
             contextID: state.contextID
         })
-        result = pending.wait()
         if result.1
             list(false, context)
         else
@@ -223,7 +232,7 @@ closure ExecutorContext(exec, state, coder, local context, util) {
     // if non-false is a tuple of symbols that should be transfered to the remote end, while get is
     // an optional tuple of symbols to retrieve after evaluation.
     //
-    context.eval = closure evalf(expr, put, get, local roots, pkg, data, pending, result) {
+    context.eval = closure evalf(expr, put, get, local roots, pkg, data, result) {
         if !exec.inst_ready
             return (list(Error("execution context closed")))
         if tuple(put)
@@ -240,8 +249,7 @@ closure ExecutorContext(exec, state, coder, local context, util) {
             expr: pkg }
         if tuple(get)
             data.get = get
-        pending = exec.execSend("eval", data)
-        result = pending.wait()
+        result = exec.execSend("eval", data)
         if result.1.error
             list(Error(result.1.error))
         else if result.1.result
@@ -293,15 +301,14 @@ closure ExecutorContext(exec, state, coder, local context, util) {
     // properly transfer Naan-specific types like symbols, and the results will be native JavaScript.
     // The procedure must be specified as a symbol or string.
     //
-    context.rpc = closure rpc(proc, args, local data, pending, result) {
+    context.rpc = closure rpc(proc, args, local data, result) {
         if !exec.inst_ready
             return (list(Error("execution context closed")))
         data = {
             contextID: state.contextID
             proc: proc
             args: args }
-        pending = exec.execSend("rpc", data)
-        result = pending.wait()
+        result = exec.execSend("rpc", data)
         if result.1.error
             list(Error(result.1.error))
         else {

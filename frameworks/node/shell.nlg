@@ -86,12 +86,13 @@ closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
         mainx = App.exec
         if !mainx
             `(error, mainx) = App.workerNub.execProxy()
-        if !error {
+        if mainx {
             options = { input:"keyboard", output:"display", raw:true }
             if cwd
                 options.spawn = { cwd: cwd }
             `(error, ptyp) = mainx.subprocess(cmd, args, options)
-        }
+        } else if !error
+            debuglog("ShellConnect.pty: App.exec not defined")              // save some debugging time
         if ptyp
             list(false, ptyp)
         else
@@ -128,7 +129,7 @@ closure ShellConnect(options, local shob, error, fs, xparser, shelly) {
         if string(options.derive)
             shelly = Dialect.derive(options.derive)
         else
-            shelly = Dialect
+            shelly = Dialect                                                // derive from current dialect
         xparser = shelly.parser
         shelly.parser = shellparser
     }
